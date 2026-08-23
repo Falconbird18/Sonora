@@ -23,6 +23,7 @@
 
 <style>
 	:global(html), :global(body), :global(#app) { margin:0; width:100%; height:100%; overflow:hidden; }
+	:global(button.h-8.w-8 > svg) { display:block; margin:auto; flex:none; }
 	.app-shell { isolation:isolate; width:100%; height:100%; background:#11110f; color:#f5f5f4; overflow:hidden; }
 	.view-transition { width:100%; height:100%; animation:app-enter .18s ease-out; }
 	@keyframes app-enter { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:translateY(0); } }
