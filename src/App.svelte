@@ -3,7 +3,7 @@
   import * as pdfjsLib from 'pdfjs-dist';
   import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
-  import LibraryView from './lib/LibraryView.svelte';
+  import LibraryView from './lib/LibraryViewV2.svelte';
   import ScoreViewer from './lib/ScoreViewerV2.svelte';
   import type { ScoreItem } from './lib/types';
 
