@@ -1,297 +1,660 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
-  import * as pdfjsLib from 'pdfjs-dist';
-  import {
-    ArrowLeft, ChevronLeft, ChevronRight, Pencil, Highlighter, Eraser,
-    Trash2, Sun, Moon, BookOpen, Columns, Square, ZoomIn, ZoomOut,
-    RotateCcw, Undo, Redo, Music2, Type, Settings, Maximize2, Minimize2,
-    X, Keyboard, PanelTop, MousePointer2
-  } from 'lucide-svelte';
-  import { db } from './db';
-  import type { ScoreItem, Stroke, SymbolStamp, TextNote } from './types';
+	import { onMount, tick } from 'svelte';
+	import * as pdfjsLib from 'pdfjs-dist';
+	import { db } from './db';
+import type { ScoreItem, Stroke, SymbolStamp, TextNote } from './types';
+	import {
+		ChevronLeft,
+		ChevronRight,
+		ArrowLeft,
+		PenTool,
+		Highlighter,
+		Eraser,
+		Type,
+		Undo2,
+		ZoomIn,
+		ZoomOut,
+		MousePointer2,
+		Minus,
+		BookOpen
+	} from 'lucide-svelte';
 
-  let { score, onBack }: { score: ScoreItem; onBack: () => void } = $props();
-  type Snapshot = { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] };
-  type Tool = 'pen' | 'highlighter' | 'stamp' | 'text' | 'eraser';
+	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
 
-  let pdfDoc = $state<pdfjsLib.PDFDocumentProxy | null>(null);
-  let pdfUrl = $state<string | null>(null);
-  let currentPage = $state(1);
-  let totalPages = $state(score.totalPages || 0);
-  let isDualPage = $state(false);
-  let fitMode = $state<'height' | 'width' | 'page'>('height');
-  let zoomLevel = $state(1);
-  let filterMode = $state<'normal' | 'sepia' | 'dark'>('normal');
-  let loading = $state(true);
-  let error = $state('');
-  let isFullscreen = $state(false);
-  let showSettings = $state(false);
-  let showShortcuts = $state(false);
-  let showControls = $state(true);
-  let isAnnotationToolOpen = $state(false);
-  let activeTool = $state<Tool>('pen');
-  let penColor = $state('#ef4444');
-  let penWidth = $state(3);
-  let selectedSymbol = $state('𝄐');
-  let settingsDefaultFit = $state<'height' | 'width' | 'page'>('height');
-  let settingsDualPage = $state(false);
-  let settingsDarkScore = $state(false);
+	type Tool =
+		| 'move'
+		| 'pen'
+		| 'highlighter'
+		| 'eraser'
+		| 'text'
+		| 'line'
+		| 'arrow'
+		| 'sharp'
+		| 'flat'
+		| 'natural';
 
-  let annotations = $state<Record<number, Stroke[]>>({});
-  let stamps = $state<Record<number, SymbolStamp[]>>({});
-  let notes = $state<Record<number, TextNote[]>>({});
-  let historyStack = $state<Record<number, Snapshot[]>>({});
-  let redoStack = $state<Record<number, Snapshot[]>>({});
-  let drawing = $state<{ page: number; pointerId: number; canvas: HTMLCanvasElement; stroke: Stroke } | null>(null);
-  let mainContainerRef = $state<HTMLDivElement | null>(null);
-  let leftPdfCanvas = $state<HTMLCanvasElement | null>(null);
-  let leftDrawCanvas = $state<HTMLCanvasElement | null>(null);
-  let rightPdfCanvas = $state<HTMLCanvasElement | null>(null);
-  let rightDrawCanvas = $state<HTMLCanvasElement | null>(null);
-  let renderGeneration = 0;
-  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
-  const saveQueue: Record<number, Promise<void>> = {};
+	// State
+	let pdfDoc = $state<pdfjsLib.PDFDocumentProxy | null>(null);
+	let current = $state(1);
+	let dual = $state(false);
+	let zoom = $state(1);
+	let tool = $state<Tool>('move');
+	let color = $state('#ef4444');
+	let strokeWidth = $state(3);
+	let annotations = $state<Record<number, Stroke[]>>({});
+	let stamps = $state<Record<number, AnnotationStamp[]>>({});
+	let notes = $state<Record<number, Note[]>>({});
+	let annotationOpen = $state(false);
+	let readingMode = $state(false);
 
-  const QUICK_COLORS = ['#ef4444', '#3b82f6', '#10b981', '#eab308', '#a855f7', '#ffffff', '#000000'];
-  const MUSICAL_SYMBOLS = [
-    ['𝄐', 'Fermata'], ['♯', 'Sharp'], ['♭', 'Flat'], ['♮', 'Natural'], ['>', 'Accent'],
-    ['•', 'Staccato'], ['ƒ', 'Forte'], ['p', 'Piano'], ['mƒ', 'Mezzo Forte'], ['mp', 'Mezzo Piano'],
-    ['ff', 'Fortissimo'], ['pp', 'Pianissimo'], ['⨅', 'Down Bow'], ['⋁', 'Up Bow'], ['𝄋', 'Segno'],
-    ['𝄌', 'Coda'], [',', 'Breath'], ['1', 'Finger 1'], ['2', 'Finger 2'], ['3', 'Finger 3'],
-    ['4', 'Finger 4'], ['5', 'Finger 5']
-  ];
+	// History state
+	let history = $state<
+		Record<
+			number,
+			{ strokes: Stroke[]; stamps: AnnotationStamp[]; notes: Note[] }[]
+		>
+	>({});
 
-  onMount(async () => {
-    await tick();
-    isDualPage = window.innerWidth >= 1100;
-    settingsDualPage = isDualPage;
-    settingsDefaultFit = fitMode;
-    window.addEventListener('resize', scheduleRerender);
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    try {
-      pdfUrl = URL.createObjectURL(score.pdfBlob);
-      const loadingTask = pdfjsLib.getDocument({ url: pdfUrl, disableAutoFetch: false, disableStream: false, useSystemFonts: true });
-      pdfDoc = await loadingTask.promise;
-      totalPages = pdfDoc.numPages;
-      const saved = await db.annotations.where('scoreId').equals(score.id).toArray();
-      for (const record of saved) {
-        annotations[record.pageNum] = record.strokes || [];
-        stamps[record.pageNum] = record.stamps || [];
-        notes[record.pageNum] = record.notes || [];
-      }
-      await renderPages();
-    } catch (e) {
-      console.error('PDF error:', e);
-      error = 'This score could not be opened. The PDF may be damaged or unsupported.';
-    } finally {
-      loading = false;
-    }
-    return () => {
-      window.removeEventListener('resize', scheduleRerender);
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      if (resizeTimer) clearTimeout(resizeTimer);
-      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-      pdfDoc?.destroy();
-    };
-  });
+	// Refs
+	let host = $state<HTMLElement | null>(null);
+	let leftPdf = $state<HTMLCanvasElement | null>(null);
+	let rightPdf = $state<HTMLCanvasElement | null>(null);
+	let leftInk = $state<HTMLCanvasElement | null>(null);
+	let rightInk = $state<HTMLCanvasElement | null>(null);
 
-  function handleFullscreenChange() { isFullscreen = document.fullscreenElement !== null; }
-  function scheduleRerender() {
-    const nextDual = window.innerWidth >= 1100;
-    if (nextDual !== isDualPage) isDualPage = nextDual;
-    if (resizeTimer) clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => void renderPages(), 120);
-  }
-  function snapshot(page: number): Snapshot {
-    return { strokes: structuredClone(annotations[page] || []), stamps: structuredClone(stamps[page] || []), notes: structuredClone(notes[page] || []) };
-  }
-  function snapshotsEqual(a: Snapshot, b: Snapshot) { return JSON.stringify(a) === JSON.stringify(b); }
-  function pushHistory(page: number, before: Snapshot) {
-    if (!historyStack[page]) historyStack[page] = [];
-    historyStack[page].push(before);
-    if (historyStack[page].length > 80) historyStack[page].shift();
-    redoStack[page] = [];
-  }
-  function persist(page: number): Promise<void> {
-    const previous = saveQueue[page] || Promise.resolve();
-    const next = previous.catch(() => undefined).then(async () => {
-      await db.annotations.put({ id: `${score.id}_page_${page}`, scoreId: score.id, pageNum: page, strokes: annotations[page] || [], stamps: stamps[page] || [], notes: notes[page] || [] });
-    });
-    saveQueue[page] = next;
-    return next;
-  }
-  async function undo(page: number) {
-    const stack = historyStack[page];
-    if (!stack?.length) return;
-    if (!redoStack[page]) redoStack[page] = [];
-    redoStack[page].push(snapshot(page));
-    const previous = stack.pop()!;
-    annotations[page] = previous.strokes; stamps[page] = previous.stamps; notes[page] = previous.notes;
-    await persist(page); redrawForPage(page);
-  }
-  async function redo(page: number) {
-    const stack = redoStack[page];
-    if (!stack?.length) return;
-    if (!historyStack[page]) historyStack[page] = [];
-    historyStack[page].push(snapshot(page));
-    const next = stack.pop()!;
-    annotations[page] = next.strokes; stamps[page] = next.stamps; notes[page] = next.notes;
-    await persist(page); redrawForPage(page);
-  }
-  async function clearPage(page: number) {
-    const before = snapshot(page);
-    if (!before.strokes.length && !before.stamps.length && !before.notes.length) return;
-    pushHistory(page, before);
-    annotations[page] = []; stamps[page] = []; notes[page] = [];
-    await persist(page); redrawForPage(page);
-  }
-  async function renderPages() {
-    if (!pdfDoc || !mainContainerRef || totalPages < 1) return;
-    const generation = ++renderGeneration;
-    await renderSinglePage(currentPage, leftPdfCanvas, leftDrawCanvas, generation);
-    if (generation !== renderGeneration) return;
-    if (isDualPage && currentPage + 1 <= totalPages) await renderSinglePage(currentPage + 1, rightPdfCanvas, rightDrawCanvas, generation);
-  }
-  async function renderSinglePage(pageNum: number, pdfCanvas: HTMLCanvasElement | null, drawCanvas: HTMLCanvasElement | null, generation: number) {
-    if (!pdfDoc || !pdfCanvas || !drawCanvas || !mainContainerRef) return;
-    const page = await pdfDoc.getPage(pageNum);
-    if (generation !== renderGeneration) return;
-    const baseViewport = page.getViewport({ scale: 1 });
-    const horizontalPadding = isDualPage ? 120 : 72;
-    const width = Math.max(260, (mainContainerRef.clientWidth - horizontalPadding) / (isDualPage ? 2 : 1));
-    const height = Math.max(260, mainContainerRef.clientHeight - 72);
-    let scale = height / baseViewport.height;
-    if (fitMode === 'width') scale = width / baseViewport.width;
-    if (fitMode === 'page') scale = Math.min(width / baseViewport.width, height / baseViewport.height);
-    scale = Math.max(0.08, Math.min(4, scale * zoomLevel));
-    const viewport = page.getViewport({ scale });
-    pdfCanvas.width = Math.ceil(viewport.width); pdfCanvas.height = Math.ceil(viewport.height);
-    drawCanvas.width = pdfCanvas.width; drawCanvas.height = pdfCanvas.height;
-    pdfCanvas.style.width = `${viewport.width}px`; pdfCanvas.style.height = `${viewport.height}px`;
-    drawCanvas.style.width = `${viewport.width}px`; drawCanvas.style.height = `${viewport.height}px`;
-    const ctx = pdfCanvas.getContext('2d', { alpha: false });
-    if (!ctx) return;
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pdfCanvas.width, pdfCanvas.height);
-    await page.render({ canvasContext: ctx, viewport }).promise;
-    if (generation === renderGeneration) redrawOverlay(pageNum, drawCanvas);
-  }
-  function redrawForPage(page: number) {
-    if (page === currentPage) redrawOverlay(page, leftDrawCanvas);
-    if (isDualPage && page === currentPage + 1) redrawOverlay(page, rightDrawCanvas);
-  }
-  function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke) {
-    if (!stroke.points.length) return;
-    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.strokeStyle = stroke.tool === 'highlighter' ? 'rgba(250,204,21,.38)' : stroke.color;
-    ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = stroke.tool === 'highlighter' ? Math.max(12, stroke.width * 5) : stroke.width;
-    const first = stroke.points[0];
-    if (stroke.points.length === 1) { ctx.beginPath(); ctx.arc(first.x, first.y, Math.max(1.5, ctx.lineWidth / 2), 0, Math.PI * 2); ctx.fill(); }
-    else { ctx.beginPath(); ctx.moveTo(first.x, first.y); for (let i = 1; i < stroke.points.length; i++) ctx.lineTo(stroke.points[i].x, stroke.points[i].y); ctx.stroke(); }
-    ctx.restore();
-  }
-  function redrawOverlay(page: number, canvas: HTMLCanvasElement | null) {
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d'); if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (const stroke of annotations[page] || []) drawStroke(ctx, stroke);
-    for (const stamp of stamps[page] || []) { ctx.save(); ctx.font = `${stamp.fontSize}px serif`; ctx.fillStyle = stamp.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(stamp.symbol, stamp.x, stamp.y); ctx.restore(); }
-    for (const note of notes[page] || []) { ctx.save(); ctx.font = `600 ${note.fontSize}px sans-serif`; ctx.fillStyle = note.color; ctx.fillText(note.text, note.x, note.y); ctx.restore(); }
-    if (drawing?.page === page && drawing.canvas === canvas) drawStroke(ctx, drawing.stroke);
-  }
-  function pointFor(event: PointerEvent, canvas: HTMLCanvasElement) {
-    const rect = canvas.getBoundingClientRect();
-    return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
-  }
-  async function addStamp(page: number, x: number, y: number) {
-    const before = snapshot(page);
-    if (!stamps[page]) stamps[page] = [];
-    stamps[page].push({ id: crypto.randomUUID(), symbol: selectedSymbol, label: 'stamp', x, y, fontSize: 32, color: penColor });
-    pushHistory(page, before); redrawForPage(page); await persist(page);
-  }
-  async function addText(page: number, x: number, y: number) {
-    const text = prompt('Enter rehearsal note / instruction:'); if (!text?.trim()) return;
-    const before = snapshot(page);
-    if (!notes[page]) notes[page] = [];
-    notes[page].push({ id: crypto.randomUUID(), text: text.trim(), x, y, fontSize: 16, color: penColor });
-    pushHistory(page, before); redrawForPage(page); await persist(page);
-  }
-  async function eraseAt(page: number, x: number, y: number, canvas: HTMLCanvasElement) {
-    const radius = Math.max(18, penWidth * 5); const before = snapshot(page);
-    annotations[page] = (annotations[page] || []).filter(stroke => !stroke.points.some(point => Math.hypot(point.x - x, point.y - y) <= radius));
-    stamps[page] = (stamps[page] || []).filter(stamp => Math.hypot(stamp.x - x, stamp.y - y) > radius + 14);
-    notes[page] = (notes[page] || []).filter(note => Math.hypot(note.x - x, note.y - y) > radius + 14);
-    const after = snapshot(page); if (snapshotsEqual(before, after)) return;
-    pushHistory(page, before); redrawOverlay(page, canvas); await persist(page);
-  }
-  function pointerDown(event: PointerEvent, page: number, canvas: HTMLCanvasElement) {
-    if (!isAnnotationToolOpen || event.button !== 0) return;
-    event.preventDefault(); const point = pointFor(event, canvas);
-    if (activeTool === 'stamp') { void addStamp(page, point.x, point.y); return; }
-    if (activeTool === 'text') { void addText(page, point.x, point.y); return; }
-    if (activeTool === 'eraser') { canvas.setPointerCapture(event.pointerId); void eraseAt(page, point.x, point.y, canvas); return; }
-    const stroke: Stroke = { tool: activeTool, color: penColor, width: penWidth, points: [point] };
-    drawing = { page, pointerId: event.pointerId, canvas, stroke }; canvas.setPointerCapture(event.pointerId); redrawOverlay(page, canvas);
-  }
-  function pointerMove(event: PointerEvent, page: number, canvas: HTMLCanvasElement) {
-    if (activeTool === 'eraser') { if (!canvas.hasPointerCapture(event.pointerId)) return; const point = pointFor(event, canvas); void eraseAt(page, point.x, point.y, canvas); return; }
-    if (!drawing || drawing.page !== page || drawing.canvas !== canvas || drawing.pointerId !== event.pointerId) return;
-    drawing.stroke.points.push(pointFor(event, canvas)); redrawOverlay(page, canvas);
-  }
-  async function finishDrawing(event: PointerEvent, page: number, canvas: HTMLCanvasElement) {
-    if (!drawing || drawing.page !== page || drawing.canvas !== canvas || drawing.pointerId !== event.pointerId) return;
-    const active = drawing; drawing = null;
-    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-    const before: Snapshot = { strokes: [...(annotations[page] || [])], stamps: structuredClone(stamps[page] || []), notes: structuredClone(notes[page] || []) };
-    if (!annotations[page]) annotations[page] = [];
-    annotations[page].push(active.stroke); pushHistory(page, before); redrawOverlay(page, canvas); await persist(page);
-  }
-  function cancelDrawing(event: PointerEvent, page: number, canvas: HTMLCanvasElement) {
-    if (!drawing || drawing.page !== page || drawing.canvas !== canvas || drawing.pointerId !== event.pointerId) return;
-    drawing = null; if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); redrawOverlay(page, canvas);
-  }
-  function goToPage(page: number) { const target = Math.max(1, Math.min(totalPages, Math.floor(Number(page) || 1))); if (target === currentPage) return; drawing = null; currentPage = target; void renderPages(); }
-  function nextPage() { goToPage(currentPage + (isDualPage ? 2 : 1)); }
-  function previousPage() { goToPage(currentPage - (isDualPage ? 2 : 1)); }
-  async function toggleFullscreen() { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); }
-  function handleKeyDown(event: KeyboardEvent) {
-    const target = event.target as HTMLElement | null; if (target && ['INPUT','TEXTAREA','SELECT'].includes(target.tagName)) return;
-    if (event.key === 'Escape') { if (showSettings || showShortcuts) { showSettings=false; showShortcuts=false; return; } if (isFullscreen) { void document.exitFullscreen(); return; } }
-    if (event.key === 'ArrowRight' || event.key === 'PageDown') { event.preventDefault(); nextPage(); }
-    if (event.key === 'ArrowLeft' || event.key === 'PageUp') { event.preventDefault(); previousPage(); }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); void undo(currentPage); }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); void redo(currentPage); }
-    if (event.key.toLowerCase() === 'p') activeTool='pen'; if (event.key.toLowerCase() === 'h') activeTool='highlighter'; if (event.key.toLowerCase() === 's') activeTool='stamp'; if (event.key.toLowerCase() === 't') activeTool='text'; if (event.key.toLowerCase() === 'e') activeTool='eraser';
-    if (event.key === ' ') { event.preventDefault(); nextPage(); }
-  }
-  function applySettings() { fitMode=settingsDefaultFit; isDualPage=settingsDualPage; filterMode=settingsDarkScore?'dark':'normal'; showSettings=false; void renderPages(); }
+	let renderId = 0;
+	let resizeTimer: any; // Timer to debounce window resize
+	const colors = [
+		'#ef4444',
+		'#3b82f6',
+		'#22c55e',
+		'#eab308',
+		'#a855f7',
+		'#000000'
+	];
+
+	type Point = { x: number; y: number; pressure?: number };
+
+	onMount(() => {
+		loadScore();
+		return () => pdfDoc?.destroy();
+	});
+
+	async function loadScore() {
+		const data = new Uint8Array(await score.pdfBlob.arrayBuffer());
+		pdfDoc = await pdfjsLib.getDocument({ data, isEvalSupported: false })
+			.promise;
+
+		const records = await db.annotations
+			.where('scoreId')
+			.equals(score.id)
+			.toArray();
+		for (const r of records) {
+			annotations[r.pageNum] = r.strokes || [];
+			stamps[r.pageNum] = r.stamps || [];
+			notes[r.pageNum] = r.notes || [];
+			history[r.pageNum] = [snapshot(r.pageNum)];
+		}
+
+		await tick();
+		renderPages();
+	}
+
+	function snapshot(p: number) {
+		// Strip proxies before saving snapshot history
+		return $state.snapshot({
+			strokes: annotations[p] || [],
+			stamps: stamps[p] || [],
+			notes: notes[p] || []
+		});
+	}
+
+	function checkpoint(p: number) {
+		history[p] = history[p] || [];
+		history[p].push(snapshot(p));
+		save(p);
+	}
+
+	function save(p: number) {
+		// CRITICAL FIX: Strip proxies to avoid Dexie DataCloneError
+		void db.annotations.put(
+			$state.snapshot({
+				id: `${score.id}_page_${p}`,
+				scoreId: score.id,
+				pageNum: p,
+				strokes: annotations[p] || [],
+				stamps: stamps[p] || [],
+				notes: notes[p] || []
+			})
+		);
+	}
+
+	async function renderPages() {
+		renderId++;
+		const id = renderId;
+		if (dual) {
+			const l = current % 2 === 0 ? current : Math.max(1, current - 1);
+			const r = l + 1;
+			await Promise.all([
+				renderOne(l, leftPdf, leftInk, id),
+				r <= (pdfDoc?.numPages || 1)
+					? renderOne(r, rightPdf, rightInk, id)
+					: Promise.resolve()
+			]);
+		} else {
+			await renderOne(current, leftPdf, leftInk, id);
+		}
+	}
+
+	async function renderOne(
+		p: number,
+		pdf: HTMLCanvasElement | null,
+		ink: HTMLCanvasElement | null,
+		id: number
+	) {
+		if (!pdfDoc || !pdf || !ink || !host) return;
+		const page = await pdfDoc.getPage(p);
+		if (id !== renderId) return;
+
+		const base = page.getViewport({ scale: 1 });
+		const aw = dual
+			? Math.max(240, (host.clientWidth - 100) / 2)
+			: Math.max(240, host.clientWidth - 70);
+		const ah = Math.max(240, host.clientHeight - 50);
+
+		let scale = Math.min(aw / base.width, ah / base.height) * zoom;
+		const maxPixels = 10_000_000;
+		if (base.width * scale * base.height * scale > maxPixels)
+			scale = Math.sqrt(maxPixels / (base.width * base.height));
+
+		scale = Math.max(0.2, Math.min(2.2, scale));
+		const viewport = page.getViewport({ scale });
+		const w = Math.ceil(viewport.width);
+		const h = Math.ceil(viewport.height);
+
+		// DEVICE PIXEL RATIO FIX - Sharp text on Retina / High-DPI screens
+		const dpr = window.devicePixelRatio || 1;
+		pdf.width = w * dpr;
+		pdf.height = h * dpr;
+		ink.width = w * dpr;
+		ink.height = h * dpr;
+
+		pdf.style.width = ink.style.width = `${w}px`;
+		pdf.style.height = ink.style.height = `${h}px`;
+
+		const ctxPdf = pdf.getContext('2d')!;
+		ctxPdf.scale(dpr, dpr);
+		const ctxInk = ink.getContext('2d')!;
+		ctxInk.scale(dpr, dpr);
+
+		// Required API change in recent PDF.js: Pass `canvasContext`
+		await page.render({ canvasContext: ctxPdf, viewport }).promise;
+		if (id === renderId) redraw(p, ink);
+	}
+
+	// NORMALIZATION FIX: Target `.getBoundingClientRect()` instead of native width/height to avoid DPR warping
+	function norm(p: Point, c: HTMLCanvasElement): Point {
+		const r = c.getBoundingClientRect();
+		return p.x > 2 || p.y > 2
+			? { x: p.x / r.width, y: p.y / r.height, pressure: p.pressure }
+			: p;
+	}
+
+	function xy(p: Point, c: HTMLCanvasElement) {
+		const n = norm(p, c);
+		const r = c.getBoundingClientRect();
+		return { x: n.x * r.width, y: n.y * r.height };
+	}
+
+	function drawSegment(
+		ctx: CanvasRenderingContext2D,
+		a: Point,
+		b: Point,
+		c: HTMLCanvasElement,
+		s: Stroke
+	) {
+		ctx.beginPath();
+		const p1 = xy(a, c),
+			p2 = xy(b, c);
+		ctx.moveTo(p1.x, p1.y);
+		ctx.lineTo(p2.x, p2.y);
+		ctx.strokeStyle = s.color;
+		ctx.lineCap = 'round';
+		ctx.lineJoin = 'round';
+		ctx.lineWidth = s.width * (a.pressure ? 0.65 + a.pressure * 0.7 : 1);
+		ctx.stroke();
+	}
+
+	function drawShape(
+		ctx: CanvasRenderingContext2D,
+		s: Stroke,
+		c: HTMLCanvasElement
+	) {
+		if (s.points.length < 2) return;
+		ctx.beginPath();
+		const start = xy(s.points[0], c),
+			end = xy(s.points[s.points.length - 1], c);
+		ctx.moveTo(start.x, start.y);
+		ctx.lineTo(end.x, end.y);
+		ctx.strokeStyle = s.color;
+		ctx.lineWidth = s.width;
+		ctx.stroke();
+
+		if (s.kind === 'arrow') {
+			const angle = Math.atan2(end.y - start.y, end.x - start.x);
+			const head = s.width * 4;
+			ctx.beginPath();
+			ctx.moveTo(end.x, end.y);
+			ctx.lineTo(
+				end.x - head * Math.cos(angle - Math.PI / 6),
+				end.y - head * Math.sin(angle - Math.PI / 6)
+			);
+			ctx.moveTo(end.x, end.y);
+			ctx.lineTo(
+				end.x - head * Math.cos(angle + Math.PI / 6),
+				end.y - head * Math.sin(angle + Math.PI / 6)
+			);
+			ctx.stroke();
+		}
+	}
+
+	function redraw(p: number, c: HTMLCanvasElement | null = pageCanvas(p)) {
+		if (!c) return;
+		const ctx = c.getContext('2d')!;
+		const r = c.getBoundingClientRect();
+		ctx.clearRect(0, 0, r.width, r.height); // Clearing only logical CSS dimensions since ctx is scaled
+
+		for (const s of annotations[p] || []) {
+			// HIGHLIGHTER FIX: Draw as single path to avoid opacity stacking
+			if (s.tool === 'highlighter' || s.kind === 'highlighter') {
+				if (s.points.length < 2) continue;
+				ctx.save();
+				ctx.beginPath();
+				const start = xy(s.points[0], c);
+				ctx.moveTo(start.x, start.y);
+				for (let i = 1; i < s.points.length; i++) {
+					const pt = xy(s.points[i], c);
+					ctx.lineTo(pt.x, pt.y);
+				}
+				ctx.lineCap = 'round';
+				ctx.lineJoin = 'round';
+				ctx.globalCompositeOperation = 'multiply';
+				ctx.strokeStyle = s.color + '77';
+				ctx.lineWidth = Math.max(12, s.width * 5);
+				ctx.stroke();
+				ctx.restore();
+			} else if (s.kind === 'freehand' || !s.kind) {
+				// Keep segment-by-segment mapping for pen pressure sensitivity
+				for (let i = 1; i < s.points.length; i++)
+					drawSegment(ctx, s.points[i - 1], s.points[i], c, s);
+			} else if (s.kind === 'line' || s.kind === 'arrow') {
+				drawShape(ctx, s, c);
+			}
+		}
+
+		for (const s of stamps[p] || []) {
+			const q = xy({ x: s.x, y: s.y }, c);
+			ctx.save();
+			ctx.font = `${s.fontSize}px Leland,serif`;
+			ctx.fillStyle = s.color;
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(s.symbol, q.x, q.y);
+			ctx.restore();
+		}
+	}
+
+	function pageCanvas(p: number) {
+		return dual
+			? current % 2 === 0
+				? p === current
+					? leftInk
+					: rightInk
+				: p === current - 1
+					? leftInk
+					: rightInk
+			: leftInk;
+	}
+
+	function pagePoint(e: PointerEvent, c: HTMLCanvasElement): Point {
+		const r = c.getBoundingClientRect();
+		return {
+			x: (e.clientX - r.left) / r.width,
+			y: (e.clientY - r.top) / r.height,
+			pressure: e.pressure || 0.5
+		};
+	}
+
+	function start(e: PointerEvent, p: number, c: HTMLCanvasElement) {
+		if (tool === 'move' || !annotationOpen || readingMode) return;
+		e.preventDefault();
+		c.setPointerCapture(e.pointerId);
+
+		const pt = pagePoint(e, c);
+		if (tool === 'eraser') {
+			eraseAt(pt, p, c);
+		} else if (tool === 'sharp' || tool === 'flat' || tool === 'natural') {
+			const map = { sharp: '♯', flat: '♭', natural: '♮' };
+			(stamps[p] ||= []).push({
+				x: pt.x,
+				y: pt.y,
+				symbol: map[tool],
+				color,
+				fontSize: 32
+			});
+			checkpoint(p);
+			redraw(p, c);
+		} else if (tool === 'text') {
+			const n: Note = {
+				id: crypto.randomUUID(),
+				x: pt.x,
+				y: pt.y,
+				text: '',
+				color
+			};
+			(notes[p] ||= []).push(n);
+			checkpoint(p);
+			setTimeout(() => document.getElementById(`note-${n.id}`)?.focus(), 50);
+		} else {
+			const kind =
+				tool === 'highlighter'
+					? 'highlighter'
+					: tool === 'line'
+						? 'line'
+						: tool === 'arrow'
+							? 'arrow'
+							: 'freehand';
+			const s: Stroke = {
+				id: crypto.randomUUID(),
+				tool,
+				color,
+				width: strokeWidth,
+				points: [pt],
+				kind
+			};
+			(annotations[p] ||= []).push(s);
+
+			const move = (me: PointerEvent) => {
+				const q = pagePoint(me, c);
+				if (tool === 'eraser') eraseAt(q, p, c);
+				else {
+					s.points.push(q);
+					// Single continuous path redrawing required on drag for line/arrow/highlighter
+					if (kind !== 'freehand') redraw(p, c);
+					else
+						drawSegment(
+							c.getContext('2d')!,
+							s.points[s.points.length - 2],
+							q,
+							c,
+							s
+						);
+				}
+			};
+			const up = () => {
+				c.removeEventListener('pointermove', move);
+				c.removeEventListener('pointerup', up);
+				c.releasePointerCapture(e.pointerId);
+				if (s.points.length > 1) checkpoint(p);
+				redraw(p, c);
+			};
+			c.addEventListener('pointermove', move);
+			c.addEventListener('pointerup', up);
+		}
+	}
+
+	function eraseAt(pt: Point, p: number, c: HTMLCanvasElement) {
+		const r = 0.02;
+		let changed = false;
+		if (annotations[p]) {
+			const init = annotations[p].length;
+			annotations[p] = annotations[p].filter(
+				(s) => !s.points.some((q) => Math.hypot(q.x - pt.x, q.y - pt.y) < r)
+			);
+			if (annotations[p].length !== init) changed = true;
+		}
+		if (stamps[p]) {
+			const init = stamps[p].length;
+			stamps[p] = stamps[p].filter(
+				(s) => Math.hypot(s.x - pt.x, s.y - pt.y) > r
+			);
+			if (stamps[p].length !== init) changed = true;
+		}
+		if (changed) {
+			checkpoint(p);
+			redraw(p, c);
+		}
+	}
+
+	function undo() {
+		const p = current;
+		const h = history[p];
+		if (!h || h.length <= 1) return;
+		h.pop();
+		const last = h[h.length - 1];
+		// Parse snapshots safely back into states
+		annotations[p] = JSON.parse(JSON.stringify(last.strokes));
+		stamps[p] = JSON.parse(JSON.stringify(last.stamps));
+		notes[p] = JSON.parse(JSON.stringify(last.notes));
+		save(p);
+		redraw(p);
+	}
+
+	function nav(delta: number) {
+		const np = pdfDoc?.numPages || 1;
+		const nxt = dual ? current + delta * 2 : current + delta;
+		if (nxt >= 1 && nxt <= np) {
+			current = nxt;
+			renderPages();
+		}
+	}
+
+	function key(e: KeyboardEvent) {
+		if (e.key === 'Escape' && readingMode) readingMode = false;
+		if (e.target instanceof HTMLTextAreaElement) return;
+		if (e.key === 'ArrowRight' || e.key === ' ') nav(1);
+		else if (e.key === 'ArrowLeft') nav(-1);
+		else if (e.key === 'z' && (e.metaKey || e.ctrlKey)) undo();
+	}
 </script>
 
-<svelte:window onkeydown={handleKeyDown} />
+<svelte:window
+	onkeydown={key}
+	onresize={() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderPages, 200) as any; }} />
 
-<div class="viewer-shell flex-1 flex flex-col relative bg-neutral-950 text-neutral-100 overflow-hidden select-none">
-  {#if showControls}
-    <header class="viewer-header h-14 shrink-0 flex items-center justify-between gap-3 px-3 sm:px-5 bg-neutral-900/90 backdrop-blur-2xl border-b border-neutral-800/80 z-30">
-      <div class="flex items-center gap-2 min-w-0"><button onclick={onBack} class="icon-button" title="Back to library"><ArrowLeft size={18}/></button><div class="min-w-0 hidden sm:block"><div class="text-sm font-semibold truncate max-w-72">{score.title}</div><div class="text-[11px] text-neutral-500 truncate">{score.composer}</div></div></div>
-      <div class="flex items-center gap-1.5"><button onclick={previousPage} disabled={currentPage<=1} class="icon-button" title="Previous page"><ChevronLeft size={18}/></button><label class="page-control"><input aria-label="Page number" type="number" min="1" max={totalPages} value={currentPage} onchange={(e)=>goToPage(Number((e.currentTarget as HTMLInputElement).value))}/><span>/ {totalPages}</span></label><button onclick={nextPage} disabled={currentPage>=totalPages} class="icon-button" title="Next page"><ChevronRight size={18}/></button></div>
-      <div class="flex items-center gap-1.5"><div class="hidden lg:flex items-center bg-neutral-950/80 border border-neutral-800 rounded-xl p-0.5"><button onclick={()=>{zoomLevel=Math.max(.5,zoomLevel-.1);void renderPages()}} class="mini-button"><ZoomOut size={15}/></button><span class="text-[11px] font-mono w-11 text-center text-neutral-300">{Math.round(zoomLevel*100)}%</span><button onclick={()=>{zoomLevel=Math.min(3,zoomLevel+.1);void renderPages()}} class="mini-button"><ZoomIn size={15}/></button><button onclick={()=>{zoomLevel=1;fitMode='height';void renderPages()}} class="mini-button border-l border-neutral-800 ml-0.5"><RotateCcw size={14}/></button></div><button onclick={()=>isAnnotationToolOpen=!isAnnotationToolOpen} class="icon-button {isAnnotationToolOpen?'active-blue':''}" title="Annotations"><Pencil size={17}/></button><button onclick={()=>{isDualPage=!isDualPage;void renderPages()}} class="icon-button hidden sm:flex" title="Facing pages">{#if isDualPage}<Columns size={17}/>{:else}<Square size={17}/>{/if}</button><button onclick={()=>showSettings=true} class="icon-button" title="Viewer settings"><Settings size={17}/></button></div>
-    </header>
-  {/if}
+<div
+	class="fixed inset-0 bg-neutral-950 flex flex-col z-50 overflow-hidden font-sans text-neutral-200 selection:bg-violet-500/30">
+	<!-- Top Bar -->
+	<header
+		class="h-14 shrink-0 border-b border-neutral-900 bg-neutral-950/80 backdrop-blur flex items-center px-4 justify-between transition-transform duration-300 {readingMode
+			? '-translate-y-full'
+			: ''}">
+		<div class="flex items-center gap-4 w-1/3">
+			<button
+				class="p-2 -ml-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-900 transition-colors"
+				onclick={onClose}>
+				<ArrowLeft size={18} />
+			</button>
+			<div class="min-w-0">
+				<h1 class="text-sm font-semibold truncate text-white">{score.title}</h1>
+				<p class="text-[11px] text-neutral-500 truncate">{score.composer}</p>
+			</div>
+		</div>
 
-  {#if isAnnotationToolOpen}
-    <div class="annotation-bar absolute top-[4.25rem] left-1/2 -translate-x-1/2 z-40 max-w-[calc(100%-1rem)] bg-neutral-900/95 backdrop-blur-2xl border border-neutral-700/80 rounded-2xl shadow-2xl p-2"><div class="flex flex-wrap items-center justify-center gap-1.5"><button onclick={()=>activeTool='pen'} class="tool {activeTool==='pen'?'active-blue':''}" title="Pen (P)"><Pencil size={16}/></button><button onclick={()=>activeTool='highlighter'} class="tool {activeTool==='highlighter'?'active-yellow':''}" title="Highlighter (H)"><Highlighter size={16}/></button><button onclick={()=>activeTool='eraser'} class="tool {activeTool==='eraser'?'active-neutral':''}" title="Eraser (E)"><Eraser size={16}/></button><button onclick={()=>activeTool='stamp'} class="tool {activeTool==='stamp'?'active-purple':''}" title="Musical symbol (S)"><Music2 size={16}/></button><button onclick={()=>activeTool='text'} class="tool {activeTool==='text'?'active-green':''}" title="Text note (T)"><Type size={16}/></button><span class="separator"></span>{#each QUICK_COLORS as color}<button onclick={()=>penColor=color} class="color-dot {penColor===color?'selected':''}" style={`background:${color}`} aria-label={`Set color ${color}`}></button>{/each}<label class="size-control"><span>Size</span><input type="range" min="1" max="12" bind:value={penWidth}/></label><span class="separator"></span><button onclick={()=>void undo(currentPage)} disabled={!historyStack[currentPage]?.length} class="tool"><Undo size={16}/></button><button onclick={()=>void redo(currentPage)} disabled={!redoStack[currentPage]?.length} class="tool"><Redo size={16}/></button><button onclick={()=>void clearPage(currentPage)} class="tool hover-danger"><Trash2 size={16}/></button></div>{#if activeTool==='stamp'}<div class="symbol-row">{#each MUSICAL_SYMBOLS as item}<button onclick={()=>selectedSymbol=item[0]} class="symbol-button {selectedSymbol===item[0]?'symbol-selected':''}" title={item[1]}>{item[0]}</button>{/each}</div>{/if}</div>
-  {/if}
+		<div class="flex items-center justify-center gap-1.5 w-1/3">
+			<button
+				class="p-1.5 rounded-lg text-neutral-400 hover:bg-neutral-900"
+				onclick={() => nav(-1)}><ChevronLeft size={18} /></button>
+			<span
+				class="text-xs font-medium tabular-nums w-12 text-center text-neutral-300">
+				{current} / {pdfDoc?.numPages || '?'}
+			</span>
+			<button
+				class="p-1.5 rounded-lg text-neutral-400 hover:bg-neutral-900"
+				onclick={() => nav(1)}><ChevronRight size={18} /></button>
+		</div>
 
-  <main bind:this={mainContainerRef} class="relative flex-1 overflow-auto flex items-center justify-center p-3 sm:p-5 bg-[radial-gradient(circle_at_center,_#202020_0,_#111_42%,_#0a0a0a_100%)]">
-    {#if loading}<div class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-neutral-500 bg-neutral-950 z-20"><div class="loading-ring"></div><span>Opening score…</span></div>{:else if error}<div class="max-w-md text-center p-8 rounded-3xl bg-neutral-900/90 border border-neutral-800 shadow-2xl"><div class="text-red-400 font-semibold mb-2">Unable to open score</div><p class="text-sm text-neutral-500 mb-5">{error}</p><button onclick={onBack} class="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Return to library</button></div>{:else}<button onclick={previousPage} disabled={currentPage<=1||isAnnotationToolOpen} class="page-zone left-zone"><ChevronLeft size={34}/></button><button onclick={nextPage} disabled={currentPage>=totalPages||isAnnotationToolOpen} class="page-zone right-zone"><ChevronRight size={34}/></button><div class="flex gap-4 items-center justify-center max-w-full min-h-0"><div class="score-page {filterMode==='sepia'?'sepia contrast-105 brightness-95':''} {filterMode==='dark'?'invert hue-rotate-180 contrast-125':''}"><canvas bind:this={leftPdfCanvas} class="block"></canvas><canvas bind:this={leftDrawCanvas} onpointerdown={(e)=>leftDrawCanvas&&pointerDown(e,currentPage,leftDrawCanvas)} onpointermove={(e)=>leftDrawCanvas&&pointerMove(e,currentPage,leftDrawCanvas)} onpointerup={(e)=>leftDrawCanvas&&finishDrawing(e,currentPage,leftDrawCanvas)} onpointercancel={(e)=>leftDrawCanvas&&cancelDrawing(e,currentPage,leftDrawCanvas)} class="absolute inset-0 touch-none {isAnnotationToolOpen?'cursor-crosshair':'pointer-events-none'}"></canvas></div>{#if isDualPage&&currentPage+1<=totalPages}<div class="score-page {filterMode==='sepia'?'sepia contrast-105 brightness-95':''} {filterMode==='dark'?'invert hue-rotate-180 contrast-125':''}"><canvas bind:this={rightPdfCanvas} class="block"></canvas><canvas bind:this={rightDrawCanvas} onpointerdown={(e)=>rightDrawCanvas&&pointerDown(e,currentPage+1,rightDrawCanvas)} onpointermove={(e)=>rightDrawCanvas&&pointerMove(e,currentPage+1,rightDrawCanvas)} onpointerup={(e)=>rightDrawCanvas&&finishDrawing(e,currentPage+1,rightDrawCanvas)} onpointercancel={(e)=>rightDrawCanvas&&cancelDrawing(e,currentPage+1,rightDrawCanvas)} class="absolute inset-0 touch-none {isAnnotationToolOpen?'cursor-crosshair':'pointer-events-none'}"></canvas></div>{/if}</div>{/if}
-  </main>
+		<div class="flex items-center justify-end gap-2 w-1/3">
+			<div
+				class="flex items-center bg-neutral-900/50 rounded-lg p-1 mr-2 border border-neutral-800/50">
+				<button
+					class="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+					onclick={() => {
+						zoom -= 0.1;
+						renderPages();
+					}}><ZoomOut size={16} /></button>
+				<span class="text-[11px] font-medium w-9 text-center text-neutral-400"
+					>{Math.round(zoom * 100)}%</span>
+				<button
+					class="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+					onclick={() => {
+						zoom += 0.1;
+						renderPages();
+					}}><ZoomIn size={16} /></button>
+			</div>
 
-  {#if showControls}<footer class="h-12 shrink-0 flex items-center justify-between gap-3 px-3 sm:px-5 bg-neutral-900/90 backdrop-blur-2xl border-t border-neutral-800/80 z-30 text-[11px] text-neutral-500"><div class="hidden md:block truncate max-w-[30%]">{score.composer} · {score.title}</div><div class="flex items-center gap-1 bg-neutral-950/80 border border-neutral-800 rounded-xl p-0.5"><button onclick={()=>{fitMode='height';void renderPages()}} class="fit-button {fitMode==='height'?'selected':''}">Fit height</button><button onclick={()=>{fitMode='width';void renderPages()}} class="fit-button {fitMode==='width'?'selected':''}">Fit width</button><button onclick={()=>{fitMode='page';void renderPages()}} class="fit-button {fitMode==='page'?'selected':''}">Fit page</button></div><div class="flex items-center gap-1"><button onclick={()=>filterMode='normal'} class="footer-icon {filterMode==='normal'?'selected':''}"><Sun size={14}/></button><button onclick={()=>filterMode='sepia'} class="footer-icon {filterMode==='sepia'?'selected-amber':''}"><BookOpen size={14}/></button><button onclick={()=>filterMode='dark'} class="footer-icon {filterMode==='dark'?'selected':''}"><Moon size={14}/></button><button onclick={()=>void toggleFullscreen()} class="footer-icon hidden sm:flex">{#if isFullscreen}<Minimize2 size={14}/>{:else}<Maximize2 size={14}/>{/if}</button></div></footer>{/if}
-  <button onclick={()=>showControls=!showControls} class="shell-toggle" title="Toggle controls"><PanelTop size={15}/></button>
+			<button
+				class="p-2 rounded-xl border transition-colors {dual
+					? 'bg-violet-600 border-violet-500 text-white shadow-sm shadow-violet-900/20'
+					: 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'}"
+				onclick={() => {
+					dual = !dual;
+					renderPages();
+				}}
+				title="Two Page View">
+				<BookOpen size={16} />
+			</button>
+			<button
+				class="p-2 rounded-xl border transition-colors {annotationOpen
+					? 'bg-violet-600 border-violet-500 text-white shadow-sm shadow-violet-900/20'
+					: 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'}"
+				onclick={() => (annotationOpen = !annotationOpen)}
+				title="Annotations">
+				<PenTool size={16} />
+			</button>
+			<button
+				class="ml-1 px-3 py-1.5 text-xs font-medium bg-white text-black rounded-xl hover:bg-neutral-200 transition-colors"
+				onclick={() => (readingMode = true)}>Read</button>
+		</div>
+	</header>
 
-  {#if showSettings}<div class="modal-backdrop" role="presentation" onclick={(e)=>e.currentTarget===e.target&&(showSettings=false)}><section class="settings-panel" role="dialog" aria-modal="true" aria-label="Viewer settings"><div class="flex items-center justify-between mb-5"><div><h2 class="text-lg font-semibold">Viewer settings</h2><p class="text-xs text-neutral-500 mt-1">Tune Sonora for the way you read and mark music.</p></div><button onclick={()=>showSettings=false} class="icon-button"><X size={18}/></button></div><div class="space-y-5"><div><p class="setting-label">Default page fit</p><div class="setting-segment"><button onclick={()=>settingsDefaultFit='height'} class:chosen={settingsDefaultFit==='height'}>Height</button><button onclick={()=>settingsDefaultFit='page'} class:chosen={settingsDefaultFit==='page'}>Page</button><button onclick={()=>settingsDefaultFit='width'} class:chosen={settingsDefaultFit==='width'}>Width</button></div></div><label class="setting-row"><span><strong>Facing pages</strong><small>Show two pages when space allows.</small></span><input type="checkbox" bind:checked={settingsDualPage}/></label><label class="setting-row"><span><strong>Dark score</strong><small>Invert the page for low-light reading.</small></span><input type="checkbox" bind:checked={settingsDarkScore}/></label><div class="setting-card"><div class="flex items-center gap-2 text-neutral-300"><MousePointer2 size={16}/><span class="font-medium">Annotation behavior</span></div><p>Marks are committed on pointer release, including single-click dots. Pointer capture keeps strokes attached to the score even if the pointer moves slightly outside the page.</p></div><button onclick={()=>{showSettings=false;showShortcuts=true}} class="setting-row w-full text-left"><span><strong>Keyboard shortcuts</strong><small>Page turns, annotation tools, undo and redo.</small></span><Keyboard size={17} class="text-neutral-500"/></button></div><div class="flex justify-end gap-2 mt-6"><button onclick={()=>showSettings=false} class="px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Cancel</button><button onclick={applySettings} class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-sm font-medium">Apply</button></div></section></div>{/if}
-  {#if showShortcuts}<div class="modal-backdrop" role="presentation" onclick={(e)=>e.currentTarget===e.target&&(showShortcuts=false)}><section class="settings-panel max-w-md" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"><div class="flex items-center justify-between mb-5"><h2 class="text-lg font-semibold">Keyboard shortcuts</h2><button onclick={()=>showShortcuts=false} class="icon-button"><X size={18}/></button></div><div class="shortcut-list"><div><span>Next / previous page</span><kbd>←</kbd><kbd>→</kbd></div><div><span>Next page</span><kbd>Space</kbd></div><div><span>Pen / highlighter</span><kbd>P</kbd><kbd>H</kbd></div><div><span>Symbol / text / eraser</span><kbd>S</kbd><kbd>T</kbd><kbd>E</kbd></div><div><span>Undo / redo</span><kbd>Ctrl/Cmd Z</kbd><kbd>Ctrl/Cmd Y</kbd></div><div><span>Close dialog / fullscreen</span><kbd>Esc</kbd></div></div></section></div>{/if}
+	<div class="flex-1 flex overflow-hidden relative">
+		<!-- Annotation Toolbar -->
+		<aside
+			class="w-14 shrink-0 bg-neutral-950 border-r border-neutral-900 flex flex-col items-center py-4 gap-4 transition-all duration-300 absolute md:relative z-20 h-full {annotationOpen &&
+			!readingMode
+				? 'translate-x-0'
+				: '-translate-x-full md:hidden md:w-0'}">
+			<!-- Toolbar identical to original -->
+			<div class="flex flex-col gap-1.5 w-full px-2">
+				{@render toolBtn('move', MousePointer2)}
+				{@render toolBtn('pen', PenTool)}
+				{@render toolBtn('highlighter', Highlighter)}
+				{@render toolBtn('line', Minus)}
+				<div class="h-px w-6 mx-auto bg-neutral-800 my-1"></div>
+				<button
+					class="p-2 rounded-xl text-lg flex justify-center {tool === 'sharp'
+						? 'bg-violet-600 text-white'
+						: 'text-neutral-400 hover:bg-neutral-900'}"
+					onclick={() => (tool = 'sharp')}>♯</button>
+				<button
+					class="p-2 rounded-xl text-lg flex justify-center {tool === 'flat'
+						? 'bg-violet-600 text-white'
+						: 'text-neutral-400 hover:bg-neutral-900'}"
+					onclick={() => (tool = 'flat')}>♭</button>
+				<div class="h-px w-6 mx-auto bg-neutral-800 my-1"></div>
+				{@render toolBtn('text', Type)}
+				{@render toolBtn('eraser', Eraser)}
+			</div>
+			<div class="mt-auto flex flex-col gap-3 w-full px-2">
+				<button
+					class="p-2 rounded-xl text-neutral-400 hover:bg-neutral-900 mx-auto"
+					onclick={undo}
+					title="Undo (Ctrl+Z)"><Undo2 size={18} /></button>
+				<div class="grid grid-cols-2 gap-1.5 px-1">
+					{#each colors as c}
+						<button
+							class="w-4 h-4 rounded-full ring-2 ring-offset-2 ring-offset-neutral-950 transition-all {color ===
+							c
+								? 'ring-white scale-110'
+								: 'ring-transparent hover:scale-110'}"
+							style:background-color={c}
+							onclick={() => (color = c)}></button>
+					{/each}
+				</div>
+			</div>
+		</aside>
+
+		<!-- Main Workspace -->
+		<main
+			bind:this={host}
+			class="flex-1 bg-neutral-900 overflow-auto relative flex items-center justify-center p-4 sm:p-8"
+			onclick={() => {
+				if (readingMode) readingMode = false;
+			}}>
+			<div
+				class="flex gap-4 sm:gap-8 items-center justify-center min-h-full transition-transform duration-300 {readingMode
+					? 'scale-[1.02]'
+					: ''}">
+				<!-- Left Page -->
+				<div
+					class="relative shadow-2xl shadow-black/50 bg-white ring-1 ring-neutral-950/5 rounded-sm"
+					style="touch-action: none;">
+					<canvas bind:this={leftPdf} class="block rounded-sm"></canvas>
+					<canvas
+						bind:this={leftInk}
+						class="absolute inset-0 z-10 w-full h-full cursor-crosshair rounded-sm"
+						onpointerdown={(e) => start(e, dual ? (current % 2 === 0 ? current : Math.max(1, current - 1)) : current, leftInk!)}
+					></canvas>
+
+					<!-- Left Page Notes -->
+					<div
+						class="absolute inset-0 pointer-events-none overflow-hidden z-20">
+						{#each notes[dual ? (current % 2 === 0 ? current : Math.max(1, current - 1)) : current] || [] as n}
+							<textarea
+								id="note-{n.id}"
+								bind:value={n.text}
+								oninput={() => {
+									n.text = n.text;
+									checkpoint(current);
+								}}
+								class="absolute bg-transparent outline-none resize-none overflow-hidden whitespace-pre pointer-events-auto leading-tight"
+								style:left="{n.x * 100}%"
+								style:top="{n.y * 100}%"
+								style:color={n.color}
+								style:font-size="16px"
+								style:font-family="sans-serif"
+								ondblclick={() => (tool = 'move')}
+								onmousedown={(e) => tool === 'move' && e.stopPropagation()}
+							></textarea>
+						{/each}
+					</div>
+				</div>
+
+				<!-- Right Page (Dual Mode) -->
+				{#if dual && (current % 2 === 0 ? current + 1 : Math.max(1, current - 1) + 1) <= (pdfDoc?.numPages || 1)}
+					<div
+						class="relative shadow-2xl shadow-black/50 bg-white ring-1 ring-neutral-950/5 rounded-sm hidden md:block"
+						style="touch-action: none;">
+						<canvas bind:this={rightPdf} class="block rounded-sm"></canvas>
+						<canvas
+							bind:this={rightInk}
+							class="absolute inset-0 z-10 w-full h-full cursor-crosshair rounded-sm"
+							onpointerdown={(e) => start(e, current % 2 === 0 ? current + 1 : Math.max(1, current - 1) + 1, rightInk!)}
+						></canvas>
+					</div>
+				{/if}
+			</div>
+		</main>
+	</div>
 </div>
 
-<style>
-  .viewer-shell{font-family:Inter,ui-sans-serif,system-ui,sans-serif}.icon-button,.mini-button,.tool,.footer-icon,.fit-button{transition:all .16s ease}.icon-button{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:11px;color:#a3a3a3;background:rgba(23,23,23,.78);border:1px solid #262626}.icon-button:hover:not(:disabled),.mini-button:hover:not(:disabled),.footer-icon:hover{color:#fff;background:#262626}.icon-button:disabled,.mini-button:disabled,.tool:disabled{opacity:.3;cursor:not-allowed}.active-blue{color:#bfdbfe!important;background:rgba(37,99,235,.22)!important;border-color:rgba(59,130,246,.55)!important}.active-yellow{color:#fde68a!important;background:rgba(234,179,8,.16)!important;border-color:rgba(234,179,8,.45)!important}.active-purple{color:#ddd6fe!important;background:rgba(124,58,237,.2)!important;border-color:rgba(139,92,246,.5)!important}.active-green{color:#a7f3d0!important;background:rgba(16,185,129,.16)!important;border-color:rgba(16,185,129,.45)!important}.active-neutral{color:#fff!important;background:#303030!important}.mini-button{width:30px;height:28px;display:flex;align-items:center;justify-content:center;color:#a3a3a3;border-radius:8px}.page-control{display:flex;align-items:center;justify-content:center;gap:4px;min-width:76px;color:#737373;font-size:11px}.page-control input{width:38px;text-align:center;background:#0a0a0a;color:#e5e5e5;border:1px solid #262626;border-radius:8px;padding:5px 3px;outline:none}.page-control input:focus{border-color:#3b82f6}.annotation-bar{animation:slide-down .18s ease-out}.tool{width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:10px;color:#a3a3a3;background:#171717;border:1px solid #262626}.tool:hover:not(:disabled){color:#fff;background:#262626}.hover-danger:hover{color:#fca5a5;border-color:rgba(239,68,68,.35)}.separator{width:1px;height:23px;background:#303030;margin:0 3px}.color-dot{width:20px;height:20px;border-radius:999px;border:2px solid #404040;transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}.color-dot:hover{transform:scale(1.12)}.color-dot.selected{border-color:#fff;box-shadow:0 0 0 2px #3b82f6;transform:scale(1.08)}.size-control{display:flex;align-items:center;gap:6px;padding:0 4px;color:#a3a3a3;font-size:11px}.size-control input{width:70px;accent-color:#3b82f6}.symbol-row{display:flex;gap:5px;overflow-x:auto;padding-top:8px;margin-top:7px;border-top:1px solid #292929}.symbol-button{min-width:34px;height:31px;padding:0 8px;border-radius:9px;border:1px solid #292929;background:#0a0a0a;color:#d4d4d4;font-family:serif;transition:.15s ease}.symbol-button:hover{background:#262626}.symbol-selected{color:#ddd6fe;background:rgba(124,58,237,.2);border-color:#8b5cf6}.score-page{position:relative;background:#fff;box-shadow:0 18px 55px rgba(0,0,0,.5),0 3px 12px rgba(0,0,0,.35);border-radius:2px;overflow:hidden;flex:none;animation:page-enter .2s ease-out}.page-zone{position:absolute;top:0;bottom:0;width:13%;z-index:10;display:flex;align-items:center;color:rgba(255,255,255,.55);opacity:0;transition:opacity .16s ease,background .16s ease}.page-zone:hover:not(:disabled){opacity:1}.left-zone{left:0;justify-content:flex-start;padding-left:12px;background:linear-gradient(90deg,rgba(10,10,10,.55),transparent)}.right-zone{right:0;justify-content:flex-end;padding-right:12px;background:linear-gradient(270deg,rgba(10,10,10,.55),transparent)}.page-zone:disabled{pointer-events:none}.fit-button{padding:6px 9px;border-radius:8px;color:#737373}.fit-button:hover{color:#d4d4d4}.fit-button.selected{color:#e5e5e5;background:#262626}.footer-icon{width:29px;height:29px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#737373}.footer-icon.selected{color:#e5e5e5;background:#262626}.footer-icon.selected-amber{color:#fde68a;background:rgba(120,53,15,.45)}.shell-toggle{position:absolute;right:10px;bottom:59px;z-index:45;width:28px;height:28px;border-radius:9px;background:rgba(23,23,23,.8);border:1px solid #303030;color:#737373;display:flex;align-items:center;justify-content:center;opacity:.55;transition:.15s ease}.shell-toggle:hover{opacity:1;color:#fff}.modal-backdrop{position:absolute;inset:0;z-index:60;display:flex;align-items:flex-start;justify-content:flex-end;padding:16px;background:rgba(0,0,0,.58);backdrop-filter:blur(6px);animation:fade-in .16s ease-out}.settings-panel{width:min(100%,420px);margin-top:42px;padding:20px;border:1px solid #3a3a3a;border-radius:20px;background:rgba(23,23,23,.97);box-shadow:0 24px 80px rgba(0,0,0,.55);animation:panel-enter .2s ease-out}.setting-label{font-size:11px;color:#737373;margin-bottom:8px;text-transform:uppercase;letter-spacing:.08em}.setting-segment{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:4px;background:#0a0a0a;border:1px solid #292929;border-radius:11px}.setting-segment button{padding:8px;border-radius:8px;color:#737373;font-size:12px;transition:.15s ease}.setting-segment button:hover{color:#d4d4d4}.setting-segment button.chosen{color:#dbeafe;background:#1d4ed8}.setting-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid #292929}.setting-row strong{display:block;color:#e5e5e5;font-size:13px;font-weight:600}.setting-row small{display:block;color:#737373;font-size:11px;margin-top:3px}.setting-row input[type='checkbox']{width:17px;height:17px;accent-color:#2563eb}.setting-card{padding:12px;border:1px solid #292929;background:#101010;border-radius:13px}.setting-card p{color:#737373;font-size:11px;line-height:1.6;margin-top:7px}.shortcut-list{display:flex;flex-direction:column;gap:10px}.shortcut-list>div{display:flex;align-items:center;gap:5px;padding:9px 0;border-bottom:1px solid #292929;color:#a3a3a3;font-size:12px}.shortcut-list>div span{flex:1}kbd{padding:3px 7px;border-radius:6px;border:1px solid #404040;background:#0a0a0a;color:#d4d4d4;font:10px ui-monospace,SFMono-Regular,monospace}.loading-ring{width:25px;height:25px;border:2px solid #333;border-top-color:#60a5fa;border-radius:999px;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@keyframes fade-in{from{opacity:0}to{opacity:1}}@keyframes slide-down{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}@keyframes panel-enter{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:translateX(0)}}@keyframes page-enter{from{opacity:.8;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
-</style>
+{#snippet toolBtn(id: Tool, Icon: any)}
+	<button
+		class="p-2 rounded-xl flex justify-center transition-colors {tool === id
+			? 'bg-violet-600 text-white shadow-sm shadow-violet-900/20'
+			: 'text-neutral-400 hover:bg-neutral-900'}"
+		onclick={() => (tool = id)}>
+		<Icon size={18} strokeWidth={2.5} />
+	</button>
+{/snippet}
