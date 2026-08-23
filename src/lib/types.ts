@@ -6,41 +6,14 @@ export interface ScoreItem {
   thumbnailUrl?: string;
   totalPages: number;
   addedAt: number;
+  lastOpenedAt?: number;
+  favorite?: boolean;
+  tags?: string[];
+  collection?: string;
 }
 
-export interface Point { x: number; y: number; }
-
-export interface Stroke {
-  tool: 'pen' | 'highlighter';
-  color: string;
-  width: number;
-  points: Point[];
-}
-
-export interface SymbolStamp {
-  id: string;
-  symbol: string;
-  label: string;
-  x: number;
-  y: number;
-  fontSize: number;
-  color: string;
-}
-
-export interface TextNote {
-  id: string;
-  text: string;
-  x: number;
-  y: number;
-  fontSize: number;
-  color: string;
-}
-
-export interface AnnotationRecord {
-  id: string; // `${scoreId}_page_${pageNum}`
-  scoreId: string;
-  pageNum: number;
-  strokes: Stroke[];
-  stamps: SymbolStamp[];
-  notes: TextNote[];
-}
+export interface Point { x: number; y: number; pressure?: number; }
+export interface Stroke { id?: string; tool: 'pen' | 'highlighter'; color: string; width: number; points: Point[]; }
+export interface SymbolStamp { id: string; symbol: string; label: string; x: number; y: number; fontSize: number; color: string; }
+export interface TextNote { id: string; text: string; x: number; y: number; fontSize: number; color: string; }
+export interface AnnotationRecord { id: string; scoreId: string; pageNum: number; strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[]; }
