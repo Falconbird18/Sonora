@@ -1,62 +1,660 @@
 <script lang="ts">
-import { onMount, tick } from 'svelte';
-import * as pdfjsLib from 'pdfjs-dist';
-import { ArrowLeft, ChevronLeft, ChevronRight, Pencil, Highlighter, Eraser, Trash2, ZoomIn, ZoomOut, RotateCcw, Undo, Redo, Music2, Type, Search, Move, X, Check, Maximize2, Star, Minus, ArrowUpRight } from 'lucide-svelte';
-import { db } from './db';
-import type { ScoreItem, Stroke, SymbolStamp, TextNote, Point } from './types';
-import { MUSICAL_SYMBOLS, SYMBOL_CATEGORIES, type SymbolCategory } from './musicSymbols';
+	import { onMount, tick } from 'svelte';
+	import * as pdfjsLib from 'pdfjs-dist';
+	import { db } from './db';
+	import type { ScoreItem, Stroke, AnnotationStamp, Note } from './types';
+	import {
+		ChevronLeft,
+		ChevronRight,
+		ArrowLeft,
+		PenTool,
+		Highlighter,
+		Eraser,
+		Type,
+		Undo2,
+		ZoomIn,
+		ZoomOut,
+		MousePointer2,
+		Minus,
+		BookOpen
+	} from 'lucide-svelte';
 
-let { score, onBack }: { score: ScoreItem; onBack: () => void } = $props();
-let pdfDoc=$state<pdfjsLib.PDFDocumentProxy|null>(null), currentPage=$state(1), totalPages=$state(score.totalPages||0);
-let loading=$state(true), error=$state(''), progress=$state(0), loadingText=$state('Opening score…');
-let zoom=$state(1), dual=$state(false), readingMode=$state(false), showThumbs=$state(true), favorite=$state(!!score.favorite);
-let annotationOpen=$state(false), tool=$state<'pen'|'highlighter'|'text'|'stamp'|'move'|'eraser'|'line'|'arrow'>('pen');
-let color=$state('#ef4444'), width=$state(3), selectedSymbol=$state(MUSICAL_SYMBOLS[0]?.symbol||''), symbolCategory=$state<SymbolCategory>('Common'), symbolSearch=$state('');
-let annotations=$state<Record<number,Stroke[]>>({}), stamps=$state<Record<number,SymbolStamp[]>>({}), notes=$state<Record<number,TextNote[]>>({});
-let undoStack=$state<Record<number,{strokes:Stroke[];stamps:SymbolStamp[];notes:TextNote[]}[]>>({}), redoStack=$state<Record<number,{strokes:Stroke[];stamps:SymbolStamp[];notes:TextNote[]}[]>>({});
-let currentStroke=$state<Stroke|null>(null), drawing=$state(false);
-let drag=$state<{type:'note'|'stamp';id:string;dx:number;dy:number}|null>(null), selectedId=$state<string|null>(null);
-let editing=$state<{page:number;x:number;y:number;text:string;color:string;fontSize:number;id?:string}|null>(null);
-let leftPdf=$state<HTMLCanvasElement|null>(null), leftInk=$state<HTMLCanvasElement|null>(null), rightPdf=$state<HTMLCanvasElement|null>(null), rightInk=$state<HTMLCanvasElement|null>(null), host=$state<HTMLDivElement|null>(null);
-let thumbUrls=$state<Record<number,string>>({}), thumbBusy=new Set<number>(), renderId=0;
-const colors=['#ef4444','#3b82f6','#10b981','#eab308','#a855f7','#ffffff','#000000'];
-const filteredSymbols=$derived(MUSICAL_SYMBOLS.filter(s=>s.category===symbolCategory&&(!symbolSearch.trim()||[s.label,...s.keywords].join(' ').toLowerCase().includes(symbolSearch.toLowerCase()))));
+	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
 
-onMount(()=>{dual=window.innerWidth>=1100;pdfjsLib.GlobalWorkerOptions.workerSrc=new URL('pdfjs-dist/build/pdf.worker.min.mjs',import.meta.url).toString();void openPdf();return()=>pdfDoc?.destroy()});
-async function openPdf(){loading=true;error='';progress=0;try{const data=new Uint8Array(await score.pdfBlob.arrayBuffer());const task=pdfjsLib.getDocument({data,isEvalSupported:false});task.onProgress=({loaded,total})=>{progress=total?Math.round(loaded/total*100):Math.min(95,progress+5);loadingText=total?`Reading score… ${progress}%`:'Reading score…'};pdfDoc=await task.promise;totalPages=pdfDoc.numPages;const rows=await db.annotations.where('scoreId').equals(score.id).toArray();for(const r of rows){annotations[r.pageNum]=r.strokes||[];stamps[r.pageNum]=r.stamps||[];notes[r.pageNum]=r.notes||[]}await db.scores.update(score.id,{lastOpenedAt:Date.now()});loading=false;await tick();await renderPages();await makeThumbs()}catch(e){console.error(e);error=e instanceof Error?e.message:'The PDF could not be opened.';loading=false}}
-function snapshot(p:number){return{strokes:structuredClone(annotations[p]||[]),stamps:structuredClone(stamps[p]||[]),notes:structuredClone(notes[p]||[])}}
-function checkpoint(p:number){(undoStack[p]||=[]).push(snapshot(p));if(undoStack[p].length>60)undoStack[p].shift();redoStack[p]=[]}
-function save(p:number){void db.annotations.put({id:`${score.id}_page_${p}`,scoreId:score.id,pageNum:p,strokes:annotations[p]||[],stamps:stamps[p]||[],notes:notes[p]||[]})}
-function undo(p:number){if(!undoStack[p]?.length)return;(redoStack[p]||=[]).push(snapshot(p));const s=undoStack[p].pop()!;annotations[p]=s.strokes;stamps[p]=s.stamps;notes[p]=s.notes;redraw(p);save(p)}
-function redo(p:number){if(!redoStack[p]?.length)return;(undoStack[p]||=[]).push(snapshot(p));const s=redoStack[p].pop()!;annotations[p]=s.strokes;stamps[p]=s.stamps;notes[p]=s.notes;redraw(p);save(p)}
-function pagePoint(e:PointerEvent,c:HTMLCanvasElement):Point{const r=c.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height,pressure:e.pressure||.5}}
-function norm(p:Point,c:HTMLCanvasElement):Point{return p.x>2||p.y>2?{x:p.x/c.width,y:p.y/c.height,pressure:p.pressure}:p}
-function xy(p:Point,c:HTMLCanvasElement){const n=norm(p,c);return{x:n.x*c.width,y:n.y*c.height}}
-function drawSegment(ctx:CanvasRenderingContext2D,a:Point,b:Point,c:HTMLCanvasElement,s:Stroke){const A=xy(a,c),B=xy(b,c);ctx.save();ctx.beginPath();ctx.moveTo(A.x,A.y);ctx.lineTo(B.x,B.y);ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle=s.tool==='highlighter'?'rgba(250,204,21,.36)':s.color;ctx.lineWidth=s.tool==='highlighter'?Math.max(12,s.width*5):s.width*(a.pressure?0.65+a.pressure*.7:1);ctx.stroke();ctx.restore()}
-function drawShape(ctx:CanvasRenderingContext2D,s:Stroke,c:HTMLCanvasElement){if(s.points.length<2)return;const a=xy(s.points[0],c),b=xy(s.points.at(-1)!,c);ctx.save();ctx.strokeStyle=s.color;ctx.lineWidth=s.width;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();if(s.kind==='arrow'){const ang=Math.atan2(b.y-a.y,b.x-a.x),l=13;ctx.beginPath();ctx.moveTo(b.x,b.y);ctx.lineTo(b.x-l*Math.cos(ang-.55),b.y-l*Math.sin(ang-.55));ctx.moveTo(b.x,b.y);ctx.lineTo(b.x-l*Math.cos(ang+.55),b.y-l*Math.sin(ang+.55));ctx.stroke()}ctx.restore()}
-function redraw(p:number,c:HTMLCanvasElement|null=pageCanvas(p)){if(!c)return;const ctx=c.getContext('2d')!;ctx.clearRect(0,0,c.width,c.height);for(const s of annotations[p]||[]){for(let i=1;i<s.points.length;i++)drawSegment(ctx,s.points[i-1],s.points[i],c,s);if(s.kind==='line'||s.kind==='arrow')drawShape(ctx,s,c)}for(const s of stamps[p]||[]){const q=xy({x:s.x,y:s.y},c);ctx.save();ctx.font=`${s.fontSize}px Leland,serif`;ctx.fillStyle=s.color;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(s.symbol,q.x,q.y);ctx.restore()}for(const n of notes[p]||[]){const q=xy({x:n.x,y:n.y},c);ctx.save();ctx.font=`600 ${n.fontSize}px sans-serif`;ctx.fillStyle=n.color;ctx.textBaseline='middle';ctx.fillText(n.text,q.x,q.y);if(selectedId===n.id){const w=ctx.measureText(n.text).width;ctx.strokeStyle='#60a5fa';ctx.setLineDash([4,4]);ctx.strokeRect(q.x-5,q.y-n.fontSize-4,w+10,n.fontSize+10)}ctx.restore()}}
-function pageCanvas(p:number){return p===currentPage?leftInk:dual&&p===currentPage+1?rightInk:null}
-async function renderOne(p:number,pdf:HTMLCanvasElement|null,ink:HTMLCanvasElement|null,id:number){if(!pdfDoc||!pdf||!ink||!host)return;const page=await pdfDoc.getPage(p);if(id!==renderId)return;const base=page.getViewport({scale:1});const aw=dual?Math.max(240,(host.clientWidth-100)/2):Math.max(240,host.clientWidth-70),ah=Math.max(240,host.clientHeight-50);let scale=Math.min(aw/base.width,ah/base.height)*zoom;const maxPixels=10_000_000;if(base.width*scale*base.height*scale>maxPixels)scale=Math.sqrt(maxPixels/(base.width*base.height));scale=Math.max(.2,Math.min(2.2,scale));const viewport=page.getViewport({scale}),w=Math.ceil(viewport.width),h=Math.ceil(viewport.height);pdf.width=w;pdf.height=h;ink.width=w;ink.height=h;pdf.style.width=ink.style.width=`${w}px`;pdf.style.height=ink.style.height=`${h}px`;await page.render({canvas:pdf,viewport}).promise;if(id===renderId)redraw(p,ink)}
-async function renderPages(){if(!pdfDoc||!host)return;const id=++renderId;await renderOne(currentPage,leftPdf,leftInk,id);if(dual&&currentPage<totalPages)await renderOne(currentPage+1,rightPdf,rightInk,id);await makeThumbs()}
-async function makeThumb(p=currentPage){if(!pdfDoc||thumbUrls[p]||thumbBusy.has(p))return;thumbBusy.add(p);try{const page=await pdfDoc.getPage(p),v=page.getViewport({scale:.14}),c=document.createElement('canvas');c.width=Math.ceil(v.width);c.height=Math.ceil(v.height);await page.render({canvas:c,viewport:v}).promise;thumbUrls[p]=c.toDataURL('image/jpeg',.65)}finally{thumbBusy.delete(p)}}
-async function makeThumbs(){await Promise.all([currentPage-2,currentPage-1,currentPage,currentPage+1,currentPage+2].filter(p=>p>=1&&p<=totalPages).map(makeThumb))}
-function go(n:number){const p=Math.max(1,Math.min(totalPages,dual&&n%2===0?n-1:n));if(p===currentPage)return;currentPage=p;selectedId=null;void renderPages()}
-function hitNote(p:number,q:Point){for(const n of [...(notes[p]||[])].reverse()){const x=n.x<=1?n.x:q.x+10,y=n.y<=1?n.y:q.y+10,w=Math.max(.06,n.text.length*.012);if(q.x>=x-.02&&q.x<=x+w&&Math.abs(q.y-y)<.045)return n}return null}
-function hitStamp(p:number,q:Point){for(const s of [...(stamps[p]||[])].reverse()){const x=s.x<=1?s.x:q.x+10,y=s.y<=1?s.y:q.y+10;if(Math.hypot(q.x-x,q.y-y)<.065)return s}return null}
-function start(e:PointerEvent,p:number,c:HTMLCanvasElement){if(!annotationOpen)return;const q=pagePoint(e,c);selectedId=null;if(tool==='move'){const n=hitNote(p,q),s=n?null:hitStamp(p,q);if(n||s){selectedId=(n||s)!.id;drag={type:n?'note':'stamp',id:selectedId,dx:q.x-(n||s)!.x,dy:q.y-(n||s)!.y};c.setPointerCapture(e.pointerId)}return}if(tool==='text'){editing={page:p,x:q.x,y:q.y,text:'',color,fontSize:16};return}if(tool==='stamp'){checkpoint(p);(stamps[p]||=[]).push({id:crypto.randomUUID(),symbol:selectedSymbol,label:'symbol',x:q.x,y:q.y,fontSize:34,color});redraw(p,c);save(p);return}drawing=true;c.setPointerCapture(e.pointerId);if(tool==='eraser'){checkpoint(p);erase(p,q,c);return}checkpoint(p);currentStroke={id:crypto.randomUUID(),tool:tool==='highlighter'?'highlighter':'pen',kind:tool==='line'||tool==='arrow'?tool:'freehand',color,width,points:[q]};if(tool==='line'||tool==='arrow')redraw(p,c)}
-function move(e:PointerEvent,p:number,c:HTMLCanvasElement){const q=pagePoint(e,c);if(drag){const item=drag.type==='note'?(notes[p]||[]).find(n=>n.id===drag.id):(stamps[p]||[]).find(s=>s.id===drag.id);if(item){item.x=q.x-drag.dx;item.y=q.y-drag.dy;redraw(p,c)}return}if(!drawing||!currentStroke)return;if(tool==='eraser'){erase(p,q,c);return}if(currentStroke.kind==='line'||currentStroke.kind==='arrow'){currentStroke.points=[currentStroke.points[0],q];redraw(p,c);return}const last=currentStroke.points.at(-1)!;if(Math.hypot(q.x-last.x,q.y-last.y)<.002)return;currentStroke.points.push(q);drawSegment(c.getContext('2d')!,last,q,c,currentStroke)}
-function end(e:PointerEvent,p:number,c:HTMLCanvasElement){if(drag){drag=null;selectedId=null;save(p);redraw(p,c);return}if(!drawing)return;drawing=false;if(currentStroke){(annotations[p]||=[]).push(currentStroke);currentStroke=null;redraw(p,c);save(p)}}
-function erase(p:number,q:Point,c:HTMLCanvasElement){const r=.035;annotations[p]=(annotations[p]||[]).filter(s=>!s.points.some(x=>{const n=norm(x,c);return Math.hypot(n.x-q.x,n.y-q.y)<r}));stamps[p]=(stamps[p]||[]).filter(s=>Math.hypot(s.x-q.x,s.y-q.y)>r);notes[p]=(notes[p]||[]).filter(n=>Math.hypot(n.x-q.x,n.y-q.y)>r);redraw(p,c)}
-function confirmText(){if(!editing||!editing.text.trim()){editing=null;return}const e=editing;checkpoint(e.page);const old=e.id?(notes[e.page]||[]).find(n=>n.id===e.id):null;if(old){old.text=e.text.trim();old.color=e.color;old.fontSize=e.fontSize}else{(notes[e.page]||=[]).push({id:crypto.randomUUID(),text:e.text.trim(),x:e.x,y:e.y,fontSize:e.fontSize,color:e.color})}editing=null;redraw(e.page);save(e.page)}
-async function toggleFavorite(){favorite=!favorite;await db.scores.update(score.id,{favorite})}
-function key(e:KeyboardEvent){if(e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement)return;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo(currentPage)}else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redo(currentPage)}else if(e.key==='ArrowRight'||e.key==='PageDown')go(currentPage+(dual?2:1));else if(e.key==='ArrowLeft'||e.key==='PageUp')go(currentPage-(dual?2:1));else if(e.key.toLowerCase()==='f')readingMode=!readingMode}
+	type Tool =
+		| 'move'
+		| 'pen'
+		| 'highlighter'
+		| 'eraser'
+		| 'text'
+		| 'line'
+		| 'arrow'
+		| 'sharp'
+		| 'flat'
+		| 'natural';
+
+	// State
+	let pdfDoc = $state<pdfjsLib.PDFDocumentProxy | null>(null);
+	let current = $state(1);
+	let dual = $state(false);
+	let zoom = $state(1);
+	let tool = $state<Tool>('move');
+	let color = $state('#ef4444');
+	let strokeWidth = $state(3);
+	let annotations = $state<Record<number, Stroke[]>>({});
+	let stamps = $state<Record<number, AnnotationStamp[]>>({});
+	let notes = $state<Record<number, Note[]>>({});
+	let annotationOpen = $state(false);
+	let readingMode = $state(false);
+
+	// History state
+	let history = $state<
+		Record<
+			number,
+			{ strokes: Stroke[]; stamps: AnnotationStamp[]; notes: Note[] }[]
+		>
+	>({});
+
+	// Refs
+	let host = $state<HTMLElement | null>(null);
+	let leftPdf = $state<HTMLCanvasElement | null>(null);
+	let rightPdf = $state<HTMLCanvasElement | null>(null);
+	let leftInk = $state<HTMLCanvasElement | null>(null);
+	let rightInk = $state<HTMLCanvasElement | null>(null);
+
+	let renderId = 0;
+	let resizeTimer: any; // Timer to debounce window resize
+	const colors = [
+		'#ef4444',
+		'#3b82f6',
+		'#22c55e',
+		'#eab308',
+		'#a855f7',
+		'#000000'
+	];
+
+	type Point = { x: number; y: number; pressure?: number };
+
+	onMount(() => {
+		loadScore();
+		return () => pdfDoc?.destroy();
+	});
+
+	async function loadScore() {
+		const data = new Uint8Array(await score.pdfBlob.arrayBuffer());
+		pdfDoc = await pdfjsLib.getDocument({ data, isEvalSupported: false })
+			.promise;
+
+		const records = await db.annotations
+			.where('scoreId')
+			.equals(score.id)
+			.toArray();
+		for (const r of records) {
+			annotations[r.pageNum] = r.strokes || [];
+			stamps[r.pageNum] = r.stamps || [];
+			notes[r.pageNum] = r.notes || [];
+			history[r.pageNum] = [snapshot(r.pageNum)];
+		}
+
+		await tick();
+		renderPages();
+	}
+
+	function snapshot(p: number) {
+		// Strip proxies before saving snapshot history
+		return $state.snapshot({
+			strokes: annotations[p] || [],
+			stamps: stamps[p] || [],
+			notes: notes[p] || []
+		});
+	}
+
+	function checkpoint(p: number) {
+		history[p] = history[p] || [];
+		history[p].push(snapshot(p));
+		save(p);
+	}
+
+	function save(p: number) {
+		// CRITICAL FIX: Strip proxies to avoid Dexie DataCloneError
+		void db.annotations.put(
+			$state.snapshot({
+				id: `${score.id}_page_${p}`,
+				scoreId: score.id,
+				pageNum: p,
+				strokes: annotations[p] || [],
+				stamps: stamps[p] || [],
+				notes: notes[p] || []
+			})
+		);
+	}
+
+	async function renderPages() {
+		renderId++;
+		const id = renderId;
+		if (dual) {
+			const l = current % 2 === 0 ? current : Math.max(1, current - 1);
+			const r = l + 1;
+			await Promise.all([
+				renderOne(l, leftPdf, leftInk, id),
+				r <= (pdfDoc?.numPages || 1)
+					? renderOne(r, rightPdf, rightInk, id)
+					: Promise.resolve()
+			]);
+		} else {
+			await renderOne(current, leftPdf, leftInk, id);
+		}
+	}
+
+	async function renderOne(
+		p: number,
+		pdf: HTMLCanvasElement | null,
+		ink: HTMLCanvasElement | null,
+		id: number
+	) {
+		if (!pdfDoc || !pdf || !ink || !host) return;
+		const page = await pdfDoc.getPage(p);
+		if (id !== renderId) return;
+
+		const base = page.getViewport({ scale: 1 });
+		const aw = dual
+			? Math.max(240, (host.clientWidth - 100) / 2)
+			: Math.max(240, host.clientWidth - 70);
+		const ah = Math.max(240, host.clientHeight - 50);
+
+		let scale = Math.min(aw / base.width, ah / base.height) * zoom;
+		const maxPixels = 10_000_000;
+		if (base.width * scale * base.height * scale > maxPixels)
+			scale = Math.sqrt(maxPixels / (base.width * base.height));
+
+		scale = Math.max(0.2, Math.min(2.2, scale));
+		const viewport = page.getViewport({ scale });
+		const w = Math.ceil(viewport.width);
+		const h = Math.ceil(viewport.height);
+
+		// DEVICE PIXEL RATIO FIX - Sharp text on Retina / High-DPI screens
+		const dpr = window.devicePixelRatio || 1;
+		pdf.width = w * dpr;
+		pdf.height = h * dpr;
+		ink.width = w * dpr;
+		ink.height = h * dpr;
+
+		pdf.style.width = ink.style.width = `${w}px`;
+		pdf.style.height = ink.style.height = `${h}px`;
+
+		const ctxPdf = pdf.getContext('2d')!;
+		ctxPdf.scale(dpr, dpr);
+		const ctxInk = ink.getContext('2d')!;
+		ctxInk.scale(dpr, dpr);
+
+		// Required API change in recent PDF.js: Pass `canvasContext`
+		await page.render({ canvasContext: ctxPdf, viewport }).promise;
+		if (id === renderId) redraw(p, ink);
+	}
+
+	// NORMALIZATION FIX: Target `.getBoundingClientRect()` instead of native width/height to avoid DPR warping
+	function norm(p: Point, c: HTMLCanvasElement): Point {
+		const r = c.getBoundingClientRect();
+		return p.x > 2 || p.y > 2
+			? { x: p.x / r.width, y: p.y / r.height, pressure: p.pressure }
+			: p;
+	}
+
+	function xy(p: Point, c: HTMLCanvasElement) {
+		const n = norm(p, c);
+		const r = c.getBoundingClientRect();
+		return { x: n.x * r.width, y: n.y * r.height };
+	}
+
+	function drawSegment(
+		ctx: CanvasRenderingContext2D,
+		a: Point,
+		b: Point,
+		c: HTMLCanvasElement,
+		s: Stroke
+	) {
+		ctx.beginPath();
+		const p1 = xy(a, c),
+			p2 = xy(b, c);
+		ctx.moveTo(p1.x, p1.y);
+		ctx.lineTo(p2.x, p2.y);
+		ctx.strokeStyle = s.color;
+		ctx.lineCap = 'round';
+		ctx.lineJoin = 'round';
+		ctx.lineWidth = s.width * (a.pressure ? 0.65 + a.pressure * 0.7 : 1);
+		ctx.stroke();
+	}
+
+	function drawShape(
+		ctx: CanvasRenderingContext2D,
+		s: Stroke,
+		c: HTMLCanvasElement
+	) {
+		if (s.points.length < 2) return;
+		ctx.beginPath();
+		const start = xy(s.points[0], c),
+			end = xy(s.points[s.points.length - 1], c);
+		ctx.moveTo(start.x, start.y);
+		ctx.lineTo(end.x, end.y);
+		ctx.strokeStyle = s.color;
+		ctx.lineWidth = s.width;
+		ctx.stroke();
+
+		if (s.kind === 'arrow') {
+			const angle = Math.atan2(end.y - start.y, end.x - start.x);
+			const head = s.width * 4;
+			ctx.beginPath();
+			ctx.moveTo(end.x, end.y);
+			ctx.lineTo(
+				end.x - head * Math.cos(angle - Math.PI / 6),
+				end.y - head * Math.sin(angle - Math.PI / 6)
+			);
+			ctx.moveTo(end.x, end.y);
+			ctx.lineTo(
+				end.x - head * Math.cos(angle + Math.PI / 6),
+				end.y - head * Math.sin(angle + Math.PI / 6)
+			);
+			ctx.stroke();
+		}
+	}
+
+	function redraw(p: number, c: HTMLCanvasElement | null = pageCanvas(p)) {
+		if (!c) return;
+		const ctx = c.getContext('2d')!;
+		const r = c.getBoundingClientRect();
+		ctx.clearRect(0, 0, r.width, r.height); // Clearing only logical CSS dimensions since ctx is scaled
+
+		for (const s of annotations[p] || []) {
+			// HIGHLIGHTER FIX: Draw as single path to avoid opacity stacking
+			if (s.tool === 'highlighter' || s.kind === 'highlighter') {
+				if (s.points.length < 2) continue;
+				ctx.save();
+				ctx.beginPath();
+				const start = xy(s.points[0], c);
+				ctx.moveTo(start.x, start.y);
+				for (let i = 1; i < s.points.length; i++) {
+					const pt = xy(s.points[i], c);
+					ctx.lineTo(pt.x, pt.y);
+				}
+				ctx.lineCap = 'round';
+				ctx.lineJoin = 'round';
+				ctx.globalCompositeOperation = 'multiply';
+				ctx.strokeStyle = s.color + '77';
+				ctx.lineWidth = Math.max(12, s.width * 5);
+				ctx.stroke();
+				ctx.restore();
+			} else if (s.kind === 'freehand' || !s.kind) {
+				// Keep segment-by-segment mapping for pen pressure sensitivity
+				for (let i = 1; i < s.points.length; i++)
+					drawSegment(ctx, s.points[i - 1], s.points[i], c, s);
+			} else if (s.kind === 'line' || s.kind === 'arrow') {
+				drawShape(ctx, s, c);
+			}
+		}
+
+		for (const s of stamps[p] || []) {
+			const q = xy({ x: s.x, y: s.y }, c);
+			ctx.save();
+			ctx.font = `${s.fontSize}px Leland,serif`;
+			ctx.fillStyle = s.color;
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(s.symbol, q.x, q.y);
+			ctx.restore();
+		}
+	}
+
+	function pageCanvas(p: number) {
+		return dual
+			? current % 2 === 0
+				? p === current
+					? leftInk
+					: rightInk
+				: p === current - 1
+					? leftInk
+					: rightInk
+			: leftInk;
+	}
+
+	function pagePoint(e: PointerEvent, c: HTMLCanvasElement): Point {
+		const r = c.getBoundingClientRect();
+		return {
+			x: (e.clientX - r.left) / r.width,
+			y: (e.clientY - r.top) / r.height,
+			pressure: e.pressure || 0.5
+		};
+	}
+
+	function start(e: PointerEvent, p: number, c: HTMLCanvasElement) {
+		if (tool === 'move' || !annotationOpen || readingMode) return;
+		e.preventDefault();
+		c.setPointerCapture(e.pointerId);
+
+		const pt = pagePoint(e, c);
+		if (tool === 'eraser') {
+			eraseAt(pt, p, c);
+		} else if (tool === 'sharp' || tool === 'flat' || tool === 'natural') {
+			const map = { sharp: '♯', flat: '♭', natural: '♮' };
+			(stamps[p] ||= []).push({
+				x: pt.x,
+				y: pt.y,
+				symbol: map[tool],
+				color,
+				fontSize: 32
+			});
+			checkpoint(p);
+			redraw(p, c);
+		} else if (tool === 'text') {
+			const n: Note = {
+				id: crypto.randomUUID(),
+				x: pt.x,
+				y: pt.y,
+				text: '',
+				color
+			};
+			(notes[p] ||= []).push(n);
+			checkpoint(p);
+			setTimeout(() => document.getElementById(`note-${n.id}`)?.focus(), 50);
+		} else {
+			const kind =
+				tool === 'highlighter'
+					? 'highlighter'
+					: tool === 'line'
+						? 'line'
+						: tool === 'arrow'
+							? 'arrow'
+							: 'freehand';
+			const s: Stroke = {
+				id: crypto.randomUUID(),
+				tool,
+				color,
+				width: strokeWidth,
+				points: [pt],
+				kind
+			};
+			(annotations[p] ||= []).push(s);
+
+			const move = (me: PointerEvent) => {
+				const q = pagePoint(me, c);
+				if (tool === 'eraser') eraseAt(q, p, c);
+				else {
+					s.points.push(q);
+					// Single continuous path redrawing required on drag for line/arrow/highlighter
+					if (kind !== 'freehand') redraw(p, c);
+					else
+						drawSegment(
+							c.getContext('2d')!,
+							s.points[s.points.length - 2],
+							q,
+							c,
+							s
+						);
+				}
+			};
+			const up = () => {
+				c.removeEventListener('pointermove', move);
+				c.removeEventListener('pointerup', up);
+				c.releasePointerCapture(e.pointerId);
+				if (s.points.length > 1) checkpoint(p);
+				redraw(p, c);
+			};
+			c.addEventListener('pointermove', move);
+			c.addEventListener('pointerup', up);
+		}
+	}
+
+	function eraseAt(pt: Point, p: number, c: HTMLCanvasElement) {
+		const r = 0.02;
+		let changed = false;
+		if (annotations[p]) {
+			const init = annotations[p].length;
+			annotations[p] = annotations[p].filter(
+				(s) => !s.points.some((q) => Math.hypot(q.x - pt.x, q.y - pt.y) < r)
+			);
+			if (annotations[p].length !== init) changed = true;
+		}
+		if (stamps[p]) {
+			const init = stamps[p].length;
+			stamps[p] = stamps[p].filter(
+				(s) => Math.hypot(s.x - pt.x, s.y - pt.y) > r
+			);
+			if (stamps[p].length !== init) changed = true;
+		}
+		if (changed) {
+			checkpoint(p);
+			redraw(p, c);
+		}
+	}
+
+	function undo() {
+		const p = current;
+		const h = history[p];
+		if (!h || h.length <= 1) return;
+		h.pop();
+		const last = h[h.length - 1];
+		// Parse snapshots safely back into states
+		annotations[p] = JSON.parse(JSON.stringify(last.strokes));
+		stamps[p] = JSON.parse(JSON.stringify(last.stamps));
+		notes[p] = JSON.parse(JSON.stringify(last.notes));
+		save(p);
+		redraw(p);
+	}
+
+	function nav(delta: number) {
+		const np = pdfDoc?.numPages || 1;
+		const nxt = dual ? current + delta * 2 : current + delta;
+		if (nxt >= 1 && nxt <= np) {
+			current = nxt;
+			renderPages();
+		}
+	}
+
+	function key(e: KeyboardEvent) {
+		if (e.key === 'Escape' && readingMode) readingMode = false;
+		if (e.target instanceof HTMLTextAreaElement) return;
+		if (e.key === 'ArrowRight' || e.key === ' ') nav(1);
+		else if (e.key === 'ArrowLeft') nav(-1);
+		else if (e.key === 'z' && (e.metaKey || e.ctrlKey)) undo();
+	}
 </script>
-<svelte:window onkeydown={key}/>
-<div class="flex-1 flex flex-col relative bg-neutral-950 text-neutral-100">
-{#if !readingMode}<header class="h-14 shrink-0 flex items-center justify-between px-3 border-b border-neutral-800 bg-neutral-900/95 z-30"><button onclick={onBack} class="p-2 rounded-xl hover:bg-neutral-800 text-neutral-400"><ArrowLeft size={18}/></button><div class="min-w-0 text-center"><div class="font-semibold text-sm truncate">{score.title}</div><div class="text-[11px] text-neutral-500 truncate">{score.composer}</div></div><div class="flex items-center"><button onclick={toggleFavorite} class="p-2 rounded-xl hover:bg-neutral-800"><Star size={17} fill={favorite?'currentColor':'none'} class={favorite?'text-yellow-400':'text-neutral-500'}/></button><button onclick={()=>readingMode=true} class="p-2 rounded-xl hover:bg-neutral-800 text-neutral-400"><Maximize2 size={17}/></button></div></header>{/if}
-<div class="flex-1 flex min-h-0"><aside class="w-24 shrink-0 border-r border-neutral-800 bg-neutral-900/80 overflow-y-auto p-2 space-y-2 {showThumbs?'':'hidden'}">{#each [currentPage-2,currentPage-1,currentPage,currentPage+1,currentPage+2] as p}{#if p>=1&&p<=totalPages}<button onclick={()=>go(p)} class="w-full rounded-lg p-1 border {p===currentPage?'border-blue-500 bg-blue-500/10':'border-neutral-800 bg-neutral-950'}"><img src={thumbUrls[p]||''} alt="Page {p}" class="w-full aspect-[.7] object-contain"/><span class="text-[9px] text-neutral-500">{p}</span></button>{/if}{/each}</aside><div bind:this={host} class="flex-1 overflow-auto flex items-center justify-center p-3 bg-neutral-950">{#if loading}<div class="w-72 text-center text-neutral-500"><div class="w-9 h-9 mx-auto border-2 border-neutral-700 border-t-blue-400 rounded-full animate-spin"></div><p class="mt-3 text-sm">{loadingText}</p>{#if progress}<div class="h-1.5 mt-3 bg-neutral-800 rounded-full overflow-hidden"><div class="h-full bg-blue-500" style="width:{progress}%"></div></div>{/if}</div>{:else if error}<div class="max-w-lg text-center"><p class="text-red-400 font-semibold">Unable to open this score</p><p class="text-xs text-neutral-500 mt-2 break-words">{error}</p><button onclick={openPdf} class="mt-4 px-4 py-2 rounded-xl bg-neutral-800">Try again</button></div>{:else}<div class="flex gap-4 items-center"><div class="relative bg-white shadow-2xl"><canvas bind:this={leftPdf} class="block"></canvas><canvas bind:this={leftInk} class="absolute inset-0 touch-none {annotationOpen?'cursor-crosshair':'pointer-events-none'}" onpointerdown={e=>leftInk&&start(e,currentPage,leftInk)} onpointermove={e=>leftInk&&move(e,currentPage,leftInk)} onpointerup={e=>leftInk&&end(e,currentPage,leftInk)} onpointercancel={e=>leftInk&&end(e,currentPage,leftInk)} ondblclick={e=>{if(leftInk&&tool==='move'){const n=hitNote(currentPage,pagePoint(e,leftInk));if(n)editing={page:currentPage,x:n.x,y:n.y,text:n.text,color:n.color,fontSize:n.fontSize,id:n.id}}}}/></div>{#if dual&&currentPage<totalPages}<div class="relative bg-white shadow-2xl"><canvas bind:this={rightPdf} class="block"></canvas><canvas bind:this={rightInk} class="absolute inset-0 touch-none {annotationOpen?'':'pointer-events-none'}" onpointerdown={e=>rightInk&&start(e,currentPage+1,rightInk)} onpointermove={e=>rightInk&&move(e,currentPage+1,rightInk)} onpointerup={e=>rightInk&&end(e,currentPage+1,rightInk)} onpointercancel={e=>rightInk&&end(e,currentPage+1,rightInk)}/></div>{/if}</div>{/if}</div></div>
-{#if !readingMode}<footer class="h-16 shrink-0 flex items-center justify-center gap-2 border-t border-neutral-800 bg-neutral-900/95 z-30"><button onclick={()=>go(currentPage-(dual?2:1))} disabled={currentPage<=1} class="p-2 rounded-xl bg-neutral-800 disabled:opacity-30"><ChevronLeft size={18}/></button><div class="flex items-center gap-1 bg-neutral-950 border border-neutral-800 rounded-xl px-2"><input value={currentPage} oninput={e=>{const n=Number((e.currentTarget as HTMLInputElement).value);if(n>=1&&n<=totalPages)go(n)}} class="w-12 bg-transparent text-center text-sm outline-none"/><span class="text-xs text-neutral-600">/ {totalPages}</span></div><button onclick={()=>go(currentPage+(dual?2:1))} disabled={currentPage>=totalPages} class="p-2 rounded-xl bg-neutral-800 disabled:opacity-30"><ChevronRight size={18}/></button><button onclick={()=>zoom=Math.max(.6,zoom-.1)} class="p-2 rounded-xl bg-neutral-800"><ZoomOut size={16}/></button><span class="text-xs w-12 text-center">{Math.round(zoom*100)}%</span><button onclick={()=>{zoom=Math.min(2,zoom+.1);void renderPages()}} class="p-2 rounded-xl bg-neutral-800"><ZoomIn size={16}/></button><button onclick={()=>{zoom=1;void renderPages()}} class="p-2 rounded-xl bg-neutral-800"><RotateCcw size={15}/></button><button onclick={()=>showThumbs=!showThumbs} class="px-3 py-2 rounded-xl bg-neutral-800 text-xs">Pages</button><button onclick={()=>annotationOpen=!annotationOpen} class="px-3 py-2 rounded-xl text-xs font-semibold {annotationOpen?'bg-blue-600':'bg-neutral-800'}"><Pencil size={14} class="inline mr-1"/>Annotate</button></footer>{/if}
-{#if annotationOpen}<div class="absolute {readingMode?'top-3':'top-16'} left-1/2 -translate-x-1/2 z-40 w-[min(920px,calc(100vw-20px))] bg-neutral-900/95 backdrop-blur-xl border border-neutral-700 rounded-2xl p-2 shadow-2xl"><div class="flex items-center gap-1 overflow-x-auto"><button onclick={()=>tool='pen'} class="tool {tool==='pen'?'on':''}"><Pencil size={17}/></button><button onclick={()=>tool='highlighter'} class="tool {tool==='highlighter'?'on':''}"><Highlighter size={17}/></button><button onclick={()=>tool='line'} class="tool {tool==='line'?'on':''}"><Minus size={17}/></button><button onclick={()=>tool='arrow'} class="tool {tool==='arrow'?'on':''}"><ArrowUpRight size={17}/></button><button onclick={()=>tool='stamp'} class="tool {tool==='stamp'?'on':''}"><Music2 size={17}/></button><button onclick={()=>tool='text'} class="tool {tool==='text'?'on':''}"><Type size={17}/></button><button onclick={()=>tool='move'} class="tool {tool==='move'?'on':''}"><Move size={17}/></button><button onclick={()=>tool='eraser'} class="tool {tool==='eraser'?'on':''}"><Eraser size={17}/></button><span class="h-5 w-px bg-neutral-700 mx-1"></span>{#each colors as c}<button onclick={()=>color=c} class="w-5 h-5 rounded-full border border-neutral-700 {color===c?'ring-2 ring-blue-500':''}" style="background:{c}"></button>{/each}<span class="h-5 w-px bg-neutral-700 mx-1"></span><button onclick={()=>undo(currentPage)} class="tool"><Undo size={16}/></button><button onclick={()=>redo(currentPage)} class="tool"><Redo size={16}/></button><button onclick={()=>{checkpoint(currentPage);annotations[currentPage]=[];stamps[currentPage]=[];notes[currentPage]=[];redraw(currentPage);save(currentPage)}} class="tool text-red-300"><Trash2 size={16}/></button></div>{#if tool==='stamp'}<div class="mt-2 pt-2 border-t border-neutral-800 space-y-2"><div class="relative"><Search size={14} class="absolute left-2 top-1/2 -translate-y-1/2 text-neutral-500"/><input bind:value={symbolSearch} placeholder="Search musical symbols…" class="w-full bg-neutral-950 border border-neutral-800 rounded-lg pl-7 pr-2 py-1.5 text-xs"/></div><div class="flex gap-1 overflow-x-auto">{#each SYMBOL_CATEGORIES as cat}<button onclick={()=>symbolCategory=cat} class="px-2.5 py-1 rounded-lg text-[10px] whitespace-nowrap {symbolCategory===cat?'bg-purple-600/25 text-purple-200 border border-purple-500/50':'bg-neutral-950 text-neutral-500 border border-neutral-800'}">{cat}</button>{/each}</div><div class="grid grid-cols-6 sm:grid-cols-10 max-h-28 overflow-y-auto gap-1">{#each filteredSymbols as s}<button onclick={()=>selectedSymbol=s.symbol} title={s.label} class="aspect-square rounded-lg border {selectedSymbol===s.symbol?'border-purple-500 bg-purple-500/15':'border-neutral-800 bg-neutral-950'}"><span class="text-2xl" style="font-family:Leland,serif">{s.symbol}</span></button>{/each}</div></div>{/if}<div class="text-[10px] text-neutral-500 px-1 pt-1">Stylus pressure changes pen weight. Move repositions text and symbols; double-click a note to edit it.</div></div>{/if}
-{#if editing}<div class="absolute inset-0 z-50 flex items-center justify-center bg-black/50"><div class="w-[min(440px,calc(100vw-28px))] bg-neutral-900 border border-neutral-700 rounded-2xl p-4 shadow-2xl"><div class="flex justify-between items-center mb-3"><h3 class="font-semibold">{editing.id?'Edit rehearsal note':'Add rehearsal note'}</h3><button onclick={()=>editing=null}><X size={18}/></button></div><textarea autofocus bind:value={editing.text} rows="4" placeholder="e.g. More bow here…" class="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-3 text-sm resize-none outline-none focus:border-blue-500"></textarea><div class="flex justify-end gap-2 mt-3"><button onclick={()=>editing=null} class="px-3 py-2 text-sm text-neutral-400">Cancel</button><button onclick={confirmText} class="px-4 py-2 rounded-xl bg-blue-600 text-sm"><Check size={15} class="inline mr-1"/>Save</button></div></div></div>{/if}
+
+<svelte:window
+	onkeydown={key}
+	onresize={() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderPages, 200) as any; }} />
+
+<div
+	class="fixed inset-0 bg-neutral-950 flex flex-col z-50 overflow-hidden font-sans text-neutral-200 selection:bg-violet-500/30">
+	<!-- Top Bar -->
+	<header
+		class="h-14 shrink-0 border-b border-neutral-900 bg-neutral-950/80 backdrop-blur flex items-center px-4 justify-between transition-transform duration-300 {readingMode
+			? '-translate-y-full'
+			: ''}">
+		<div class="flex items-center gap-4 w-1/3">
+			<button
+				class="p-2 -ml-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-900 transition-colors"
+				onclick={onClose}>
+				<ArrowLeft size={18} />
+			</button>
+			<div class="min-w-0">
+				<h1 class="text-sm font-semibold truncate text-white">{score.title}</h1>
+				<p class="text-[11px] text-neutral-500 truncate">{score.composer}</p>
+			</div>
+		</div>
+
+		<div class="flex items-center justify-center gap-1.5 w-1/3">
+			<button
+				class="p-1.5 rounded-lg text-neutral-400 hover:bg-neutral-900"
+				onclick={() => nav(-1)}><ChevronLeft size={18} /></button>
+			<span
+				class="text-xs font-medium tabular-nums w-12 text-center text-neutral-300">
+				{current} / {pdfDoc?.numPages || '?'}
+			</span>
+			<button
+				class="p-1.5 rounded-lg text-neutral-400 hover:bg-neutral-900"
+				onclick={() => nav(1)}><ChevronRight size={18} /></button>
+		</div>
+
+		<div class="flex items-center justify-end gap-2 w-1/3">
+			<div
+				class="flex items-center bg-neutral-900/50 rounded-lg p-1 mr-2 border border-neutral-800/50">
+				<button
+					class="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+					onclick={() => {
+						zoom -= 0.1;
+						renderPages();
+					}}><ZoomOut size={16} /></button>
+				<span class="text-[11px] font-medium w-9 text-center text-neutral-400"
+					>{Math.round(zoom * 100)}%</span>
+				<button
+					class="p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+					onclick={() => {
+						zoom += 0.1;
+						renderPages();
+					}}><ZoomIn size={16} /></button>
+			</div>
+
+			<button
+				class="p-2 rounded-xl border transition-colors {dual
+					? 'bg-violet-600 border-violet-500 text-white shadow-sm shadow-violet-900/20'
+					: 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'}"
+				onclick={() => {
+					dual = !dual;
+					renderPages();
+				}}
+				title="Two Page View">
+				<BookOpen size={16} />
+			</button>
+			<button
+				class="p-2 rounded-xl border transition-colors {annotationOpen
+					? 'bg-violet-600 border-violet-500 text-white shadow-sm shadow-violet-900/20'
+					: 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'}"
+				onclick={() => (annotationOpen = !annotationOpen)}
+				title="Annotations">
+				<PenTool size={16} />
+			</button>
+			<button
+				class="ml-1 px-3 py-1.5 text-xs font-medium bg-white text-black rounded-xl hover:bg-neutral-200 transition-colors"
+				onclick={() => (readingMode = true)}>Read</button>
+		</div>
+	</header>
+
+	<div class="flex-1 flex overflow-hidden relative">
+		<!-- Annotation Toolbar -->
+		<aside
+			class="w-14 shrink-0 bg-neutral-950 border-r border-neutral-900 flex flex-col items-center py-4 gap-4 transition-all duration-300 absolute md:relative z-20 h-full {annotationOpen &&
+			!readingMode
+				? 'translate-x-0'
+				: '-translate-x-full md:hidden md:w-0'}">
+			<!-- Toolbar identical to original -->
+			<div class="flex flex-col gap-1.5 w-full px-2">
+				{@render toolBtn('move', MousePointer2)}
+				{@render toolBtn('pen', PenTool)}
+				{@render toolBtn('highlighter', Highlighter)}
+				{@render toolBtn('line', Minus)}
+				<div class="h-px w-6 mx-auto bg-neutral-800 my-1"></div>
+				<button
+					class="p-2 rounded-xl text-lg flex justify-center {tool === 'sharp'
+						? 'bg-violet-600 text-white'
+						: 'text-neutral-400 hover:bg-neutral-900'}"
+					onclick={() => (tool = 'sharp')}>♯</button>
+				<button
+					class="p-2 rounded-xl text-lg flex justify-center {tool === 'flat'
+						? 'bg-violet-600 text-white'
+						: 'text-neutral-400 hover:bg-neutral-900'}"
+					onclick={() => (tool = 'flat')}>♭</button>
+				<div class="h-px w-6 mx-auto bg-neutral-800 my-1"></div>
+				{@render toolBtn('text', Type)}
+				{@render toolBtn('eraser', Eraser)}
+			</div>
+			<div class="mt-auto flex flex-col gap-3 w-full px-2">
+				<button
+					class="p-2 rounded-xl text-neutral-400 hover:bg-neutral-900 mx-auto"
+					onclick={undo}
+					title="Undo (Ctrl+Z)"><Undo2 size={18} /></button>
+				<div class="grid grid-cols-2 gap-1.5 px-1">
+					{#each colors as c}
+						<button
+							class="w-4 h-4 rounded-full ring-2 ring-offset-2 ring-offset-neutral-950 transition-all {color ===
+							c
+								? 'ring-white scale-110'
+								: 'ring-transparent hover:scale-110'}"
+							style:background-color={c}
+							onclick={() => (color = c)}></button>
+					{/each}
+				</div>
+			</div>
+		</aside>
+
+		<!-- Main Workspace -->
+		<main
+			bind:this={host}
+			class="flex-1 bg-neutral-900 overflow-auto relative flex items-center justify-center p-4 sm:p-8"
+			onclick={() => {
+				if (readingMode) readingMode = false;
+			}}>
+			<div
+				class="flex gap-4 sm:gap-8 items-center justify-center min-h-full transition-transform duration-300 {readingMode
+					? 'scale-[1.02]'
+					: ''}">
+				<!-- Left Page -->
+				<div
+					class="relative shadow-2xl shadow-black/50 bg-white ring-1 ring-neutral-950/5 rounded-sm"
+					style="touch-action: none;">
+					<canvas bind:this={leftPdf} class="block rounded-sm"></canvas>
+					<canvas
+						bind:this={leftInk}
+						class="absolute inset-0 z-10 w-full h-full cursor-crosshair rounded-sm"
+						onpointerdown={(e) => start(e, dual ? (current % 2 === 0 ? current : Math.max(1, current - 1)) : current, leftInk!)}
+					></canvas>
+
+					<!-- Left Page Notes -->
+					<div
+						class="absolute inset-0 pointer-events-none overflow-hidden z-20">
+						{#each notes[dual ? (current % 2 === 0 ? current : Math.max(1, current - 1)) : current] || [] as n}
+							<textarea
+								id="note-{n.id}"
+								bind:value={n.text}
+								oninput={() => {
+									n.text = n.text;
+									checkpoint(current);
+								}}
+								class="absolute bg-transparent outline-none resize-none overflow-hidden whitespace-pre pointer-events-auto leading-tight"
+								style:left="{n.x * 100}%"
+								style:top="{n.y * 100}%"
+								style:color={n.color}
+								style:font-size="16px"
+								style:font-family="sans-serif"
+								ondblclick={() => (tool = 'move')}
+								onmousedown={(e) => tool === 'move' && e.stopPropagation()}
+							></textarea>
+						{/each}
+					</div>
+				</div>
+
+				<!-- Right Page (Dual Mode) -->
+				{#if dual && (current % 2 === 0 ? current + 1 : Math.max(1, current - 1) + 1) <= (pdfDoc?.numPages || 1)}
+					<div
+						class="relative shadow-2xl shadow-black/50 bg-white ring-1 ring-neutral-950/5 rounded-sm hidden md:block"
+						style="touch-action: none;">
+						<canvas bind:this={rightPdf} class="block rounded-sm"></canvas>
+						<canvas
+							bind:this={rightInk}
+							class="absolute inset-0 z-10 w-full h-full cursor-crosshair rounded-sm"
+							onpointerdown={(e) => start(e, current % 2 === 0 ? current + 1 : Math.max(1, current - 1) + 1, rightInk!)}
+						></canvas>
+					</div>
+				{/if}
+			</div>
+		</main>
+	</div>
 </div>
-<style>@font-face{font-family:Leland;src:url('/fonts/Leland.woff2') format('woff2'),url('/fonts/Leland.woff') format('woff'),url('/fonts/Leland.otf') format('opentype');font-display:swap}.tool{padding:.5rem;border-radius:.75rem;color:#a3a3a3}.tool:hover{background:#262626;color:white}.tool.on{background:#2563eb;color:white}</style>
+
+{#snippet toolBtn(id: Tool, Icon: any)}
+	<button
+		class="p-2 rounded-xl flex justify-center transition-colors {tool === id
+			? 'bg-violet-600 text-white shadow-sm shadow-violet-900/20'
+			: 'text-neutral-400 hover:bg-neutral-900'}"
+		onclick={() => (tool = id)}>
+		<Icon size={18} strokeWidth={2.5} />
+	</button>
+{/snippet}
