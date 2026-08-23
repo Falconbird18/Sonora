@@ -1,22 +1,24 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import * as pdfjsLib from 'pdfjs-dist';
-  import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+	import { onMount } from 'svelte';
+	import * as pdfjsLib from 'pdfjs-dist';
+	import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
-  import LibraryView from './lib/LibraryViewV2.svelte';
-  import ScoreViewer from './lib/ScoreViewerV2.svelte';
-  import type { ScoreItem } from './lib/types';
-  let scores = $state<ScoreItem[]>([]);
-  let activeScore = $state<ScoreItem | null>(null);
+	import LibraryView from './lib/LibraryViewV2.svelte';
+	import ScoreViewer from './lib/ScoreViewerV2.svelte';
+	import type { ScoreItem } from './lib/types';
+	let scores = $state<ScoreItem[]>([]);
+	let activeScore = $state<ScoreItem | null>(null);
 
-  onMount(() => {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
-  });
+	onMount(() => {
+		pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+	});
 </script>
-<main class="h-screen w-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans overflow-hidden select-none">
-  {#if activeScore}
-    <ScoreViewer score={activeScore} onBack={() => activeScore = null} />
-  {:else}
-    <LibraryView bind:scores={scores} onSelectScore={(score) => activeScore = score} />
-  {/if}
+
+<main
+	class="h-screen w-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans overflow-hidden select-none">
+	{#if activeScore}
+		<ScoreViewer score={activeScore} onBack={() => (activeScore = null)} />
+	{:else}
+		<LibraryView bind:scores onSelectScore={(score) => (activeScore = score)} />
+	{/if}
 </main>
