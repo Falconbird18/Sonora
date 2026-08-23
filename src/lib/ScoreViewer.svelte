@@ -2,552 +2,296 @@
   import { onMount, tick } from 'svelte';
   import * as pdfjsLib from 'pdfjs-dist';
   import {
-    ArrowLeft, ChevronLeft, ChevronRight, Pencil, Highlighter,
-    Eraser, Trash2, Sun, Moon, BookOpen, Columns, Square,
-    ZoomIn, ZoomOut, Maximize2, RotateCcw, Undo, Redo,
-    Music2, Type, Palette
+    ArrowLeft, ChevronLeft, ChevronRight, Pencil, Highlighter, Eraser,
+    Trash2, Sun, Moon, BookOpen, Columns, Square, ZoomIn, ZoomOut,
+    RotateCcw, Undo, Redo, Music2, Type, Settings, Maximize2, Minimize2,
+    X, Keyboard, PanelTop, MousePointer2
   } from 'lucide-svelte';
   import { db } from './db';
   import type { ScoreItem, Stroke, SymbolStamp, TextNote } from './types';
 
   let { score, onBack }: { score: ScoreItem; onBack: () => void } = $props();
+  type Snapshot = { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] };
+  type Tool = 'pen' | 'highlighter' | 'stamp' | 'text' | 'eraser';
 
-  // Score & Layout State
   let pdfDoc = $state<pdfjsLib.PDFDocumentProxy | null>(null);
+  let pdfUrl = $state<string | null>(null);
   let currentPage = $state(1);
-  let totalPages = $state(0);
-  let filterMode = $state<'normal' | 'sepia' | 'dark'>('normal');
+  let totalPages = $state(score.totalPages || 0);
   let isDualPage = $state(false);
-
-  // Zoom & View Fit Modes
-  let fitMode = $state<'height' | 'width' | 'page'>('height'); // DEFAULT VERTICAL FIT
-  let zoomLevel = $state(1.0);
-
-  // Annotation Tool State
+  let fitMode = $state<'height' | 'width' | 'page'>('height');
+  let zoomLevel = $state(1);
+  let filterMode = $state<'normal' | 'sepia' | 'dark'>('normal');
+  let loading = $state(true);
+  let error = $state('');
+  let isFullscreen = $state(false);
+  let showSettings = $state(false);
+  let showShortcuts = $state(false);
+  let showControls = $state(true);
   let isAnnotationToolOpen = $state(false);
-  let activeTool = $state<'pen' | 'highlighter' | 'stamp' | 'text' | 'eraser'>('pen');
+  let activeTool = $state<Tool>('pen');
   let penColor = $state('#ef4444');
   let penWidth = $state(3);
-  let selectedSymbol = $state('𝄐'); // Default Fermata
+  let selectedSymbol = $state('𝄐');
+  let settingsDefaultFit = $state<'height' | 'width' | 'page'>('height');
+  let settingsDualPage = $state(false);
+  let settingsDarkScore = $state(false);
 
-  // Page Annotations Data
   let annotations = $state<Record<number, Stroke[]>>({});
   let stamps = $state<Record<number, SymbolStamp[]>>({});
   let notes = $state<Record<number, TextNote[]>>({});
-
-  // Undo / Redo History
-  let historyStack = $state<Record<number, { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] }[]>>({});
-  let redoStack = $state<Record<number, { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] }[]>>({});
-
-  // Drawing State
-  let currentStroke = $state<Stroke | null>(null);
-  let isDrawing = false;
-
-  // DOM Refs
+  let historyStack = $state<Record<number, Snapshot[]>>({});
+  let redoStack = $state<Record<number, Snapshot[]>>({});
+  let drawing = $state<{ page: number; pointerId: number; canvas: HTMLCanvasElement; stroke: Stroke } | null>(null);
+  let mainContainerRef = $state<HTMLDivElement | null>(null);
   let leftPdfCanvas = $state<HTMLCanvasElement | null>(null);
   let leftDrawCanvas = $state<HTMLCanvasElement | null>(null);
   let rightPdfCanvas = $state<HTMLCanvasElement | null>(null);
   let rightDrawCanvas = $state<HTMLCanvasElement | null>(null);
-  let mainContainerRef = $state<HTMLDivElement | null>(null);
-
-  // Musical Symbols Palette
-  const MUSICAL_SYMBOLS = [
-    { symbol: '𝄐', label: 'Fermata' },
-    { symbol: '♯', label: 'Sharp' },
-    { symbol: '♭', label: 'Flat' },
-    { symbol: '♮', label: 'Natural' },
-    { symbol: '>', label: 'Accent' },
-    { symbol: '•', label: 'Staccato' },
-    { symbol: 'ƒ', label: 'Forte' },
-    { symbol: ' shade p', label: 'Piano' },
-    { symbol: 'mƒ', label: 'Mezzo Forte' },
-    { symbol: 'mp', label: 'Mezzo Piano' },
-    { symbol: 'ff', label: 'Fortissimo' },
-    { symbol: 'pp', label: 'Pianissimo' },
-    { symbol: '⨅', label: 'Down Bow' },
-    { symbol: '⋁', label: 'Up Bow' },
-    { symbol: '𝄋', label: 'Segno' },
-    { symbol: '𝄌', label: 'Coda' },
-    { symbol: ',', label: 'Breath Mark' },
-    { symbol: '1', label: 'Finger 1' },
-    { symbol: '2', label: 'Finger 2' },
-    { symbol: '3', label: 'Finger 3' },
-    { symbol: '4', label: 'Finger 4' },
-    { symbol: '5', label: 'Finger 5' }
-  ];
+  let renderGeneration = 0;
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  const saveQueue: Record<number, Promise<void>> = {};
 
   const QUICK_COLORS = ['#ef4444', '#3b82f6', '#10b981', '#eab308', '#a855f7', '#ffffff', '#000000'];
+  const MUSICAL_SYMBOLS = [
+    ['𝄐', 'Fermata'], ['♯', 'Sharp'], ['♭', 'Flat'], ['♮', 'Natural'], ['>', 'Accent'],
+    ['•', 'Staccato'], ['ƒ', 'Forte'], ['p', 'Piano'], ['mƒ', 'Mezzo Forte'], ['mp', 'Mezzo Piano'],
+    ['ff', 'Fortissimo'], ['pp', 'Pianissimo'], ['⨅', 'Down Bow'], ['⋁', 'Up Bow'], ['𝄋', 'Segno'],
+    ['𝄌', 'Coda'], [',', 'Breath'], ['1', 'Finger 1'], ['2', 'Finger 2'], ['3', 'Finger 3'],
+    ['4', 'Finger 4'], ['5', 'Finger 5']
+  ];
 
   onMount(async () => {
-    isDualPage = window.innerWidth >= 1024;
-
+    await tick();
+    isDualPage = window.innerWidth >= 1100;
+    settingsDualPage = isDualPage;
+    settingsDefaultFit = fitMode;
+    window.addEventListener('resize', scheduleRerender);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
     try {
-      const buffer = await score.pdfBlob.arrayBuffer();
-      pdfDoc = await pdfjsLib.getDocument({ data: buffer }).promise;
+      pdfUrl = URL.createObjectURL(score.pdfBlob);
+      const loadingTask = pdfjsLib.getDocument({ url: pdfUrl, disableAutoFetch: false, disableStream: false, useSystemFonts: true });
+      pdfDoc = await loadingTask.promise;
       totalPages = pdfDoc.numPages;
-
-      const savedAnns = await db.annotations.where('scoreId').equals(score.id).toArray();
-      for (const record of savedAnns) {
+      const saved = await db.annotations.where('scoreId').equals(score.id).toArray();
+      for (const record of saved) {
         annotations[record.pageNum] = record.strokes || [];
         stamps[record.pageNum] = record.stamps || [];
         notes[record.pageNum] = record.notes || [];
       }
-
       await renderPages();
-    } catch (err) {
-      console.error('PDF error:', err);
+    } catch (e) {
+      console.error('PDF error:', e);
+      error = 'This score could not be opened. The PDF may be damaged or unsupported.';
+    } finally {
+      loading = false;
     }
+    return () => {
+      window.removeEventListener('resize', scheduleRerender);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      if (resizeTimer) clearTimeout(resizeTimer);
+      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+      pdfDoc?.destroy();
+    };
   });
 
-  function saveCurrentStateToHistory(pageNum: number) {
-    if (!historyStack[pageNum]) historyStack[pageNum] = [];
-    historyStack[pageNum].push({
-      strokes: JSON.parse(JSON.stringify(annotations[pageNum] || [])),
-      stamps: JSON.parse(JSON.stringify(stamps[pageNum] || [])),
-      notes: JSON.parse(JSON.stringify(notes[pageNum] || []))
+  function handleFullscreenChange() { isFullscreen = document.fullscreenElement !== null; }
+  function scheduleRerender() {
+    const nextDual = window.innerWidth >= 1100;
+    if (nextDual !== isDualPage) isDualPage = nextDual;
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => void renderPages(), 120);
+  }
+  function snapshot(page: number): Snapshot {
+    return { strokes: structuredClone(annotations[page] || []), stamps: structuredClone(stamps[page] || []), notes: structuredClone(notes[page] || []) };
+  }
+  function snapshotsEqual(a: Snapshot, b: Snapshot) { return JSON.stringify(a) === JSON.stringify(b); }
+  function pushHistory(page: number, before: Snapshot) {
+    if (!historyStack[page]) historyStack[page] = [];
+    historyStack[page].push(before);
+    if (historyStack[page].length > 80) historyStack[page].shift();
+    redoStack[page] = [];
+  }
+  function persist(page: number): Promise<void> {
+    const previous = saveQueue[page] || Promise.resolve();
+    const next = previous.catch(() => undefined).then(async () => {
+      await db.annotations.put({ id: `${score.id}_page_${page}`, scoreId: score.id, pageNum: page, strokes: annotations[page] || [], stamps: stamps[page] || [], notes: notes[page] || [] });
     });
-    redoStack[pageNum] = []; // Clear redo stack on new action
+    saveQueue[page] = next;
+    return next;
   }
-
-  function undo(pageNum: number) {
-    if (!historyStack[pageNum] || historyStack[pageNum].length === 0) return;
-
-    // Save current state to redo
-    if (!redoStack[pageNum]) redoStack[pageNum] = [];
-    redoStack[pageNum].push({
-      strokes: JSON.parse(JSON.stringify(annotations[pageNum] || [])),
-      stamps: JSON.parse(JSON.stringify(stamps[pageNum] || [])),
-      notes: JSON.parse(JSON.stringify(notes[pageNum] || []))
-    });
-
-    const previous = historyStack[pageNum].pop()!;
-    annotations[pageNum] = previous.strokes;
-    stamps[pageNum] = previous.stamps;
-    notes[pageNum] = previous.notes;
-
-    saveToDb(pageNum);
-    renderPages();
+  async function undo(page: number) {
+    const stack = historyStack[page];
+    if (!stack?.length) return;
+    if (!redoStack[page]) redoStack[page] = [];
+    redoStack[page].push(snapshot(page));
+    const previous = stack.pop()!;
+    annotations[page] = previous.strokes; stamps[page] = previous.stamps; notes[page] = previous.notes;
+    await persist(page); redrawForPage(page);
   }
-
-  function redo(pageNum: number) {
-    if (!redoStack[pageNum] || redoStack[pageNum].length === 0) return;
-
-    saveCurrentStateToHistory(pageNum);
-    const next = redoStack[pageNum].pop()!;
-    annotations[pageNum] = next.strokes;
-    stamps[pageNum] = next.stamps;
-    notes[pageNum] = next.notes;
-
-    saveToDb(pageNum);
-    renderPages();
+  async function redo(page: number) {
+    const stack = redoStack[page];
+    if (!stack?.length) return;
+    if (!historyStack[page]) historyStack[page] = [];
+    historyStack[page].push(snapshot(page));
+    const next = stack.pop()!;
+    annotations[page] = next.strokes; stamps[page] = next.stamps; notes[page] = next.notes;
+    await persist(page); redrawForPage(page);
   }
-
+  async function clearPage(page: number) {
+    const before = snapshot(page);
+    if (!before.strokes.length && !before.stamps.length && !before.notes.length) return;
+    pushHistory(page, before);
+    annotations[page] = []; stamps[page] = []; notes[page] = [];
+    await persist(page); redrawForPage(page);
+  }
   async function renderPages() {
-    if (!pdfDoc || !mainContainerRef) return;
-    await renderSinglePage(currentPage, leftPdfCanvas, leftDrawCanvas);
-
-    if (isDualPage && currentPage + 1 <= totalPages) {
-      await renderSinglePage(currentPage + 1, rightPdfCanvas, rightDrawCanvas);
-    }
+    if (!pdfDoc || !mainContainerRef || totalPages < 1) return;
+    const generation = ++renderGeneration;
+    await renderSinglePage(currentPage, leftPdfCanvas, leftDrawCanvas, generation);
+    if (generation !== renderGeneration) return;
+    if (isDualPage && currentPage + 1 <= totalPages) await renderSinglePage(currentPage + 1, rightPdfCanvas, rightDrawCanvas, generation);
   }
-
-  async function renderSinglePage(
-    pageNum: number,
-    pdfCanvas: HTMLCanvasElement | null,
-    drawCanvas: HTMLCanvasElement | null
-  ) {
+  async function renderSinglePage(pageNum: number, pdfCanvas: HTMLCanvasElement | null, drawCanvas: HTMLCanvasElement | null, generation: number) {
     if (!pdfDoc || !pdfCanvas || !drawCanvas || !mainContainerRef) return;
-
     const page = await pdfDoc.getPage(pageNum);
-    const unscaledViewport = page.getViewport({ scale: 1.0 });
-
-    const availableWidth = isDualPage ? (mainContainerRef.clientWidth - 96) / 2 : mainContainerRef.clientWidth - 64;
-    const availableHeight = mainContainerRef.clientHeight - 48; // Leave margin for controls
-
-    let baseScale = 1.0;
-    if (fitMode === 'height') {
-      baseScale = availableHeight / unscaledViewport.height; // VERTICAL FIT DEFAULT
-    } else if (fitMode === 'width') {
-      baseScale = availableWidth / unscaledViewport.width;
-    } else if (fitMode === 'page') {
-      baseScale = Math.min(availableWidth / unscaledViewport.width, availableHeight / unscaledViewport.height);
-    }
-
-    const finalScale = baseScale * zoomLevel;
-    const viewport = page.getViewport({ scale: finalScale });
-
-    pdfCanvas.width = viewport.width;
-    pdfCanvas.height = viewport.height;
-    drawCanvas.width = viewport.width;
-    drawCanvas.height = viewport.height;
-
-    const ctx = pdfCanvas.getContext('2d')!;
+    if (generation !== renderGeneration) return;
+    const baseViewport = page.getViewport({ scale: 1 });
+    const horizontalPadding = isDualPage ? 120 : 72;
+    const width = Math.max(260, (mainContainerRef.clientWidth - horizontalPadding) / (isDualPage ? 2 : 1));
+    const height = Math.max(260, mainContainerRef.clientHeight - 72);
+    let scale = height / baseViewport.height;
+    if (fitMode === 'width') scale = width / baseViewport.width;
+    if (fitMode === 'page') scale = Math.min(width / baseViewport.width, height / baseViewport.height);
+    scale = Math.max(0.08, Math.min(4, scale * zoomLevel));
+    const viewport = page.getViewport({ scale });
+    pdfCanvas.width = Math.ceil(viewport.width); pdfCanvas.height = Math.ceil(viewport.height);
+    drawCanvas.width = pdfCanvas.width; drawCanvas.height = pdfCanvas.height;
+    pdfCanvas.style.width = `${viewport.width}px`; pdfCanvas.style.height = `${viewport.height}px`;
+    drawCanvas.style.width = `${viewport.width}px`; drawCanvas.style.height = `${viewport.height}px`;
+    const ctx = pdfCanvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pdfCanvas.width, pdfCanvas.height);
     await page.render({ canvasContext: ctx, viewport }).promise;
-
-    redrawOverlay(pageNum, drawCanvas);
+    if (generation === renderGeneration) redrawOverlay(pageNum, drawCanvas);
   }
-
-  function redrawOverlay(pageNum: number, canvas: HTMLCanvasElement | null) {
+  function redrawForPage(page: number) {
+    if (page === currentPage) redrawOverlay(page, leftDrawCanvas);
+    if (isDualPage && page === currentPage + 1) redrawOverlay(page, rightDrawCanvas);
+  }
+  function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke) {
+    if (!stroke.points.length) return;
+    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = stroke.tool === 'highlighter' ? 'rgba(250,204,21,.38)' : stroke.color;
+    ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = stroke.tool === 'highlighter' ? Math.max(12, stroke.width * 5) : stroke.width;
+    const first = stroke.points[0];
+    if (stroke.points.length === 1) { ctx.beginPath(); ctx.arc(first.x, first.y, Math.max(1.5, ctx.lineWidth / 2), 0, Math.PI * 2); ctx.fill(); }
+    else { ctx.beginPath(); ctx.moveTo(first.x, first.y); for (let i = 1; i < stroke.points.length; i++) ctx.lineTo(stroke.points[i].x, stroke.points[i].y); ctx.stroke(); }
+    ctx.restore();
+  }
+  function redrawOverlay(page: number, canvas: HTMLCanvasElement | null) {
     if (!canvas) return;
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d'); if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Render Strokes
-    const pageStrokes = annotations[pageNum] || [];
-    pageStrokes.forEach(stroke => {
-      if (stroke.points.length < 2) return;
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-      for (let i = 1; i < stroke.points.length; i++) {
-        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
-      }
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      if (stroke.tool === 'highlighter') {
-        ctx.strokeStyle = 'rgba(250, 204, 21, 0.4)';
-        ctx.lineWidth = 20;
-      } else {
-        ctx.strokeStyle = stroke.color;
-        ctx.lineWidth = stroke.width;
-      }
-      ctx.stroke();
-      ctx.restore();
-    });
-
-    // Render Musical Symbol Stamps
-    const pageStamps = stamps[pageNum] || [];
-    pageStamps.forEach(s => {
-      ctx.save();
-      ctx.font = `${s.fontSize}px serif`;
-      ctx.fillStyle = s.color;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(s.symbol, s.x, s.y);
-      ctx.restore();
-    });
-
-    // Render Text Notes
-    const pageNotes = notes[pageNum] || [];
-    pageNotes.forEach(n => {
-      ctx.save();
-      ctx.font = `600 ${n.fontSize}px sans-serif`;
-      ctx.fillStyle = n.color;
-      ctx.fillText(n.text, n.x, n.y);
-      ctx.restore();
-    });
+    for (const stroke of annotations[page] || []) drawStroke(ctx, stroke);
+    for (const stamp of stamps[page] || []) { ctx.save(); ctx.font = `${stamp.fontSize}px serif`; ctx.fillStyle = stamp.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(stamp.symbol, stamp.x, stamp.y); ctx.restore(); }
+    for (const note of notes[page] || []) { ctx.save(); ctx.font = `600 ${note.fontSize}px sans-serif`; ctx.fillStyle = note.color; ctx.fillText(note.text, note.x, note.y); ctx.restore(); }
+    if (drawing?.page === page && drawing.canvas === canvas) drawStroke(ctx, drawing.stroke);
   }
-
-  async function saveToDb(pageNum: number) {
-    await db.annotations.put({
-      id: `${score.id}_page_${pageNum}`,
-      scoreId: score.id,
-      pageNum,
-      strokes: annotations[pageNum] || [],
-      stamps: stamps[pageNum] || [],
-      notes: notes[pageNum] || []
-    });
-  }
-
-  // Pointer Event Handling (Pen / Stylus Auto-Detection & Stamps)
-  function handlePointerDown(e: PointerEvent, pageNum: number, canvas: HTMLCanvasElement) {
-    if (!isAnnotationToolOpen) return;
-
-    // Stylus / Apple Pencil Auto Enable
-    if (e.pointerType === 'pen') {
-      activeTool = 'pen';
-    }
-
+  function pointFor(event: PointerEvent, canvas: HTMLCanvasElement) {
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    if (activeTool === 'stamp') {
-      saveCurrentStateToHistory(pageNum);
-      if (!stamps[pageNum]) stamps[pageNum] = [];
-      stamps[pageNum].push({
-        id: Math.random().toString(),
-        symbol: selectedSymbol,
-        label: 'stamp',
-        x, y,
-        fontSize: 32,
-        color: penColor
-      });
-      redrawOverlay(pageNum, canvas);
-      saveToDb(pageNum);
-      return;
-    }
-
-    if (activeTool === 'text') {
-      const textPrompt = prompt('Enter rehearsal note / instruction:');
-      if (textPrompt) {
-        saveCurrentStateToHistory(pageNum);
-        if (!notes[pageNum]) notes[pageNum] = [];
-        notes[pageNum].push({
-          id: Math.random().toString(),
-          text: textPrompt,
-          x, y,
-          fontSize: 16,
-          color: penColor
-        });
-        redrawOverlay(pageNum, canvas);
-        saveToDb(pageNum);
-      }
-      return;
-    }
-
-    if (activeTool === 'eraser') {
-      saveCurrentStateToHistory(pageNum);
-      eraseAtPoint(x, y, pageNum, canvas);
-      return;
-    }
-
-    // Pen & Highlighter Drawing
-    isDrawing = true;
-    canvas.setPointerCapture(e.pointerId);
-    saveCurrentStateToHistory(pageNum);
-
-    currentStroke = {
-      tool: activeTool === 'highlighter' ? 'highlighter' : 'pen',
-      color: penColor,
-      width: penWidth,
-      points: [{ x, y }]
-    };
+    return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
   }
-
-  function handlePointerMove(e: PointerEvent, pageNum: number, canvas: HTMLCanvasElement) {
-    if (!isDrawing) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    if (activeTool === 'eraser') {
-      eraseAtPoint(x, y, pageNum, canvas);
-      return;
-    }
-
-    if (currentStroke) {
-      currentStroke.points.push({ x, y });
-      redrawOverlay(pageNum, canvas);
-    }
+  async function addStamp(page: number, x: number, y: number) {
+    const before = snapshot(page);
+    if (!stamps[page]) stamps[page] = [];
+    stamps[page].push({ id: crypto.randomUUID(), symbol: selectedSymbol, label: 'stamp', x, y, fontSize: 32, color: penColor });
+    pushHistory(page, before); redrawForPage(page); await persist(page);
   }
-
-  async function handlePointerUp(e: PointerEvent, pageNum: number, canvas: HTMLCanvasElement) {
-    if (!isDrawing) return;
-    isDrawing = false;
-    canvas.releasePointerCapture(e.pointerId);
-
-    if (currentStroke && currentStroke.points.length > 1) {
-      if (!annotations[pageNum]) annotations[pageNum] = [];
-      annotations[pageNum].push(currentStroke);
-      await saveToDb(pageNum);
-    }
-    currentStroke = null;
+  async function addText(page: number, x: number, y: number) {
+    const text = prompt('Enter rehearsal note / instruction:'); if (!text?.trim()) return;
+    const before = snapshot(page);
+    if (!notes[page]) notes[page] = [];
+    notes[page].push({ id: crypto.randomUUID(), text: text.trim(), x, y, fontSize: 16, color: penColor });
+    pushHistory(page, before); redrawForPage(page); await persist(page);
   }
-
-  function eraseAtPoint(x: number, y: number, pageNum: number, canvas: HTMLCanvasElement) {
-    annotations[pageNum] = (annotations[pageNum] || []).filter(stroke => {
-      return !stroke.points.some(p => Math.hypot(p.x - x, p.y - y) < 20);
-    });
-    stamps[pageNum] = (stamps[pageNum] || []).filter(s => Math.hypot(s.x - x, s.y - y) > 25);
-    notes[pageNum] = (notes[pageNum] || []).filter(n => Math.hypot(n.x - x, n.y - y) > 30);
-
-    redrawOverlay(pageNum, canvas);
-    saveToDb(pageNum);
+  async function eraseAt(page: number, x: number, y: number, canvas: HTMLCanvasElement) {
+    const radius = Math.max(18, penWidth * 5); const before = snapshot(page);
+    annotations[page] = (annotations[page] || []).filter(stroke => !stroke.points.some(point => Math.hypot(point.x - x, point.y - y) <= radius));
+    stamps[page] = (stamps[page] || []).filter(stamp => Math.hypot(stamp.x - x, stamp.y - y) > radius + 14);
+    notes[page] = (notes[page] || []).filter(note => Math.hypot(note.x - x, note.y - y) > radius + 14);
+    const after = snapshot(page); if (snapshotsEqual(before, after)) return;
+    pushHistory(page, before); redrawOverlay(page, canvas); await persist(page);
   }
-
-  function goToPage(num: number) {
-    if (num >= 1 && num <= totalPages) {
-      currentPage = num;
-      renderPages();
-    }
+  function pointerDown(event: PointerEvent, page: number, canvas: HTMLCanvasElement) {
+    if (!isAnnotationToolOpen || event.button !== 0) return;
+    event.preventDefault(); const point = pointFor(event, canvas);
+    if (activeTool === 'stamp') { void addStamp(page, point.x, point.y); return; }
+    if (activeTool === 'text') { void addText(page, point.x, point.y); return; }
+    if (activeTool === 'eraser') { canvas.setPointerCapture(event.pointerId); void eraseAt(page, point.x, point.y, canvas); return; }
+    const stroke: Stroke = { tool: activeTool, color: penColor, width: penWidth, points: [point] };
+    drawing = { page, pointerId: event.pointerId, canvas, stroke }; canvas.setPointerCapture(event.pointerId); redrawOverlay(page, canvas);
   }
-
-  function handleKeyDown(e: KeyboardEvent) {
-    const step = isDualPage ? 2 : 1;
-    if (['ArrowRight', 'PageDown'].includes(e.key)) goToPage(currentPage + step);
-    if (['ArrowLeft', 'PageUp'].includes(e.key)) goToPage(currentPage - step);
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z') undo(currentPage);
-    if (e.key === 'p') activeTool = 'pen';
-    if (e.key === 'h') activeTool = 'highlighter';
-    if (e.key === 's') activeTool = 'stamp';
-    if (e.key === 'e') activeTool = 'eraser';
+  function pointerMove(event: PointerEvent, page: number, canvas: HTMLCanvasElement) {
+    if (activeTool === 'eraser') { if (!canvas.hasPointerCapture(event.pointerId)) return; const point = pointFor(event, canvas); void eraseAt(page, point.x, point.y, canvas); return; }
+    if (!drawing || drawing.page !== page || drawing.canvas !== canvas || drawing.pointerId !== event.pointerId) return;
+    drawing.stroke.points.push(pointFor(event, canvas)); redrawOverlay(page, canvas);
   }
+  async function finishDrawing(event: PointerEvent, page: number, canvas: HTMLCanvasElement) {
+    if (!drawing || drawing.page !== page || drawing.canvas !== canvas || drawing.pointerId !== event.pointerId) return;
+    const active = drawing; drawing = null;
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    const before: Snapshot = { strokes: [...(annotations[page] || [])], stamps: structuredClone(stamps[page] || []), notes: structuredClone(notes[page] || []) };
+    if (!annotations[page]) annotations[page] = [];
+    annotations[page].push(active.stroke); pushHistory(page, before); redrawOverlay(page, canvas); await persist(page);
+  }
+  function cancelDrawing(event: PointerEvent, page: number, canvas: HTMLCanvasElement) {
+    if (!drawing || drawing.page !== page || drawing.canvas !== canvas || drawing.pointerId !== event.pointerId) return;
+    drawing = null; if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); redrawOverlay(page, canvas);
+  }
+  function goToPage(page: number) { const target = Math.max(1, Math.min(totalPages, Math.floor(Number(page) || 1))); if (target === currentPage) return; drawing = null; currentPage = target; void renderPages(); }
+  function nextPage() { goToPage(currentPage + (isDualPage ? 2 : 1)); }
+  function previousPage() { goToPage(currentPage - (isDualPage ? 2 : 1)); }
+  async function toggleFullscreen() { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); }
+  function handleKeyDown(event: KeyboardEvent) {
+    const target = event.target as HTMLElement | null; if (target && ['INPUT','TEXTAREA','SELECT'].includes(target.tagName)) return;
+    if (event.key === 'Escape') { if (showSettings || showShortcuts) { showSettings=false; showShortcuts=false; return; } if (isFullscreen) { void document.exitFullscreen(); return; } }
+    if (event.key === 'ArrowRight' || event.key === 'PageDown') { event.preventDefault(); nextPage(); }
+    if (event.key === 'ArrowLeft' || event.key === 'PageUp') { event.preventDefault(); previousPage(); }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); void undo(currentPage); }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); void redo(currentPage); }
+    if (event.key.toLowerCase() === 'p') activeTool='pen'; if (event.key.toLowerCase() === 'h') activeTool='highlighter'; if (event.key.toLowerCase() === 's') activeTool='stamp'; if (event.key.toLowerCase() === 't') activeTool='text'; if (event.key.toLowerCase() === 'e') activeTool='eraser';
+    if (event.key === ' ') { event.preventDefault(); nextPage(); }
+  }
+  function applySettings() { fitMode=settingsDefaultFit; isDualPage=settingsDualPage; filterMode=settingsDarkScore?'dark':'normal'; showSettings=false; void renderPages(); }
 </script>
 
 <svelte:window onkeydown={handleKeyDown} />
 
-<div class="flex-1 flex flex-col relative bg-neutral-950 overflow-hidden select-none">
-
-  <!-- Header Controls -->
-  <header class="flex items-center justify-between px-4 py-2.5 bg-neutral-900/90 backdrop-blur-md border-b border-neutral-800 z-20">
-    <button onclick={onBack} class="flex items-center gap-2 text-neutral-400 hover:text-white px-3 py-1.5 rounded-lg hover:bg-neutral-800 transition">
-      <ArrowLeft size={18} />
-      <span class="text-sm font-medium">Library</span>
-    </button>
-
-    <div class="text-center truncate px-2">
-      <h2 class="text-sm font-semibold text-neutral-200 truncate">{score.title}</h2>
-      <p class="text-xs text-neutral-500">{score.composer}</p>
-    </div>
-
-    <!-- Zoom & Fit Controls -->
-    <div class="flex items-center gap-2">
-      <div class="flex items-center bg-neutral-950 rounded-xl border border-neutral-800 p-1">
-        <button onclick={() => { zoomLevel = Math.max(0.5, zoomLevel - 0.15); renderPages(); }} class="p-1.5 text-neutral-400 hover:text-white"><ZoomOut size={16} /></button>
-        <span class="text-xs font-mono px-2 text-neutral-300">{Math.round(zoomLevel * 100)}%</span>
-        <button onclick={() => { zoomLevel = Math.min(3.0, zoomLevel + 0.15); renderPages(); }} class="p-1.5 text-neutral-400 hover:text-white"><ZoomIn size={16} /></button>
-        <button onclick={() => { zoomLevel = 1.0; fitMode = 'height'; renderPages(); }} class="p-1.5 text-neutral-400 hover:text-white border-l border-neutral-800 pl-2" title="Reset Vertical Fit">
-          <RotateCcw size={14} />
-        </button>
-      </div>
-
-      <!-- Fit Mode Selector -->
-      <div class="flex bg-neutral-950 rounded-xl border border-neutral-800 p-1 text-xs">
-        <button onclick={() => { fitMode = 'height'; renderPages(); }} class="px-2 py-1 rounded-lg {fitMode === 'height' ? 'bg-neutral-800 text-blue-400 font-semibold' : 'text-neutral-400'}">Fit Height</button>
-        <button onclick={() => { fitMode = 'width'; renderPages(); }} class="px-2 py-1 rounded-lg {fitMode === 'width' ? 'bg-neutral-800 text-blue-400 font-semibold' : 'text-neutral-400'}">Fit Width</button>
-      </div>
-
-      <button onclick={() => { isDualPage = !isDualPage; renderPages(); }} class="p-2 rounded-xl border border-neutral-800 bg-neutral-950 text-neutral-400 hover:text-white">
-        {#if isDualPage}<Columns size={16} class="text-blue-400" />{:else}<Square size={16} />{/if}
-      </button>
-
-      <div class="flex items-center gap-1 bg-neutral-950 p-1 rounded-xl border border-neutral-800">
-        <button class="p-1.5 rounded-lg {filterMode === 'normal' ? 'bg-neutral-800 text-white' : 'text-neutral-500'}" onclick={() => filterMode = 'normal'}><Sun size={16} /></button>
-        <button class="p-1.5 rounded-lg {filterMode === 'sepia' ? 'bg-amber-900/60 text-amber-200' : 'text-neutral-500'}" onclick={() => filterMode = 'sepia'}><BookOpen size={16} /></button>
-        <button class="p-1.5 rounded-lg {filterMode === 'dark' ? 'bg-neutral-800 text-white' : 'text-neutral-500'}" onclick={() => filterMode = 'dark'}><Moon size={16} /></button>
-      </div>
-    </div>
-  </header>
-
-  <!-- Main View Area with Large Touch Page Turn Zones -->
-  <div bind:this={mainContainerRef} class="flex-1 overflow-auto flex justify-center items-center p-2 relative">
-
-    <!-- LEFT PAGE TURN ZONE -->
-    <button
-      disabled={currentPage <= 1}
-      onclick={() => goToPage(currentPage - (isDualPage ? 2 : 1))}
-      class="absolute left-0 top-0 bottom-0 w-1/6 z-10 flex items-center justify-start pl-4 opacity-0 hover:opacity-100 hover:bg-gradient-to-r hover:from-neutral-900/40 hover:to-transparent transition cursor-pointer disabled:pointer-events-none {isAnnotationToolOpen ? 'pointer-events-none' : ''}">
-      <ChevronLeft size={36} class="text-white/70" />
-    </button>
-
-    <!-- RIGHT PAGE TURN ZONE -->
-    <button
-      disabled={currentPage >= totalPages}
-      onclick={() => goToPage(currentPage + (isDualPage ? 2 : 1))}
-      class="absolute right-0 top-0 bottom-0 w-1/6 z-10 flex items-center justify-end pr-4 opacity-0 hover:opacity-100 hover:bg-gradient-to-l hover:from-neutral-900/40 hover:to-transparent transition cursor-pointer disabled:pointer-events-none {isAnnotationToolOpen ? 'pointer-events-none' : ''}">
-      <ChevronRight size={36} class="text-white/70" />
-    </button>
-
-    <!-- SCORE CANVASES -->
-    <div class="flex gap-4 max-w-full max-h-full justify-center items-center z-0">
-
-      <!-- LEFT PAGE -->
-      <div class="relative shadow-2xl rounded overflow-hidden bg-white
-        {filterMode === 'sepia' ? 'sepia contrast-105 brightness-95' : ''}
-        {filterMode === 'dark' ? 'invert hue-rotate-180 contrast-125' : ''}">
-        <canvas bind:this={leftPdfCanvas} class="block"></canvas>
-        <canvas
-          bind:this={leftDrawCanvas}
-          onpointerdown={(e) => leftDrawCanvas && handlePointerDown(e, currentPage, leftDrawCanvas)}
-          onpointermove={(e) => leftDrawCanvas && handlePointerMove(e, currentPage, leftDrawCanvas)}
-          onpointerup={(e) => leftDrawCanvas && handlePointerUp(e, currentPage, leftDrawCanvas)}
-          class="absolute top-0 left-0 touch-none {isAnnotationToolOpen ? 'cursor-crosshair' : 'pointer-events-none'}">
-        </canvas>
-      </div>
-
-      <!-- RIGHT PAGE (DUAL MODE) -->
-      {#if isDualPage && currentPage + 1 <= totalPages}
-        <div class="relative shadow-2xl rounded overflow-hidden bg-white
-          {filterMode === 'sepia' ? 'sepia contrast-105 brightness-95' : ''}
-          {filterMode === 'dark' ? 'invert hue-rotate-180 contrast-125' : ''}">
-          <canvas bind:this={rightPdfCanvas} class="block"></canvas>
-          <canvas
-            bind:this={rightDrawCanvas}
-            onpointerdown={(e) => rightDrawCanvas && handlePointerDown(e, currentPage + 1, rightDrawCanvas)}
-            onpointermove={(e) => rightDrawCanvas && handlePointerMove(e, currentPage + 1, rightDrawCanvas)}
-            onpointerup={(e) => rightDrawCanvas && handlePointerUp(e, currentPage + 1, rightDrawCanvas)}
-            class="absolute top-0 left-0 touch-none {isAnnotationToolOpen ? 'cursor-crosshair' : 'pointer-events-none'}">
-          </canvas>
-        </div>
-      {/if}
-
-    </div>
-  </div>
-
-  <!-- FLOATING PRO MUSICIAN ANNOTATION TOOLBAR -->
-  {#if isAnnotationToolOpen}
-    <div class="absolute top-14 left-1/2 -translate-x-1/2 z-30 bg-neutral-900/95 backdrop-blur-xl border border-neutral-700/80 p-2.5 rounded-2xl shadow-2xl flex flex-col gap-2 max-w-xl">
-
-      <!-- Main Tools & Actions -->
-      <div class="flex items-center gap-2 overflow-x-auto">
-        <button class="p-2 rounded-xl transition {activeTool === 'pen' ? 'bg-blue-600 text-white' : 'text-neutral-400'}" onclick={() => activeTool = 'pen'} title="Pen (P)"><Pencil size={18} /></button>
-        <button class="p-2 rounded-xl transition {activeTool === 'highlighter' ? 'bg-yellow-500/20 text-yellow-400' : 'text-neutral-400'}" onclick={() => activeTool = 'highlighter'} title="Highlighter (H)"><Highlighter size={18} /></button>
-        <button class="p-2 rounded-xl transition {activeTool === 'stamp' ? 'bg-purple-600 text-white' : 'text-neutral-400'}" onclick={() => activeTool = 'stamp'} title="Musical Symbols (S)"><Music2 size={18} /></button>
-        <button class="p-2 rounded-xl transition {activeTool === 'text' ? 'bg-emerald-600 text-white' : 'text-neutral-400'}" onclick={() => activeTool = 'text'} title="Text Note (T)"><Type size={18} /></button>
-        <button class="p-2 rounded-xl transition {activeTool === 'eraser' ? 'bg-neutral-800 text-white' : 'text-neutral-400'}" onclick={() => activeTool = 'eraser'} title="Eraser (E)"><Eraser size={18} /></button>
-
-        <div class="h-5 w-px bg-neutral-800 mx-1"></div>
-
-        <!-- Color Palette -->
-        <div class="flex items-center gap-1">
-          {#each QUICK_COLORS as color}
-            <button
-              onclick={() => penColor = color}
-              style="background-color: {color}"
-              class="w-5 h-5 rounded-full border border-neutral-700 transition hover:scale-110 {penColor === color ? 'ring-2 ring-blue-500 scale-110' : ''}">
-            </button>
-          {/each}
-        </div>
-
-        <div class="h-5 w-px bg-neutral-800 mx-1"></div>
-
-        <!-- Undo / Redo / Clear -->
-        <button onclick={() => undo(currentPage)} class="p-2 text-neutral-400 hover:text-white rounded-xl" title="Undo"><Undo size={16} /></button>
-        <button onclick={() => redo(currentPage)} class="p-2 text-neutral-400 hover:text-white rounded-xl" title="Redo"><Redo size={16} /></button>
-        <button onclick={() => { saveCurrentStateToHistory(currentPage); annotations[currentPage] = []; stamps[currentPage] = []; notes[currentPage] = []; renderPages(); }} class="p-2 text-neutral-400 hover:text-red-400 rounded-xl" title="Clear Page"><Trash2 size={16} /></button>
-      </div>
-
-      <!-- Musical Symbols Sub-Toolbar (When Stamp Selected) -->
-      {#if activeTool === 'stamp'}
-        <div class="flex items-center gap-1.5 pt-2 border-t border-neutral-800 overflow-x-auto max-w-full">
-          {#each MUSICAL_SYMBOLS as item}
-            <button
-              onclick={() => selectedSymbol = item.symbol}
-              class="px-2.5 py-1 rounded-lg border text-sm font-serif transition flex items-center justify-center min-w-[32px]
-              {selectedSymbol === item.symbol ? 'bg-purple-600/30 border-purple-500 text-purple-200' : 'bg-neutral-950 border-neutral-800 text-neutral-300 hover:bg-neutral-800'}"
-              title={item.label}>
-              {item.symbol}
-            </button>
-          {/each}
-        </div>
-      {/if}
-
-    </div>
+<div class="viewer-shell flex-1 flex flex-col relative bg-neutral-950 text-neutral-100 overflow-hidden select-none">
+  {#if showControls}
+    <header class="viewer-header h-14 shrink-0 flex items-center justify-between gap-3 px-3 sm:px-5 bg-neutral-900/90 backdrop-blur-2xl border-b border-neutral-800/80 z-30">
+      <div class="flex items-center gap-2 min-w-0"><button onclick={onBack} class="icon-button" title="Back to library"><ArrowLeft size={18}/></button><div class="min-w-0 hidden sm:block"><div class="text-sm font-semibold truncate max-w-72">{score.title}</div><div class="text-[11px] text-neutral-500 truncate">{score.composer}</div></div></div>
+      <div class="flex items-center gap-1.5"><button onclick={previousPage} disabled={currentPage<=1} class="icon-button" title="Previous page"><ChevronLeft size={18}/></button><label class="page-control"><input aria-label="Page number" type="number" min="1" max={totalPages} value={currentPage} onchange={(e)=>goToPage(Number((e.currentTarget as HTMLInputElement).value))}/><span>/ {totalPages}</span></label><button onclick={nextPage} disabled={currentPage>=totalPages} class="icon-button" title="Next page"><ChevronRight size={18}/></button></div>
+      <div class="flex items-center gap-1.5"><div class="hidden lg:flex items-center bg-neutral-950/80 border border-neutral-800 rounded-xl p-0.5"><button onclick={()=>{zoomLevel=Math.max(.5,zoomLevel-.1);void renderPages()}} class="mini-button"><ZoomOut size={15}/></button><span class="text-[11px] font-mono w-11 text-center text-neutral-300">{Math.round(zoomLevel*100)}%</span><button onclick={()=>{zoomLevel=Math.min(3,zoomLevel+.1);void renderPages()}} class="mini-button"><ZoomIn size={15}/></button><button onclick={()=>{zoomLevel=1;fitMode='height';void renderPages()}} class="mini-button border-l border-neutral-800 ml-0.5"><RotateCcw size={14}/></button></div><button onclick={()=>isAnnotationToolOpen=!isAnnotationToolOpen} class="icon-button {isAnnotationToolOpen?'active-blue':''}" title="Annotations"><Pencil size={17}/></button><button onclick={()=>{isDualPage=!isDualPage;void renderPages()}} class="icon-button hidden sm:flex" title="Facing pages">{#if isDualPage}<Columns size={17}/>{:else}<Square size={17}/>{/if}</button><button onclick={()=>showSettings=true} class="icon-button" title="Viewer settings"><Settings size={17}/></button></div>
+    </header>
   {/if}
 
-  <!-- Footer Navigation -->
-  <footer class="p-3 flex justify-center z-20">
-    <div class="bg-neutral-900/90 backdrop-blur-xl border border-neutral-800 px-6 py-2 rounded-2xl shadow-2xl flex items-center gap-6">
-      <div class="flex items-center gap-2">
-        <button disabled={currentPage <= 1} onclick={() => goToPage(currentPage - (isDualPage ? 2 : 1))} class="p-2 bg-neutral-800 disabled:opacity-30 rounded-xl hover:bg-neutral-700 transition"><ChevronLeft size={18} /></button>
-        <span class="text-xs font-semibold text-neutral-300 min-w-[90px] text-center">
-          {currentPage} {isDualPage && currentPage + 1 <= totalPages ? `- ${currentPage + 1}` : ''} / {totalPages}
-        </span>
-        <button disabled={currentPage >= totalPages} onclick={() => goToPage(currentPage + (isDualPage ? 2 : 1))} class="p-2 bg-neutral-800 disabled:opacity-30 rounded-xl hover:bg-neutral-700 transition"><ChevronRight size={18} /></button>
-      </div>
+  {#if isAnnotationToolOpen}
+    <div class="annotation-bar absolute top-[4.25rem] left-1/2 -translate-x-1/2 z-40 max-w-[calc(100%-1rem)] bg-neutral-900/95 backdrop-blur-2xl border border-neutral-700/80 rounded-2xl shadow-2xl p-2"><div class="flex flex-wrap items-center justify-center gap-1.5"><button onclick={()=>activeTool='pen'} class="tool {activeTool==='pen'?'active-blue':''}" title="Pen (P)"><Pencil size={16}/></button><button onclick={()=>activeTool='highlighter'} class="tool {activeTool==='highlighter'?'active-yellow':''}" title="Highlighter (H)"><Highlighter size={16}/></button><button onclick={()=>activeTool='eraser'} class="tool {activeTool==='eraser'?'active-neutral':''}" title="Eraser (E)"><Eraser size={16}/></button><button onclick={()=>activeTool='stamp'} class="tool {activeTool==='stamp'?'active-purple':''}" title="Musical symbol (S)"><Music2 size={16}/></button><button onclick={()=>activeTool='text'} class="tool {activeTool==='text'?'active-green':''}" title="Text note (T)"><Type size={16}/></button><span class="separator"></span>{#each QUICK_COLORS as color}<button onclick={()=>penColor=color} class="color-dot {penColor===color?'selected':''}" style={`background:${color}`} aria-label={`Set color ${color}`}></button>{/each}<label class="size-control"><span>Size</span><input type="range" min="1" max="12" bind:value={penWidth}/></label><span class="separator"></span><button onclick={()=>void undo(currentPage)} disabled={!historyStack[currentPage]?.length} class="tool"><Undo size={16}/></button><button onclick={()=>void redo(currentPage)} disabled={!redoStack[currentPage]?.length} class="tool"><Redo size={16}/></button><button onclick={()=>void clearPage(currentPage)} class="tool hover-danger"><Trash2 size={16}/></button></div>{#if activeTool==='stamp'}<div class="symbol-row">{#each MUSICAL_SYMBOLS as item}<button onclick={()=>selectedSymbol=item[0]} class="symbol-button {selectedSymbol===item[0]?'symbol-selected':''}" title={item[1]}>{item[0]}</button>{/each}</div>{/if}</div>
+  {/if}
 
-      <div class="h-5 w-px bg-neutral-800"></div>
+  <main bind:this={mainContainerRef} class="relative flex-1 overflow-auto flex items-center justify-center p-3 sm:p-5 bg-[radial-gradient(circle_at_center,_#202020_0,_#111_42%,_#0a0a0a_100%)]">
+    {#if loading}<div class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-sm text-neutral-500 bg-neutral-950 z-20"><div class="loading-ring"></div><span>Opening score…</span></div>{:else if error}<div class="max-w-md text-center p-8 rounded-3xl bg-neutral-900/90 border border-neutral-800 shadow-2xl"><div class="text-red-400 font-semibold mb-2">Unable to open score</div><p class="text-sm text-neutral-500 mb-5">{error}</p><button onclick={onBack} class="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Return to library</button></div>{:else}<button onclick={previousPage} disabled={currentPage<=1||isAnnotationToolOpen} class="page-zone left-zone"><ChevronLeft size={34}/></button><button onclick={nextPage} disabled={currentPage>=totalPages||isAnnotationToolOpen} class="page-zone right-zone"><ChevronRight size={34}/></button><div class="flex gap-4 items-center justify-center max-w-full min-h-0"><div class="score-page {filterMode==='sepia'?'sepia contrast-105 brightness-95':''} {filterMode==='dark'?'invert hue-rotate-180 contrast-125':''}"><canvas bind:this={leftPdfCanvas} class="block"></canvas><canvas bind:this={leftDrawCanvas} onpointerdown={(e)=>leftDrawCanvas&&pointerDown(e,currentPage,leftDrawCanvas)} onpointermove={(e)=>leftDrawCanvas&&pointerMove(e,currentPage,leftDrawCanvas)} onpointerup={(e)=>leftDrawCanvas&&finishDrawing(e,currentPage,leftDrawCanvas)} onpointercancel={(e)=>leftDrawCanvas&&cancelDrawing(e,currentPage,leftDrawCanvas)} class="absolute inset-0 touch-none {isAnnotationToolOpen?'cursor-crosshair':'pointer-events-none'}"></canvas></div>{#if isDualPage&&currentPage+1<=totalPages}<div class="score-page {filterMode==='sepia'?'sepia contrast-105 brightness-95':''} {filterMode==='dark'?'invert hue-rotate-180 contrast-125':''}"><canvas bind:this={rightPdfCanvas} class="block"></canvas><canvas bind:this={rightDrawCanvas} onpointerdown={(e)=>rightDrawCanvas&&pointerDown(e,currentPage+1,rightDrawCanvas)} onpointermove={(e)=>rightDrawCanvas&&pointerMove(e,currentPage+1,rightDrawCanvas)} onpointerup={(e)=>rightDrawCanvas&&finishDrawing(e,currentPage+1,rightDrawCanvas)} onpointercancel={(e)=>rightDrawCanvas&&cancelDrawing(e,currentPage+1,rightDrawCanvas)} class="absolute inset-0 touch-none {isAnnotationToolOpen?'cursor-crosshair':'pointer-events-none'}"></canvas></div>{/if}</div>{/if}
+  </main>
 
-      <button
-        onclick={() => isAnnotationToolOpen = !isAnnotationToolOpen}
-        class="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer
-        {isAnnotationToolOpen ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'}">
-        <Pencil size={16} />
-        <span>Annotate Palette</span>
-      </button>
-    </div>
-  </footer>
+  {#if showControls}<footer class="h-12 shrink-0 flex items-center justify-between gap-3 px-3 sm:px-5 bg-neutral-900/90 backdrop-blur-2xl border-t border-neutral-800/80 z-30 text-[11px] text-neutral-500"><div class="hidden md:block truncate max-w-[30%]">{score.composer} · {score.title}</div><div class="flex items-center gap-1 bg-neutral-950/80 border border-neutral-800 rounded-xl p-0.5"><button onclick={()=>{fitMode='height';void renderPages()}} class="fit-button {fitMode==='height'?'selected':''}">Fit height</button><button onclick={()=>{fitMode='width';void renderPages()}} class="fit-button {fitMode==='width'?'selected':''}">Fit width</button><button onclick={()=>{fitMode='page';void renderPages()}} class="fit-button {fitMode==='page'?'selected':''}">Fit page</button></div><div class="flex items-center gap-1"><button onclick={()=>filterMode='normal'} class="footer-icon {filterMode==='normal'?'selected':''}"><Sun size={14}/></button><button onclick={()=>filterMode='sepia'} class="footer-icon {filterMode==='sepia'?'selected-amber':''}"><BookOpen size={14}/></button><button onclick={()=>filterMode='dark'} class="footer-icon {filterMode==='dark'?'selected':''}"><Moon size={14}/></button><button onclick={()=>void toggleFullscreen()} class="footer-icon hidden sm:flex">{#if isFullscreen}<Minimize2 size={14}/>{:else}<Maximize2 size={14}/>{/if}</button></div></footer>{/if}
+  <button onclick={()=>showControls=!showControls} class="shell-toggle" title="Toggle controls"><PanelTop size={15}/></button>
 
+  {#if showSettings}<div class="modal-backdrop" role="presentation" onclick={(e)=>e.currentTarget===e.target&&(showSettings=false)}><section class="settings-panel" role="dialog" aria-modal="true" aria-label="Viewer settings"><div class="flex items-center justify-between mb-5"><div><h2 class="text-lg font-semibold">Viewer settings</h2><p class="text-xs text-neutral-500 mt-1">Tune Sonora for the way you read and mark music.</p></div><button onclick={()=>showSettings=false} class="icon-button"><X size={18}/></button></div><div class="space-y-5"><div><p class="setting-label">Default page fit</p><div class="setting-segment"><button onclick={()=>settingsDefaultFit='height'} class:chosen={settingsDefaultFit==='height'}>Height</button><button onclick={()=>settingsDefaultFit='page'} class:chosen={settingsDefaultFit==='page'}>Page</button><button onclick={()=>settingsDefaultFit='width'} class:chosen={settingsDefaultFit==='width'}>Width</button></div></div><label class="setting-row"><span><strong>Facing pages</strong><small>Show two pages when space allows.</small></span><input type="checkbox" bind:checked={settingsDualPage}/></label><label class="setting-row"><span><strong>Dark score</strong><small>Invert the page for low-light reading.</small></span><input type="checkbox" bind:checked={settingsDarkScore}/></label><div class="setting-card"><div class="flex items-center gap-2 text-neutral-300"><MousePointer2 size={16}/><span class="font-medium">Annotation behavior</span></div><p>Marks are committed on pointer release, including single-click dots. Pointer capture keeps strokes attached to the score even if the pointer moves slightly outside the page.</p></div><button onclick={()=>{showSettings=false;showShortcuts=true}} class="setting-row w-full text-left"><span><strong>Keyboard shortcuts</strong><small>Page turns, annotation tools, undo and redo.</small></span><Keyboard size={17} class="text-neutral-500"/></button></div><div class="flex justify-end gap-2 mt-6"><button onclick={()=>showSettings=false} class="px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Cancel</button><button onclick={applySettings} class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-sm font-medium">Apply</button></div></section></div>{/if}
+  {#if showShortcuts}<div class="modal-backdrop" role="presentation" onclick={(e)=>e.currentTarget===e.target&&(showShortcuts=false)}><section class="settings-panel max-w-md" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"><div class="flex items-center justify-between mb-5"><h2 class="text-lg font-semibold">Keyboard shortcuts</h2><button onclick={()=>showShortcuts=false} class="icon-button"><X size={18}/></button></div><div class="shortcut-list"><div><span>Next / previous page</span><kbd>←</kbd><kbd>→</kbd></div><div><span>Next page</span><kbd>Space</kbd></div><div><span>Pen / highlighter</span><kbd>P</kbd><kbd>H</kbd></div><div><span>Symbol / text / eraser</span><kbd>S</kbd><kbd>T</kbd><kbd>E</kbd></div><div><span>Undo / redo</span><kbd>Ctrl/Cmd Z</kbd><kbd>Ctrl/Cmd Y</kbd></div><div><span>Close dialog / fullscreen</span><kbd>Esc</kbd></div></div></section></div>{/if}
 </div>
+
+<style>
+  .viewer-shell{font-family:Inter,ui-sans-serif,system-ui,sans-serif}.icon-button,.mini-button,.tool,.footer-icon,.fit-button{transition:all .16s ease}.icon-button{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:11px;color:#a3a3a3;background:rgba(23,23,23,.78);border:1px solid #262626}.icon-button:hover:not(:disabled),.mini-button:hover:not(:disabled),.footer-icon:hover{color:#fff;background:#262626}.icon-button:disabled,.mini-button:disabled,.tool:disabled{opacity:.3;cursor:not-allowed}.active-blue{color:#bfdbfe!important;background:rgba(37,99,235,.22)!important;border-color:rgba(59,130,246,.55)!important}.active-yellow{color:#fde68a!important;background:rgba(234,179,8,.16)!important;border-color:rgba(234,179,8,.45)!important}.active-purple{color:#ddd6fe!important;background:rgba(124,58,237,.2)!important;border-color:rgba(139,92,246,.5)!important}.active-green{color:#a7f3d0!important;background:rgba(16,185,129,.16)!important;border-color:rgba(16,185,129,.45)!important}.active-neutral{color:#fff!important;background:#303030!important}.mini-button{width:30px;height:28px;display:flex;align-items:center;justify-content:center;color:#a3a3a3;border-radius:8px}.page-control{display:flex;align-items:center;justify-content:center;gap:4px;min-width:76px;color:#737373;font-size:11px}.page-control input{width:38px;text-align:center;background:#0a0a0a;color:#e5e5e5;border:1px solid #262626;border-radius:8px;padding:5px 3px;outline:none}.page-control input:focus{border-color:#3b82f6}.annotation-bar{animation:slide-down .18s ease-out}.tool{width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:10px;color:#a3a3a3;background:#171717;border:1px solid #262626}.tool:hover:not(:disabled){color:#fff;background:#262626}.hover-danger:hover{color:#fca5a5;border-color:rgba(239,68,68,.35)}.separator{width:1px;height:23px;background:#303030;margin:0 3px}.color-dot{width:20px;height:20px;border-radius:999px;border:2px solid #404040;transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}.color-dot:hover{transform:scale(1.12)}.color-dot.selected{border-color:#fff;box-shadow:0 0 0 2px #3b82f6;transform:scale(1.08)}.size-control{display:flex;align-items:center;gap:6px;padding:0 4px;color:#a3a3a3;font-size:11px}.size-control input{width:70px;accent-color:#3b82f6}.symbol-row{display:flex;gap:5px;overflow-x:auto;padding-top:8px;margin-top:7px;border-top:1px solid #292929}.symbol-button{min-width:34px;height:31px;padding:0 8px;border-radius:9px;border:1px solid #292929;background:#0a0a0a;color:#d4d4d4;font-family:serif;transition:.15s ease}.symbol-button:hover{background:#262626}.symbol-selected{color:#ddd6fe;background:rgba(124,58,237,.2);border-color:#8b5cf6}.score-page{position:relative;background:#fff;box-shadow:0 18px 55px rgba(0,0,0,.5),0 3px 12px rgba(0,0,0,.35);border-radius:2px;overflow:hidden;flex:none;animation:page-enter .2s ease-out}.page-zone{position:absolute;top:0;bottom:0;width:13%;z-index:10;display:flex;align-items:center;color:rgba(255,255,255,.55);opacity:0;transition:opacity .16s ease,background .16s ease}.page-zone:hover:not(:disabled){opacity:1}.left-zone{left:0;justify-content:flex-start;padding-left:12px;background:linear-gradient(90deg,rgba(10,10,10,.55),transparent)}.right-zone{right:0;justify-content:flex-end;padding-right:12px;background:linear-gradient(270deg,rgba(10,10,10,.55),transparent)}.page-zone:disabled{pointer-events:none}.fit-button{padding:6px 9px;border-radius:8px;color:#737373}.fit-button:hover{color:#d4d4d4}.fit-button.selected{color:#e5e5e5;background:#262626}.footer-icon{width:29px;height:29px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:#737373}.footer-icon.selected{color:#e5e5e5;background:#262626}.footer-icon.selected-amber{color:#fde68a;background:rgba(120,53,15,.45)}.shell-toggle{position:absolute;right:10px;bottom:59px;z-index:45;width:28px;height:28px;border-radius:9px;background:rgba(23,23,23,.8);border:1px solid #303030;color:#737373;display:flex;align-items:center;justify-content:center;opacity:.55;transition:.15s ease}.shell-toggle:hover{opacity:1;color:#fff}.modal-backdrop{position:absolute;inset:0;z-index:60;display:flex;align-items:flex-start;justify-content:flex-end;padding:16px;background:rgba(0,0,0,.58);backdrop-filter:blur(6px);animation:fade-in .16s ease-out}.settings-panel{width:min(100%,420px);margin-top:42px;padding:20px;border:1px solid #3a3a3a;border-radius:20px;background:rgba(23,23,23,.97);box-shadow:0 24px 80px rgba(0,0,0,.55);animation:panel-enter .2s ease-out}.setting-label{font-size:11px;color:#737373;margin-bottom:8px;text-transform:uppercase;letter-spacing:.08em}.setting-segment{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:4px;background:#0a0a0a;border:1px solid #292929;border-radius:11px}.setting-segment button{padding:8px;border-radius:8px;color:#737373;font-size:12px;transition:.15s ease}.setting-segment button:hover{color:#d4d4d4}.setting-segment button.chosen{color:#dbeafe;background:#1d4ed8}.setting-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid #292929}.setting-row strong{display:block;color:#e5e5e5;font-size:13px;font-weight:600}.setting-row small{display:block;color:#737373;font-size:11px;margin-top:3px}.setting-row input[type='checkbox']{width:17px;height:17px;accent-color:#2563eb}.setting-card{padding:12px;border:1px solid #292929;background:#101010;border-radius:13px}.setting-card p{color:#737373;font-size:11px;line-height:1.6;margin-top:7px}.shortcut-list{display:flex;flex-direction:column;gap:10px}.shortcut-list>div{display:flex;align-items:center;gap:5px;padding:9px 0;border-bottom:1px solid #292929;color:#a3a3a3;font-size:12px}.shortcut-list>div span{flex:1}kbd{padding:3px 7px;border-radius:6px;border:1px solid #404040;background:#0a0a0a;color:#d4d4d4;font:10px ui-monospace,SFMono-Regular,monospace}.loading-ring{width:25px;height:25px;border:2px solid #333;border-top-color:#60a5fa;border-radius:999px;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@keyframes fade-in{from{opacity:0}to{opacity:1}}@keyframes slide-down{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}@keyframes panel-enter{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:translateX(0)}}@keyframes page-enter{from{opacity:.8;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+</style>
