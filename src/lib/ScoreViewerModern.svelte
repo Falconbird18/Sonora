@@ -2,7 +2,7 @@
 	import { onMount, tick } from 'svelte';
 	import * as pdfjsLib from 'pdfjs-dist';
 	import { db } from './db';
-	import type { ScoreItem, Stroke, AnnotationStamp, Note } from './types';
+import type { ScoreItem, Stroke, SymbolStamp, TextNote } from './types';
 	import {
 		ChevronLeft,
 		ChevronRight,
