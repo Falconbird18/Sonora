@@ -1,569 +1,78 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import {
-		FolderPlus,
-		FileText,
-		Search,
-		Trash2,
-		Music,
-		Grid2X2,
-		List,
-		Clock3,
-		Star,
-		X,
-		Settings2,
-		Upload,
-		ChevronRight,
-		BookOpen,
-		Sparkles
-	} from 'lucide-svelte';
-	import * as pdfjsLib from 'pdfjs-dist';
+	import { FolderSync, FolderPlus, Search, Settings2, Grid2X2, List, Star, Clock3, Music2, Trash2, Tag, X, RefreshCw, MoreHorizontal, Check, ChevronDown } from 'lucide-svelte';
 	import { db } from './db';
-	import type { ScoreItem } from './types';
+	import { chooseAndAddFolder, syncAllFolders, syncFolder, removeFolder } from './folderSync';
+	import { getComposerPortrait } from './composerPortraits';
+	import type { FolderSource, ScoreItem } from './types';
 
-	let { onSelectScore }: { onSelectScore: (score: ScoreItem) => void } =
-		$props();
+	let { onSelectScore }: { onSelectScore: (score: ScoreItem) => void } = $props();
 	let scores = $state<ScoreItem[]>([]);
-	let searchQuery = $state('');
-	let isProcessing = $state(false);
-	let processLabel = $state('');
-	let selectedComposerFolder = $state<string | null>(null);
-	let viewMode = $state<'grid' | 'list'>('grid');
-	let sortMode = $state<'recent' | 'title' | 'composer'>('recent');
-	let filter = $state<'all' | 'favorites' | 'recent'>('all');
-	let isDragging = $state(false);
-	let settingsOpen = $state(false);
-	let compact = $state(false);
-	let composerImages = $state<Record<string, string>>({});
+	let folders = $state<FolderSource[]>([]);
+	let search = $state('');
+	let filter = $state<'all'|'favorites'|'recent'>('all');
+	let composer = $state<string|null>(null);
+	let collection = $state<string|null>(null);
+	let tag = $state<string|null>(null);
+	let sort = $state<'recent'|'title'|'composer'>('recent');
+	let view = $state<'grid'|'list'>('grid');
+	let settings = $state(false);
+	let metadata = $state<ScoreItem|null>(null);
+	let newTags = $state('');
+	let newCollection = $state('');
+	let syncing = $state(false);
+	let syncMessage = $state('');
+	let drag = $state(false);
+	let folderError = $state('');
+	let timer: ReturnType<typeof setInterval> | undefined;
 
-	const composerImage: Record<string, string> = {
-		'Johann Sebastian Bach':
-			'https://upload.wikimedia.org/wikipedia/commons/6/6f/Johann_Sebastian_Bach.jpg',
-		'Ludwig van Beethoven':
-			'https://upload.wikimedia.org/wikipedia/commons/6/6f/Beethoven.jpg',
-		'Wolfgang Amadeus Mozart':
-			'https://upload.wikimedia.org/wikipedia/commons/1/1e/Wolfgang-amadeus-mozart_1.jpg',
-		'Franz Schubert':
-			'https://upload.wikimedia.org/wikipedia/commons/0/0a/Franz_Schubert_by_Wilhelm_August_Rieder_1825.jpg',
-		'Frédéric Chopin':
-			'https://upload.wikimedia.org/wikipedia/commons/3/33/Frederic_Chopin_photo.jpeg',
-		'Johannes Brahms':
-			'https://upload.wikimedia.org/wikipedia/commons/1/1f/Johannes_Brahms_by_C._F._Schwager_1876.jpg',
-		'Pyotr Ilyich Tchaikovsky':
-			'https://upload.wikimedia.org/wikipedia/commons/a/a2/Tchaikovsky_by_Reutlinger.jpg',
-		'Felix Mendelssohn':
-			'https://upload.wikimedia.org/wikipedia/commons/4/4e/Felix_Mendelssohn_Bartholdy.jpg',
-		'Robert Schumann':
-			'https://upload.wikimedia.org/wikipedia/commons/8/8b/Robert_Schumann.jpg',
-		'Antonín Dvořák':
-			'https://upload.wikimedia.org/wikipedia/commons/2/2f/Anton%C3%ADn_Dvo%C5%99%C3%A1k_LOC_3c05828u.jpg',
-		'George Frideric Handel':
-			'https://upload.wikimedia.org/wikipedia/commons/8/86/George_Frideric_Handel_by_Balthasar_Denner.jpg'
-	};
+	async function refresh() { scores = await db.scores.orderBy('addedAt').reverse().toArray(); folders = await db.folders.orderBy('addedAt').reverse().toArray(); }
+	async function sync() { if (syncing) return; syncing = true; folderError = ''; try { const results = await syncAllFolders(); const added = results.reduce((n,r) => n+r.added+r.updated,0); const removed = results.reduce((n,r) => n+r.removed,0); syncMessage = added || removed ? `${added} updated · ${removed} removed` : 'Library is up to date'; await refresh(); } catch (e) { folderError = e instanceof Error ? e.message : 'Could not sync folders'; } finally { syncing = false; setTimeout(() => syncMessage = '', 3000); } }
+	async function addFolder() { folderError = ''; try { await chooseAndAddFolder(); await refresh(); } catch (e) { if ((e as DOMException)?.name !== 'AbortError') folderError = e instanceof Error ? e.message : 'Could not add folder'; } }
+	async function addFiles(files: File[]) { const pdfs = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')); for (const file of pdfs) { const id = `manual:${file.name}:${file.size}:${file.lastModified}`; if (await db.scores.get(id)) continue; let pages = 1; let thumb: string|undefined; try { const { getPdfInfo } = await import('./pdfUtils'); const info = await getPdfInfo(file); pages = info.totalPages; thumb = info.thumbnailUrl; } catch {} await db.scores.put({ id, title:file.name.replace(/\.pdf$/i,''), composer:'Unknown Composer', pdfBlob:file, thumbnailUrl:thumb, totalPages:pages, addedAt:Date.now(), favorite:false, tags:[], collection:'Unsorted', fileSize:file.size, fileModifiedAt:file.lastModified }); } await refresh(); }
+	async function drop(e: DragEvent) { e.preventDefault(); drag=false; await addFiles(Array.from(e.dataTransfer?.files || [])); }
+	async function open(score: ScoreItem) { const next={...score,lastOpenedAt:Date.now()}; await db.scores.put(next); scores=scores.map(s=>s.id===score.id?next:s); onSelectScore(next); }
+	async function patch(score: ScoreItem, value: Partial<ScoreItem>) { const next={...score,...value}; await db.scores.put(next); scores=scores.map(s=>s.id===score.id?next:s); }
+	async function favorite(score: ScoreItem,e:MouseEvent){e.stopPropagation();await patch(score,{favorite:!score.favorite});}
+	async function deleteScore(score: ScoreItem,e:MouseEvent){e.stopPropagation();if(!confirm(`Remove “${score.title}” from Sonora?`))return;await db.scores.delete(score.id);await db.annotations.where('scoreId').equals(score.id).delete();await refresh();}
+	function edit(score: ScoreItem,e:MouseEvent){e.stopPropagation();metadata=score;newTags=(score.tags||[]).join(', ');newCollection=score.collection||'';}
+	async function saveMetadata(){if(!metadata)return;await patch(metadata,{tags:newTags.split(',').map(x=>x.trim()).filter(Boolean),collection:newCollection.trim()||'Unsorted'});metadata=null;}
+	function initials(name:string){return name.split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase();}
+	function portrait(name:string){return getComposerPortrait(name);}
 
-	onMount(async () => {
-		scores = await db.scores.orderBy('addedAt').reverse().toArray();
-		composerImages = composerImage;
-		const saved = localStorage.getItem('sonora-library-settings');
-		if (saved)
-			try {
-				const s = JSON.parse(saved);
-				viewMode = s.viewMode || 'grid';
-				compact = !!s.compact;
-			} catch {}
-	});
+	onMount(async()=>{ await refresh(); const saved=localStorage.getItem('sonora-library-settings'); if(saved)try{const s=JSON.parse(saved);view=s.view||'grid';sort=s.sort||'recent';}catch{} await sync(); timer=setInterval(sync,30000); const wake=()=>void sync(); window.addEventListener('focus',wake); return()=>{clearInterval(timer);window.removeEventListener('focus',wake);}; });
 
-	async function createThumbnail(file: File) {
-		const data = new Uint8Array(await file.arrayBuffer());
-		const doc = await pdfjsLib.getDocument({ data, isEvalSupported: false })
-			.promise;
-		try {
-			const page = await doc.getPage(1);
-			const viewport = page.getViewport({ scale: 0.35 });
-			const canvas = document.createElement('canvas');
-			const ctx = canvas.getContext('2d')!;
-			const dpr = Math.min(devicePixelRatio || 1, 2);
-			canvas.width = Math.ceil(viewport.width * dpr);
-			canvas.height = Math.ceil(viewport.height * dpr);
-			ctx.scale(dpr, dpr);
-			await page.render({ canvasContext: ctx, viewport }).promise;
-			return {
-				thumbnailUrl: canvas.toDataURL('image/jpeg', 0.76),
-				totalPages: doc.numPages
-			};
-		} finally {
-			await doc.destroy();
-		}
-	}
-	async function processFiles(files: File[]) {
-		if (!files.length) return;
-		isProcessing = true;
-		let done = 0;
-		try {
-			for (const file of files) {
-				done++;
-				processLabel = `Importing ${done}/${files.length}…`;
-				const parts = (file.webkitRelativePath || file.name).split('/');
-				const composer =
-					parts.length >= 2 ? parts[parts.length - 2] : 'Unknown Composer';
-				let thumbnailUrl: string | undefined;
-				let totalPages = 1;
-				try {
-					({ thumbnailUrl, totalPages } = await createThumbnail(file));
-				} catch (err) {
-					console.warn('Thumbnail failed', err);
-				}
-				const score: ScoreItem = {
-					id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`,
-					title: file.name.replace(/\.pdf$/i, ''),
-					composer,
-					pdfBlob: file,
-					thumbnailUrl,
-					totalPages,
-					addedAt: Date.now(),
-					lastOpenedAt: 0,
-					favorite: false,
-					tags: [],
-					collection: composer
-				};
-				await db.scores.put($state.snapshot(score));
-				scores = [score, ...scores];
-			}
-		} finally {
-			isProcessing = false;
-			processLabel = '';
-		}
-	}
-	async function handleFolderSelect(e: Event) {
-		const input = e.target as HTMLInputElement;
-		await processFiles(
-			Array.from(input.files || []).filter((f) =>
-				f.name.toLowerCase().endsWith('.pdf')
-			)
-		);
-		input.value = '';
-	}
-	async function handleSingleFiles(e: Event) {
-		const input = e.target as HTMLInputElement;
-		await processFiles(
-			Array.from(input.files || []).filter((f) =>
-				f.name.toLowerCase().endsWith('.pdf')
-			)
-		);
-		input.value = '';
-	}
-	async function handleDrop(e: DragEvent) {
-		e.preventDefault();
-		isDragging = false;
-		await processFiles(
-			Array.from(e.dataTransfer?.files || []).filter((f) =>
-				f.name.toLowerCase().endsWith('.pdf')
-			)
-		);
-	}
-	async function updateScore(
-		score: ScoreItem,
-		patch: Partial<ScoreItem>,
-		e?: MouseEvent
-	) {
-		e?.stopPropagation();
-		const next = { ...score, ...patch };
-		await db.scores.put($state.snapshot(next));
-		scores = scores.map((s) => (s.id === score.id ? next : s));
-	}
-	async function openScore(score: ScoreItem) {
-		const next = { ...score, lastOpenedAt: Date.now() };
-		await db.scores.put($state.snapshot(next));
-		scores = scores.map((s) => (s.id === score.id ? next : s));
-		onSelectScore(next);
-	}
-	async function toggleFavorite(score: ScoreItem, e: MouseEvent) {
-		await updateScore(score, { favorite: !score.favorite }, e);
-	}
-	async function deleteScore(id: string, e: MouseEvent) {
-		e.stopPropagation();
-		if (
-			!confirm(
-				'Remove this score from your library? Annotations will be deleted too.'
-			)
-		)
-			return;
-		await db.scores.delete(id);
-		await db.annotations.where('scoreId').equals(id).delete();
-		scores = scores.filter((s) => s.id !== id);
-	}
-	function saveSettings() {
-		localStorage.setItem(
-			'sonora-library-settings',
-			JSON.stringify({ viewMode, compact })
-		);
-		settingsOpen = false;
-	}
-	function initials(name: string) {
-		return name
-			.split(/\s+/)
-			.filter(Boolean)
-			.slice(0, 2)
-			.map((x) => x[0])
-			.join('')
-			.toUpperCase();
-	}
-	const filteredScores = $derived(
-		scores
-			.filter(
-				(s) => !selectedComposerFolder || s.composer === selectedComposerFolder
-			)
-			.filter((s) =>
-				filter === 'favorites'
-					? !!s.favorite
-					: filter === 'recent'
-						? !!s.lastOpenedAt
-						: true
-			)
-			.filter((s) => {
-				const q = searchQuery.toLowerCase().trim();
-				if (!q) return true;
-				return (
-					s.title.toLowerCase().includes(q) ||
-					s.composer.toLowerCase().includes(q) ||
-					(s.tags || []).join(' ').toLowerCase().includes(q)
-				);
-			})
-			.sort((a, b) =>
-				sortMode === 'title'
-					? a.title.localeCompare(b.title)
-					: sortMode === 'composer'
-						? a.composer.localeCompare(b.composer)
-						: (b.lastOpenedAt || b.addedAt) - (a.lastOpenedAt || a.addedAt)
-			)
-	);
-	const composers = $derived.by(() => {
-		const m: Record<string, ScoreItem[]> = {};
-		for (const s of scores)
-			(m[s.composer || 'Unknown Composer'] ||= []).push(s);
-		return m;
-	});
+	const composers=$derived.by(()=>{const m:Record<string,number>={};for(const s of scores)m[s.composer||'Unknown Composer']=(m[s.composer||'Unknown Composer']||0)+1;return m;});
+	const collections=$derived.by(()=>Array.from(new Set(scores.map(s=>s.collection||'Unsorted'))).sort());
+	const tags=$derived.by(()=>Array.from(new Set(scores.flatMap(s=>s.tags||[]))).sort((a,b)=>a.localeCompare(b)));
+	const filtered=$derived(scores.filter(s=>!composer||s.composer===composer).filter(s=>!collection||(s.collection||'Unsorted')===collection).filter(s=>!tag||(s.tags||[]).includes(tag)).filter(s=>filter==='all'||(filter==='favorites'?!!s.favorite:!!s.lastOpenedAt)).filter(s=>{const q=search.toLowerCase().trim();return !q||s.title.toLowerCase().includes(q)||s.composer.toLowerCase().includes(q)||(s.tags||[]).some(t=>t.toLowerCase().includes(q))||(s.collection||'').toLowerCase().includes(q);}).sort((a,b)=>sort==='title'?a.title.localeCompare(b.title):sort==='composer'?a.composer.localeCompare(b.composer):(b.lastOpenedAt||b.addedAt)-(a.lastOpenedAt||a.addedAt)));
 </script>
 
-<div
-	class="h-full flex flex-col bg-[#11110f] text-neutral-100 overflow-hidden"
-	ondragover={(e) => {
-		e.preventDefault();
-		isDragging = true;
-	}}
-	ondragleave={() => (isDragging = false)}
-	ondrop={handleDrop}>
-	<header
-		class="shrink-0 border-b border-white/7 bg-[#171714]/95 backdrop-blur-xl px-4 sm:px-6 py-4">
-		<div class="max-w-[1600px] mx-auto flex flex-wrap items-center gap-3">
-			<div class="flex items-center gap-3 min-w-0 mr-2">
-				<div
-					class="w-11 h-11 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-violet-900/30">
-					<Music size={21} />
-				</div>
-				<div class="min-w-0">
-					<h1 class="text-lg font-semibold tracking-tight">Sonora</h1>
-					<p class="text-xs text-neutral-500">Your music library</p>
-				</div>
-			</div>
-			<div class="relative flex-1 min-w-[200px] max-w-2xl">
-				<Search
-					size={17}
-					class="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-500" /><input
-					bind:value={searchQuery}
-					placeholder="Search scores, composers, tags…"
-					class="w-full h-11 rounded-2xl bg-[#0d0d0b] border border-white/8 pl-10 pr-10 outline-none focus:border-violet-500/60 transition" />{#if searchQuery}<button
-						class="absolute right-2 top-2 p-1.5 text-neutral-400 hover:text-white"
-						onclick={() => (searchQuery = '')}><X size={15} /></button
-					>{/if}
-			</div>
-			<div class="flex items-center gap-1.5 ml-auto">
-				<label
-					class="h-11 px-4 rounded-2xl bg-white/5 border border-white/8 hover:bg-white/8 flex items-center gap-2 cursor-pointer text-sm"
-					><Upload size={16} /><span class="hidden sm:inline"
-						>Import folder</span
-					><input
-						type="file"
-						webkitdirectory
-						directory
-						multiple
-						class="hidden"
-						onchange={handleFolderSelect} /></label
-				><label
-					class="h-11 px-4 rounded-2xl bg-violet-600 hover:bg-violet-500 flex items-center gap-2 cursor-pointer text-sm font-medium shadow-lg shadow-violet-900/20"
-					><FolderPlus size={16} /><span class="hidden sm:inline"
-						>Add scores</span
-					><input
-						type="file"
-						accept=".pdf"
-						multiple
-						class="hidden"
-						onchange={handleSingleFiles} /></label
-				><button
-					class="h-11 w-11 rounded-2xl hover:bg-white/8 flex items-center justify-center"
-					onclick={() => (settingsOpen = !settingsOpen)}
-					><Settings2 size={18} /></button>
-			</div>
-		</div>
-	</header>
-	{#if isProcessing}<div
-			class="shrink-0 py-2.5 bg-violet-500/10 border-b border-violet-500/20 text-violet-200 text-sm text-center">
-			{processLabel}
-		</div>{/if}
-	<div class="flex-1 min-h-0 flex overflow-hidden">
-		<aside
-			class="hidden lg:flex w-64 shrink-0 border-r border-white/7 bg-[#141411] p-4 flex-col gap-5 overflow-y-auto">
-			<div class="space-y-1">
-				<p
-					class="px-3 mb-2 text-[11px] uppercase tracking-widest text-neutral-600">
-					Library
-				</p>
-				{#each [['all', 'All scores', Grid2X2], ['recent', 'Recently opened', Clock3], ['favorites', 'Favorites', Star]] as item}<button
-						class="w-full h-10 px-3 rounded-xl flex items-center gap-3 text-sm {filter ===
-							item[0] && !selectedComposerFolder
-							? 'bg-white/8 text-white'
-							: 'text-neutral-400 hover:bg-white/5 hover:text-white'}"
-						onclick={()=>{filter=item[0] as any;selectedComposerFolder=null;}}
-						><svelte:component this={item[2]} size={17} /><span>{item[1]}</span
-						></button
-					>{/each}
-			</div>
-			<div>
-				<p
-					class="px-3 mb-2 text-[11px] uppercase tracking-widest text-neutral-600">
-					Composers
-				</p>
-				<div class="space-y-1">
-					{#each Object.entries(composers).sort( (a, b) => a[0].localeCompare(b[0]) ) as [comp, list]}<button
-							class="w-full h-11 px-2 rounded-xl flex items-center gap-2 text-left {selectedComposerFolder ===
-							comp
-								? 'bg-violet-500/12 text-violet-200'
-								: 'text-neutral-400 hover:bg-white/5 hover:text-white'}"
-							onclick={() => {
-								selectedComposerFolder = comp;
-								filter = 'all';
-							}}
-							><div
-								class="w-8 h-8 rounded-lg overflow-hidden bg-neutral-800 shrink-0">
-								{#if composerImages[comp]}<img
-										src={composerImages[comp]}
-										alt=""
-										class="w-full h-full object-cover"
-										loading="lazy" />{:else}<div
-										class="w-full h-full flex items-center justify-center text-[10px] font-bold text-neutral-500">
-										{initials(comp)}
-									</div>{/if}
-							</div>
-							<span class="truncate flex-1 text-sm">{comp}</span><span
-								class="text-[11px] text-neutral-600">{list.length}</span
-							></button
-						>{/each}
-				</div>
-			</div>
+<div class="library" ondragover={(e)=>{e.preventDefault();drag=true;}} ondragleave={()=>drag=false} ondrop={drop}>
+	<header class="header"><div class="brand"><div class="brand-mark"><Music2 size={20}/></div><div><b>Sonora</b><span>Score Library</span></div></div><div class="search"><Search size={17}/><input bind:value={search} placeholder="Search scores, composers, tags…"/><button class:hidden={!search} onclick={()=>search=''}><X size={15}/></button></div><div class="actions"><button class="secondary" onclick={addFolder} title="Choose a folder and keep it synchronized"><FolderSync size={17}/><span>Sync folder</span></button><label class="primary"><FolderPlus size={17}/><span>Add PDFs</span><input type="file" accept=".pdf,application/pdf" multiple onchange={e=>addFiles(Array.from((e.currentTarget as HTMLInputElement).files||[]))}/></label><button class="icon" onclick={()=>settings=!settings} title="Library settings"><Settings2 size={18}/></button></div></header>
+	{#if folderError}<div class="notice error"><span>{folderError}</span><button onclick={()=>folderError=''}><X size={15}/></button></div>{/if}
+	{#if syncMessage}<div class="notice"><RefreshCw size={14}/>{syncMessage}</div>{/if}
+	<div class="body">
+		<aside class="sidebar">
+			<section><label>Library</label><button class:active={!composer&&!collection&&!tag&&filter==='all'} onclick={()=>{composer=null;collection=null;tag=null;filter='all'}}><Grid2X2 size={16}/>All scores<span>{scores.length}</span></button><button class:active={filter==='recent'} onclick={()=>{filter='recent';composer=collection=tag=null}}><Clock3 size={16}/>Recently opened</button><button class:active={filter==='favorites'} onclick={()=>{filter='favorites';composer=collection=tag=null}}><Star size={16}/>Favorites</button></section>
+			<section><label>Folders</label>{#if folders.length===0}<p class="muted">Choose a folder above. Sonora will keep it synchronized.</p>{:else}{#each folders as folder}<div class="folder-row"><button class:active={collection===`__folder:${folder.id}`} onclick={()=>{collection=`__folder:${folder.id}`;composer=tag=null}}><FolderSync size={15}/><span title={folder.name}>{folder.name}</span></button><button class="tiny" title="Sync now" onclick={()=>syncFolder(folder)}><RefreshCw size={13}/></button></div>{/each}{/if}</section>
+			<section><label>Composers</label>{#each Object.entries(composers).sort((a,b)=>a[0].localeCompare(b[0])).slice(0,20) as [name,count]}<button class:active={composer===name} onclick={()=>{composer=name;collection=tag=null;filter='all'}}><div class="portrait small">{#if portrait(name)}<img src={portrait(name)} alt="" loading="lazy" onerror={(e)=>((e.currentTarget as HTMLImageElement).style.display='none')}/>{/if}<span>{initials(name)}</span></div><span class="truncate">{name}</span><em>{count}</em></button>{/each}</section>
+			{#if collections.length>0}<section><label>Collections</label>{#each collections as item}<button class:active={collection===item} onclick={()=>{collection=item;composer=tag=null;filter='all'}}><Tag size={14}/><span>{item}</span></button>{/each}</section>{/if}
+			{#if tags.length>0}<section><label>Tags</label><div class="tag-cloud">{#each tags as item}<button class:active={tag===item} onclick={()=>{tag=item;composer=collection=null;filter='all'}}>{item}</button>{/each}</div></section>{/if}
 		</aside>
-		<main
-			class="flex-1 min-w-0 overflow-auto bg-[radial-gradient(circle_at_top,#24241f_0%,#11110f_52%)] p-4 sm:p-6 lg:p-8">
-			<div class="max-w-[1500px] mx-auto">
-				<div class="flex items-end justify-between gap-4 mb-7">
-					<div>
-						<p class="text-xs text-violet-300 mb-1">
-							{selectedComposerFolder ? 'Composer collection' : 'Your library'}
-						</p>
-						<h2 class="text-2xl sm:text-3xl font-semibold tracking-tight">
-							{selectedComposerFolder || filter === 'favorites'
-								? 'Favorites'
-								: filter === 'recent'
-									? 'Recently opened'
-									: 'All scores'}
-						</h2>
-						<p class="text-sm text-neutral-500 mt-1">
-							{filteredScores.length}
-							{filteredScores.length === 1 ? 'score' : 'scores'}
-						</p>
-					</div>
-					<div class="flex items-center gap-2">
-						<select
-							bind:value={sortMode}
-							class="h-10 rounded-xl bg-black/20 border border-white/8 px-3 text-sm outline-none"
-							><option value="recent">Recently used</option><option
-								value="title">Title</option
-							><option value="composer">Composer</option></select
-						>
-						<div class="flex rounded-xl bg-black/20 border border-white/8 p-1">
-							<button
-								class="h-8 w-8 rounded-lg {viewMode === 'grid'
-									? 'bg-white/10 text-white'
-									: 'text-neutral-500'}"
-								onclick={() => (viewMode = 'grid')}
-								><Grid2X2 size={15} /></button
-							><button
-								class="h-8 w-8 rounded-lg {viewMode === 'list'
-									? 'bg-white/10 text-white'
-									: 'text-neutral-500'}"
-								onclick={() => (viewMode = 'list')}><List size={15} /></button>
-						</div>
-					</div>
-				</div>
-				{#if selectedComposerFolder}<div
-						class="mb-7 rounded-3xl overflow-hidden border border-white/8 bg-white/4 relative h-36 sm:h-44">
-						<img
-							src={composerImages[selectedComposerFolder] || ''}
-							alt=""
-							class="absolute inset-0 w-full h-full object-cover opacity-35 blur-[1px]" />
-						<div
-							class="absolute inset-0 bg-gradient-to-r from-[#11110f] via-[#11110f]/80 to-transparent">
-						</div>
-						<div class="absolute inset-0 flex items-center gap-4 p-6">
-							<div
-								class="w-20 h-20 rounded-2xl overflow-hidden border border-white/15 shadow-xl bg-neutral-800">
-								{#if composerImages[selectedComposerFolder]}<img
-										src={composerImages[selectedComposerFolder]}
-										alt=""
-										class="w-full h-full object-cover" />{:else}<div
-										class="w-full h-full flex items-center justify-center font-semibold text-neutral-400">
-										{initials(selectedComposerFolder)}
-									</div>{/if}
-							</div>
-							<div>
-								<p class="text-xs uppercase tracking-widest text-violet-300">
-									Composer
-								</p>
-								<h3 class="text-2xl font-semibold">{selectedComposerFolder}</h3>
-								<p class="text-sm text-neutral-400">
-									{composers[selectedComposerFolder]?.length || 0} works in your library
-								</p>
-							</div>
-						</div>
-					</div>{/if}
-				{#if filteredScores.length === 0}<div
-						class="min-h-[45vh] rounded-3xl border border-dashed border-white/10 flex flex-col items-center justify-center text-center p-8">
-						<div
-							class="w-16 h-16 rounded-3xl bg-white/5 flex items-center justify-center mb-4">
-							<BookOpen size={25} class="text-neutral-500" />
-						</div>
-						<h3 class="text-lg font-medium">Nothing here yet</h3>
-						<p class="text-sm text-neutral-500 mt-1 max-w-sm">
-							Add PDF scores or drag them anywhere into Sonora. Composer folders
-							will be created automatically from imported folders.
-						</p>
-					</div>{:else}<div
-						class={viewMode === 'grid'
-							? 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4 sm:gap-5'
-							: 'flex flex-col gap-2'}>
-						{#each filteredScores as score (score.id)}<button
-								onclick={() => openScore(score)}
-								class="group relative text-left overflow-hidden {viewMode ===
-								'grid'
-									? 'rounded-2xl bg-[#181815] border border-white/7 hover:border-violet-500/45 hover:-translate-y-1 hover:shadow-2xl hover:shadow-black/30 transition-all'
-									: 'rounded-2xl bg-[#181815] border border-white/7 hover:bg-white/5 transition p-3 flex items-center gap-4'}">
-								<div
-									class={viewMode === 'grid'
-										? 'aspect-[.707] bg-[#0c0c0a] relative overflow-hidden'
-										: 'w-14 h-20 rounded-xl bg-[#0c0c0a] overflow-hidden shrink-0'}>
-									{#if score.thumbnailUrl}<img
-											src={score.thumbnailUrl}
-											alt=""
-											class="w-full h-full object-cover transition duration-500 group-hover:scale-[1.03]"
-											loading="lazy" />{:else}<div
-											class="w-full h-full flex flex-col items-center justify-center text-neutral-600">
-											<FileText size={22} /><span class="text-[10px] mt-2"
-												>{initials(score.composer)}</span>
-										</div>{/if}
-									<div
-										class="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/55 to-transparent">
-									</div>
-									{#if score.favorite}<div
-											class="absolute top-3 right-3 w-8 h-8 rounded-xl bg-black/45 backdrop-blur flex items-center justify-center text-amber-400">
-											<Star size={14} fill="currentColor" />
-										</div>{/if}
-								</div>
-								<div
-									class={viewMode === 'grid'
-										? 'p-3.5 min-w-0'
-										: 'min-w-0 flex-1'}>
-									<h3
-										class="font-medium text-sm truncate group-hover:text-violet-200 transition">
-										{score.title}
-									</h3>
-									<p class="text-xs text-neutral-500 truncate mt-1">
-										{score.composer}
-									</p>
-									<div
-										class="flex items-center justify-between mt-3 text-[11px] text-neutral-600">
-										<span
-											>{score.totalPages}
-											{score.totalPages === 1 ? 'page' : 'pages'}</span
-										>{#if score.lastOpenedAt}<span>Opened</span>{/if}
-									</div>
-								</div>
-								<div
-									class="absolute {viewMode === 'grid'
-										? 'top-3 left-3'
-										: 'right-3'} opacity-0 group-hover:opacity-100 transition flex gap-1">
-									<span
-										role="button"
-										class="w-8 h-8 rounded-xl bg-black/60 backdrop-blur flex items-center justify-center text-neutral-300 hover:text-amber-400"
-										onclick={(e) => toggleFavorite(score, e)}
-										><Star
-											size={14}
-											fill={score.favorite ? 'currentColor' : 'none'} /></span
-									><span
-										role="button"
-										class="w-8 h-8 rounded-xl bg-black/60 backdrop-blur flex items-center justify-center text-neutral-300 hover:text-red-400"
-										onclick={(e) => deleteScore(score.id, e)}
-										><Trash2 size={14} /></span>
-								</div>
-							</button>{/each}
-					</div>{/if}
-			</div>
+		<main class="main">
+			<div class="toolbar"><div><p>{composer?'Composer':collection?'Collection':filter==='favorites'?'Favorites':filter==='recent'?'Recent':'Library'}</p><h1>{composer||collection|| (filter==='favorites'?'Favorites':filter==='recent'?'Recently opened':'All scores')}</h1><small>{filtered.length} {filtered.length===1?'score':'scores'}</small></div><div class="toolbar-right"><select bind:value={sort}><option value="recent">Recently used</option><option value="title">Title</option><option value="composer">Composer</option></select><div class="seg"><button class:active={view==='grid'} onclick={()=>view='grid'} title="Grid view"><Grid2X2 size={16}/></button><button class:active={view==='list'} onclick={()=>view='list'} title="List view"><List size={16}/></button></div><button class="sync" class:spinning={syncing} onclick={sync} title="Sync all folders"><RefreshCw size={16}/></button></div></div>
+			{#if composer}<div class="composer-banner"><div class="portrait large">{#if portrait(composer)}<img src={portrait(composer)} alt={composer}/>{/if}<span>{initials(composer)}</span></div><div><label>Composer</label><h2>{composer}</h2><p>{composers[composer]||0} works in your library</p></div></div>{/if}
+			{#if filtered.length===0}<div class="empty"><FolderPlus size={28}/><h2>No scores here</h2><p>Add PDFs, or choose a folder to keep synchronized.</p><button class="primary" onclick={addFolder}><FolderSync size={16}/>Choose a synced folder</button></div>{:else}<div class:grid={view==='grid'} class:list={view==='list'}>{#each filtered as score (score.id)}<article class="card" onclick={()=>open(score)} onkeydown={(e)=>e.key==='Enter'&&open(score)} role="button" tabindex="0"><div class="cover">{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" loading="lazy"/>{:else}<div class="no-cover"><FileText size={24}/><span>{score.totalPages} pages</span></div>{/if}{#if score.favorite}<span class="fav"><Star size={13} fill="currentColor"/></span>{/if}<div class="card-actions"><button title="Favorite" onclick={(e)=>favorite(score,e)}><Star size={14} fill={score.favorite?'currentColor':'none'}/></button><button title="Edit tags and collection" onclick={(e)=>edit(score,e)}><MoreHorizontal size={14}/></button><button title="Delete" onclick={(e)=>deleteScore(score,e)}><Trash2 size={14}/></button></div></div><div class="info"><h3 title={score.title}>{score.title}</h3><p>{score.composer}</p><div class="meta"><span>{score.totalPages} {score.totalPages===1?'page':'pages'}</span>{#if score.collection}<span>{score.collection}</span>{/if}</div>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0,3) as item}<span>{item}</span>{/each}{#if score.tags.length>3}<span>+{score.tags.length-3}</span>{/if}</div>{/if}</div></article>{/each}</div>{/if}
 		</main>
 	</div>
-	{#if isDragging}<div
-			class="absolute inset-0 z-50 bg-violet-950/40 backdrop-blur-sm flex items-center justify-center pointer-events-none">
-			<div
-				class="rounded-3xl border-2 border-dashed border-violet-300/60 bg-[#171714]/95 px-10 py-12 text-center shadow-2xl">
-				<Sparkles size={28} class="mx-auto text-violet-300 mb-3" />
-				<h3 class="text-xl font-semibold">Drop scores to import</h3>
-				<p class="text-sm text-neutral-400 mt-1">
-					PDFs will be added to your library
-				</p>
-			</div>
-		</div>{/if}
-	{#if settingsOpen}<div
-			class="absolute top-20 right-4 z-40 w-80 rounded-3xl border border-white/10 bg-[#1a1a17]/98 backdrop-blur-xl shadow-2xl p-5">
-			<div class="flex items-center justify-between mb-5">
-				<div>
-					<h3 class="font-semibold">Library settings</h3>
-					<p class="text-xs text-neutral-500">Customize your library.</p>
-				</div>
-				<button
-					class="p-2 rounded-xl hover:bg-white/8"
-					onclick={() => (settingsOpen = false)}><X size={17} /></button>
-			</div>
-			<div class="space-y-4 text-sm">
-				<label class="flex items-center justify-between"
-					><span>Compact cards</span><input
-						type="checkbox"
-						bind:checked={compact} /></label
-				>
-				<div>
-					<p class="text-xs text-neutral-500 mb-2">Default view</p>
-					<div class="grid grid-cols-2 gap-2">
-						<button
-							class="py-2.5 rounded-xl border {viewMode === 'grid'
-								? 'border-violet-500 bg-violet-500/15'
-								: 'border-white/8 bg-white/5'}"
-							onclick={() => (viewMode = 'grid')}>Grid</button
-						><button
-							class="py-2.5 rounded-xl border {viewMode === 'list'
-								? 'border-violet-500 bg-violet-500/15'
-								: 'border-white/8 bg-white/5'}"
-							onclick={() => (viewMode = 'list')}>List</button>
-					</div>
-				</div>
-				<button
-					class="w-full py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500"
-					onclick={saveSettings}>Save settings</button>
-			</div>
-		</div>{/if}
+	{#if drag}<div class="drop"><FolderPlus size={30}/><h2>Drop scores here</h2><p>PDFs will be added to your library.</p></div>{/if}
+	{#if settings}<div class="modal-backdrop" onclick={(e)=>e.target===e.currentTarget&&(settings=false)}><section class="modal"><div class="modal-head"><div><b>Library settings</b><span>Manage synchronized folders and appearance</span></div><button class="icon" onclick={()=>settings=false}><X size={17}/></button></div><div class="settings-list"><div class="setting"><div><b>Automatic synchronization</b><p>Sonora checks synchronized folders when the library opens, regains focus, and every 30 seconds.</p></div><RefreshCw size={17}/></div>{#each folders as folder}<div class="setting"><div><b>{folder.name}</b><p>{folder.lastSyncedAt?`Last synced ${new Date(folder.lastSyncedAt).toLocaleString()}`:'Not synced yet'}</p></div><div class="row"><button class="secondary" onclick={()=>syncFolder(folder)}>Sync</button><button class="danger" onclick={async()=>{await removeFolder(folder,false);await refresh()}}>Remove</button></div></div>{/each}</div><button class="primary full" onclick={addFolder}><FolderSync size={16}/>Add another synchronized folder</button></section></div>{/if}
+	{#if metadata}<div class="modal-backdrop" onclick={(e)=>e.target===e.currentTarget&&(metadata=null)}><section class="modal small-modal"><div class="modal-head"><div><b>Organize score</b><span>{metadata.title}</span></div><button class="icon" onclick={()=>metadata=null}><X size={17}/></button></div><label class="field">Collection<input bind:value={newCollection} placeholder="e.g. Concert, Practice, Favorites"/></label><label class="field">Tags<input bind:value={newTags} placeholder="romantic, violin, concerto"/><small>Separate tags with commas.</small></label><div class="row end"><button class="secondary" onclick={()=>metadata=null}>Cancel</button><button class="primary" onclick={saveMetadata}><Check size={16}/>Save</button></div></section></div>{/if}
 </div>
+
+<style>
+	.library{height:100%;display:flex;flex-direction:column;background:#11110f;color:#f4f4ef;overflow:hidden;font-family:Inter,ui-sans-serif,system-ui,sans-serif}.header{height:72px;flex:none;display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:1px solid #ffffff10;background:#171714f5;backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:10px;min-width:190px}.brand-mark{width:40px;height:40px;border-radius:13px;display:grid;place-items:center;background:linear-gradient(135deg,#7c3aed,#4f46e5);box-shadow:0 8px 25px #0005}.brand b{display:block;font-size:16px}.brand span{display:block;color:#77776f;font-size:10px;margin-top:2px}.search{height:42px;max-width:620px;flex:1;display:flex;align-items:center;gap:9px;padding:0 12px;border:1px solid #ffffff10;border-radius:13px;background:#0d0d0b}.search input{flex:1;min-width:0;border:0;outline:0;background:none;color:#fff;font-size:12px}.search button{border:0;background:none;color:#777;display:grid;place-items:center}.search button.hidden{display:none}.actions{display:flex;align-items:center;gap:6px;margin-left:auto}.primary,.secondary,.icon,.danger,.sync{border:1px solid transparent;border-radius:11px;height:40px;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;font-size:11px}.primary{background:#6d28d9;color:#fff}.primary:hover{background:#7c3aed}.secondary{background:#ffffff08;border-color:#ffffff0d;color:#bbb}.secondary:hover,.icon:hover{background:#ffffff0d;color:#fff}.icon{width:40px;padding:0;background:transparent;color:#aaa}.danger{background:#7f1d1d22;color:#fca5a5}.body{display:flex;min-height:0;flex:1}.sidebar{width:255px;flex:none;padding:18px 12px;border-right:1px solid #ffffff0c;background:#141411;overflow:auto}.sidebar section{margin-bottom:22px}.sidebar label{display:block;padding:0 10px 7px;color:#66665f;text-transform:uppercase;letter-spacing:.13em;font-size:9px}.sidebar section>button,.folder-row>button:first-child{width:100%;height:36px;border:0;border-radius:9px;background:transparent;color:#999890;display:flex;align-items:center;gap:9px;padding:0 10px;text-align:left;cursor:pointer;font-size:11px}.sidebar section>button:hover,.sidebar section>button.active,.folder-row>button:first-child.active{background:#ffffff08;color:#fff}.sidebar section>button span:nth-last-child(1),.sidebar section>button em{margin-left:auto;color:#55554e;font-style:normal;font-size:9px}.folder-row{display:flex;gap:2px}.folder-row .tiny{width:30px!important;flex:none!important;justify-content:center!important;padding:0!important}.muted{padding:0 10px;color:#5e5e58;font-size:10px;line-height:1.5}.portrait{position:relative;overflow:hidden;border-radius:50%;background:#292925;display:grid;place-items:center;color:#777;font-size:9px;font-weight:700}.portrait.small{width:25px;height:25px;flex:none}.portrait.large{width:72px;height:72px;flex:none;font-size:15px}.portrait img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.portrait span{position:relative;z-index:0}.sidebar .tag-cloud{display:flex;flex-wrap:wrap;gap:5px;padding:0 8px}.tag-cloud button{border:1px solid #ffffff0d;background:#ffffff05;color:#888;border-radius:8px;padding:5px 7px;font-size:9px;cursor:pointer}.tag-cloud button.active,.tag-cloud button:hover{color:#fff;background:#ffffff0d}.main{flex:1;min-width:0;overflow:auto;padding:26px clamp(16px,3vw,42px);background:radial-gradient(circle at 50% 0,#25251f,#11110f 52%)}.toolbar{display:flex;justify-content:space-between;align-items:end;gap:15px;margin-bottom:24px}.toolbar p{margin:0 0 3px;color:#9b7bff;font-size:9px;text-transform:uppercase;letter-spacing:.14em}.toolbar h1{margin:0;font-size:25px;letter-spacing:-.02em}.toolbar small{color:#66665f}.toolbar-right{display:flex;align-items:center;gap:6px}.toolbar select{height:36px;background:#181815;border:1px solid #ffffff0d;color:#aaa;border-radius:9px;padding:0 9px;font-size:10px}.seg{display:flex;padding:3px;background:#181815;border:1px solid #ffffff0c;border-radius:10px}.seg button{width:31px;height:29px;border:0;border-radius:7px;background:transparent;color:#666;display:grid;place-items:center;cursor:pointer}.seg button.active{background:#ffffff0d;color:#fff}.sync{width:36px;padding:0;background:#ffffff06;color:#aaa}.spinning svg{animation:spin .8s linear infinite}.composer-banner{display:flex;align-items:center;gap:15px;margin-bottom:22px;padding:15px;border:1px solid #ffffff0d;border-radius:17px;background:#ffffff04}.composer-banner label{color:#8d7ad8;font-size:9px;text-transform:uppercase;letter-spacing:.12em}.composer-banner h2{margin:3px 0;font-size:19px}.composer-banner p{margin:0;color:#777;font-size:10px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:15px}.list{display:flex;flex-direction:column;gap:6px}.card{position:relative;overflow:hidden;border:1px solid #ffffff0b;border-radius:14px;background:#181815;cursor:pointer;transition:.16s}.card:hover{transform:translateY(-2px);border-color:#8b5cf655;box-shadow:0 16px 35px #0005}.list .card{display:flex;min-height:86px}.list .cover{width:62px;height:86px;flex:none}.list .info{padding:12px 13px}.cover{position:relative;aspect-ratio:.707;background:#0d0d0b;overflow:hidden}.cover img{width:100%;height:100%;object-fit:cover}.no-cover{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;color:#555;font-size:9px}.fav{position:absolute;right:8px;top:8px;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:#0008;color:#fbbf24}.card-actions{position:absolute;left:8px;top:8px;display:flex;gap:3px;opacity:0;transition:.12s}.card:hover .card-actions{opacity:1}.card-actions button{width:27px;height:27px;border:0;border-radius:8px;background:#0009;color:#bbb;display:grid;place-items:center;cursor:pointer}.card-actions button:hover{color:#fff;background:#000c}.info{padding:11px 12px}.info h3{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:600}.info p{margin:4px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#777;font-size:10px}.meta{display:flex;gap:9px;margin-top:8px;color:#555;font-size:9px}.tags{display:flex;gap:4px;overflow:hidden;margin-top:7px}.tags span{white-space:nowrap;background:#ffffff08;color:#777;border-radius:5px;padding:3px 5px;font-size:8px}.empty{min-height:45vh;border:1px dashed #ffffff12;border-radius:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#666;gap:5px}.empty h2{margin:7px 0 0;color:#ccc;font-size:15px}.empty p{margin:0 0 10px;font-size:10px}.drop,.modal-backdrop{position:absolute;inset:0;z-index:80}.drop{display:flex;flex-direction:column;align-items:center;justify-content:center;background:#25174dcc;backdrop-filter:blur(5px);border:3px dashed #a78bfa;color:#fff}.drop h2{margin:8px 0 0}.drop p{color:#bbb;font-size:11px}.modal-backdrop{display:grid;place-items:center;background:#0009;backdrop-filter:blur(5px)}.modal{width:min(520px,calc(100% - 28px));max-height:80vh;overflow:auto;padding:18px;border:1px solid #ffffff12;border-radius:18px;background:#1b1b18;box-shadow:0 30px 90px #0009}.small-modal{width:min(440px,calc(100% - 28px))}.modal-head{display:flex;justify-content:space-between;align-items:start;margin-bottom:18px}.modal-head b{display:block;font-size:14px}.modal-head span{display:block;color:#666;font-size:9px;margin-top:3px}.settings-list{display:flex;flex-direction:column;gap:8px;margin-bottom:13px}.setting{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid #ffffff0a;border-radius:11px;background:#ffffff03}.setting b{font-size:10px}.setting p{margin:4px 0 0;color:#666;font-size:9px;line-height:1.4}.row{display:flex;gap:6px}.end{justify-content:flex-end;margin-top:15px}.full{width:100%}.field{display:flex;flex-direction:column;gap:6px;color:#aaa;font-size:10px;margin-bottom:13px}.field input{height:38px;padding:0 10px;border:1px solid #ffffff10;border-radius:9px;background:#10100e;color:#fff;outline:0}.field small{color:#5f5f58}@keyframes spin{to{transform:rotate(360deg)}}
+	@media(max-width:900px){.sidebar{display:none}.brand{min-width:auto}.brand>div:last-child{display:none}.header{padding:10px}.actions span{display:none}.primary,.secondary{width:40px;padding:0}.main{padding:20px 14px}.grid{grid-template-columns:repeat(auto-fill,minmax(145px,1fr))}}
+	@media(max-width:600px){.toolbar{align-items:start}.toolbar-right select{display:none}.search{order:3;flex-basis:100%;max-width:none}.header{height:auto;flex-wrap:wrap}.actions{margin-left:0}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
