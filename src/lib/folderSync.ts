@@ -4,6 +4,7 @@ import { getPdfInfo } from './pdfUtils';
 
 const PDF = '.pdf';
 const METADATA_CONCURRENCY = 3;
+const FOLDER_CONCURRENCY = 2;
 
 export async function chooseAndAddFolder() {
 	if (!('showDirectoryPicker' in window)) throw new Error('Folder synchronization requires a browser with the File System Access API.');
@@ -24,11 +25,18 @@ export async function verifyFolderPermission(folder: FolderSource) {
 
 async function collectPdfs(handle: FileSystemDirectoryHandle, prefix = ''): Promise<Array<{ file: File; path: string }>> {
 	const result: Array<{ file: File; path: string }> = [];
+	const directories: Array<{ handle: FileSystemDirectoryHandle; path: string }> = [];
 	for await (const [name, entry] of handle.entries()) {
+		if (name.startsWith('.') || name === 'node_modules') continue;
 		const path = prefix ? `${prefix}/${name}` : name;
-		if (entry.kind === 'file' && name.toLowerCase().endsWith(PDF)) result.push({ file: await entry.getFile(), path });
-		else if (entry.kind === 'directory') result.push(...await collectPdfs(entry, path));
+		if (entry.kind === 'file' && name.toLowerCase().endsWith(PDF)) {
+			try { result.push({ file: await entry.getFile(), path }); } catch (error) { console.warn('Could not read PDF', path, error); }
+		} else if (entry.kind === 'directory') {
+			directories.push({ handle: entry, path });
+		}
 	}
+	const nested = await Promise.all(directories.map(({ handle: child, path }) => collectPdfs(child, path)));
+	for (const files of nested) result.push(...files);
 	return result;
 }
 
@@ -45,11 +53,11 @@ async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => P
 	async function worker() {
 		while (cursor < items.length) {
 			const index = cursor++;
-			results[index] = await fn(items[index]);
+			try { results[index] = await fn(items[index]); } catch (error) { console.warn('Folder item failed', error); }
 		}
 	}
 	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-	return results;
+	return results.filter((result): result is R => result !== undefined);
 }
 
 export async function syncFolder(folder: FolderSource) {
@@ -100,9 +108,16 @@ export async function syncFolder(folder: FolderSource) {
 }
 
 export async function syncAllFolders() {
-	const folders = await db.folders.toArray();
-	const results = [];
-	for (const folder of folders) if (folder.autoSync) results.push(await syncFolder(folder));
+	const folders = (await db.folders.toArray()).filter((folder) => folder.autoSync);
+	const results: Array<{ added: number; updated: number; removed: number }> = [];
+	let cursor = 0;
+	async function worker() {
+		while (cursor < folders.length) {
+			const folder = folders[cursor++];
+			try { results.push(await syncFolder(folder)); } catch (error) { console.warn('Folder sync failed', folder.name, error); }
+		}
+	}
+	await Promise.all(Array.from({ length: Math.min(FOLDER_CONCURRENCY, folders.length) }, worker));
 	return results;
 }
 
