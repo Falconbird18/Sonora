@@ -47,7 +47,7 @@ export function getComposerPortrait(name: string) {
 		'antonin': 'dvorak',
 		'sergei': 'rachmaninoff',
 		'nikolai': 'rimski',
-		'maurice': 'travel',
+		'maurice': 'ravel',
 		'gustav': 'mahler',
 		'igor': 'stravinsky',
 		'bela': 'bartok',
