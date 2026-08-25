@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sonora",
+  "version": "0.1.0",
+  "identifier": "com.falconbird18.sonora",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Sonora",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 760,
+        "minHeight": 560,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Music",
+    "shortDescription": "Sheet music library and score viewer",
+    "longDescription": "Sonora is a fast, offline-capable sheet music library and score viewer with annotations."
+  }
+}
