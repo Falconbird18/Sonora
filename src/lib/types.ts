@@ -15,6 +15,7 @@ export interface ScoreItem {
 	fileSize?: number;
 	fileModifiedAt?: number;
 }
+
 export interface FolderSource {
 	id: string;
 	name: string;
@@ -22,9 +23,17 @@ export interface FolderSource {
 	addedAt: number;
 	lastSyncedAt?: number;
 	autoSync: boolean;
+	collapsed?: boolean;
 }
+
+export interface LibraryPreferences {
+	view?: 'grid' | 'list';
+	sort?: 'recent' | 'title' | 'composer';
+	compact?: boolean;
+}
+
 export interface Point { x: number; y: number; pressure?: number; }
 export interface Stroke { id?: string; tool: 'pen' | 'highlighter'; kind?: 'freehand' | 'line' | 'arrow'; color: string; width: number; points: Point[]; }
-export interface SymbolStamp { id: string; symbol: string; label: string; x: number; y: number; fontSize: number; color: string; }
-export interface TextNote { id: string; text: string; x: number; y: number; fontSize: number; color: string; }
+export interface SymbolStamp { id: string; scoreId?: string; pageNum?: number; symbol: string; label: string; x: number; y: number; fontSize: number; color: string; }
+export interface TextNote { id: string; scoreId?: string; pageNum?: number; text: string; x: number; y: number; fontSize: number; color: string; }
 export interface AnnotationRecord { id: string; scoreId: string; pageNum: number; strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[]; }
