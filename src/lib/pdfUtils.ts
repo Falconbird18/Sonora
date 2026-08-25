@@ -13,10 +13,13 @@ class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
 		const key = `${begin}:${end}`;
 		if (this.pending.has(key)) return;
 		const request = this.blob.slice(begin, end).arrayBuffer().then((buffer) => {
-			if (!this.stopped) this.onDataRange(begin, new Uint8Array(buffer));
+			if (!this.stopped) {
+				this.onDataRange(begin, new Uint8Array(buffer));
+				this.onDataProgress(Math.min(end, this.blob.size), this.blob.size);
+			}
 		});
 		this.pending.set(key, request);
-		void request.catch((error) => this.onError(error)).finally(() => this.pending.delete(key));
+		void request.catch((error) => !this.stopped && this.onError(error)).finally(() => this.pending.delete(key));
 	}
 
 	abort() {
@@ -25,27 +28,48 @@ class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
 	}
 }
 
+const DIRECT_LOAD_LIMIT = 64 * 1024 * 1024;
+
+async function openWithData(blob: Blob) {
+	return pdfjsLib.getDocument({
+		data: new Uint8Array(await blob.arrayBuffer()),
+		isEvalSupported: false,
+		useWorkerFetch: false,
+		useSystemFonts: true
+	}).promise;
+}
+
 export async function openPdf(blob: Blob) {
+	if (blob.size <= DIRECT_LOAD_LIMIT) {
+		try {
+			const document = await openWithData(blob);
+			return { document, transport: null as BlobRangeTransport | null };
+		} catch (error) {
+			console.warn('Direct PDF loading failed; retrying with range loading', error);
+		}
+	}
+
 	const transport = new BlobRangeTransport(blob);
 	try {
 		const document = await pdfjsLib.getDocument({
 			range: transport,
-			rangeChunkSize: 1024 * 1024,
+			rangeChunkSize: 2 * 1024 * 1024,
 			disableRange: false,
 			disableStream: true,
-			disableAutoFetch: true,
+			disableAutoFetch: false,
 			isEvalSupported: false,
-			useWorkerFetch: false
+			useWorkerFetch: false,
+			useSystemFonts: true
 		}).promise;
 		return { document, transport };
 	} catch (error) {
 		transport.abort();
-		const document = await pdfjsLib.getDocument({
-			data: new Uint8Array(await blob.arrayBuffer()),
-			isEvalSupported: false,
-			useWorkerFetch: false
-		}).promise;
-		return { document, transport: null as BlobRangeTransport | null, fallback: error };
+		try {
+			const document = await openWithData(blob);
+			return { document, transport: null as BlobRangeTransport | null, fallback: error };
+		} catch (fallbackError) {
+			throw new AggregateError([error, fallbackError], 'Unable to open PDF');
+		}
 	}
 }
 
