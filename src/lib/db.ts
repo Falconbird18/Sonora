@@ -7,7 +7,7 @@ export class MusicDatabase extends Dexie {
 	folders!: Table<FolderSource, string>;
 
 	constructor() {
-		super('IMSPL_MusicViewer_DB');
+		super('Sonora_MusicViewer_DB');
 		this.version(1).stores({
 			scores: 'id, title, composer, addedAt',
 			annotations: 'id, scoreId, pageNum'
@@ -21,6 +21,11 @@ export class MusicDatabase extends Dexie {
 			scores: 'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt',
 			annotations: 'id, scoreId, pageNum',
 			folders: 'id, name, addedAt, lastSyncedAt'
+		});
+		this.version(4).stores({
+			scores: 'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt',
+			annotations: 'id, scoreId, pageNum',
+			folders: 'id, name, addedAt, lastSyncedAt, parentId'
 		});
 	}
 }
