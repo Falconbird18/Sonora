@@ -14,7 +14,7 @@
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2",
-    "@tsconfig/svelte": "^7.0.0",
+    "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.13.3",
     "prettier-plugin-svelte": "^3.2.2",
     "tailwindcss": "^4.3.3",
@@ -26,7 +26,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "dexie": "^4.4.5",
-    "lucide-svelte": "^1.0.1",
+    "lucide-svelte": "^1.0.0",
     "pdfjs-dist": "^6.2.108"
   }
 }
