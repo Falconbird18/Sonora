@@ -9,7 +9,7 @@
 		Columns2, Download, Eraser, Eye, EyeOff, Highlighter, Maximize2, Minimize2,
 		Minus, MousePointer2, Music2, PenTool, Printer, Redo2, Search, Settings2,
 		Type, Undo2, X, ZoomIn, ZoomOut
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
 	type Tool = 'move' | 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';

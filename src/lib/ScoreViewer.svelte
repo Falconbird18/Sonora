@@ -26,7 +26,7 @@
 		X,
 		ZoomIn,
 		ZoomOut
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
 	type Tool = 'move' | 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow';
 	type Fit = 'page' | 'width' | 'free';
