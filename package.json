@@ -24,7 +24,7 @@
     "vite": "^8.2.0"
   },
   "dependencies": {
-    "@lucide/svelte": "^0.468.0",
+    "@lucide/svelte": "^1.30.0",
     "@tauri-apps/api": "^2",
     "dexie": "^4.4.5",
     "pdfjs-dist": "^6.2.108"
