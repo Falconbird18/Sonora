@@ -38,14 +38,13 @@ const COMPOSER_PORTRAITS: Record<string, string> = {
 };
 
 const ALIASES: Record<string, string> = {
-  johannsebastian: 'bach', georgefrideric: 'handel', joseph: 'haydn', antonin: 'dvorak',
-  sergei: 'rachmaninoff', nikolai: 'rimski', maurice: 'ravel', gustav: 'mahler',
+  johannsebastian: 'bach', georgefrideric: 'handel', joseph: 'haydn', antonio: 'vivaldi',
+  antonin: 'dvorak', sergei: 'rachmaninoff', nikolai: 'rimski', maurice: 'ravel', gustav: 'mahler',
   igor: 'stravinsky', bela: 'bartok', jean: 'sibelius', ralph: 'vaughan', jsbach: 'bach',
   johannsebastianbach: 'bach', georgefriderichandel: 'handel', franzschubert: 'schubert',
   franzliszt: 'liszt', felixmendelssohn: 'mendelssohn', robertschumann: 'schumann',
   antonindvorak: 'dvorak', sergeirachmaninoff: 'rachmaninoff', nikolairimskykorsakov: 'rimski',
-  mauriceravel: 'ravel', gustavmahler: 'mahler', ralphvaughanwilliams: 'vaughan',
-  jeansibelius: 'sibelius'
+  mauriceravel: 'ravel', gustavmahler: 'mahler', ralphvaughanwilliams: 'vaughan', jeansibelius: 'sibelius'
 };
 
 function normalize(value: string) {
@@ -55,10 +54,16 @@ function normalize(value: string) {
 export function getComposerPortrait(name: string) {
   const normalized = normalize(name);
   if (!normalized) return '';
+
+  // Check the surname first. This makes a bare "Bach" resolve immediately,
+  // and also handles "Johann Sebastian Bach" and "Bach, Johann Sebastian".
+  const words = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  for (const word of [...words].reverse()) {
+    if (COMPOSER_PORTRAITS[word]) return COMPOSER_PORTRAITS[word];
+  }
+
   if (COMPOSER_PORTRAITS[normalized]) return COMPOSER_PORTRAITS[normalized];
   if (ALIASES[normalized]) return COMPOSER_PORTRAITS[ALIASES[normalized]];
-  const words = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-  for (const word of words) if (COMPOSER_PORTRAITS[word]) return COMPOSER_PORTRAITS[word];
   for (const [alias, key] of Object.entries(ALIASES)) if (normalized.includes(alias)) return COMPOSER_PORTRAITS[key];
   return '';
 }
