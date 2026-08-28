@@ -50,7 +50,7 @@ async function collectBrowserPdfs(
 	for await (const [name, entry] of handle.entries()) {
 		if (name.startsWith('.') || name === 'node_modules') continue;
 		const path = prefix ? `${prefix}/${name}` : name;
-		if (entry.kind === 'file' && name.toLowerCase().endsWith('.pdf')) {
+		if (entry.kind === 'file' && name.toLowerCase().ends_with('.pdf')) {
 			try {
 				result.push({ file: await entry.getFile(), path });
 			} catch (error) {
@@ -161,8 +161,16 @@ async function syncNativeFolder(folder: FolderSource) {
 	const results = await mapConcurrent(changed, METADATA_CONCURRENCY, async (file) => {
 		const id = stableId(file.relative_path);
 		const old = existingById.get(id);
-		const bytes = await invoke<number[]>('read_score_file', { path: file.path });
-		const blob = new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
+		const bytes = await invoke<number[] | Uint8Array | ArrayBuffer>('read_score_file', {
+			path: file.path
+		});
+		const buffer =
+			bytes instanceof ArrayBuffer
+				? new Uint8Array(bytes)
+				: bytes instanceof Uint8Array
+					? bytes
+					: new Uint8Array(bytes);
+		const blob = new Blob([buffer], { type: 'application/pdf' });
 		let info: { totalPages: number; thumbnailUrl: string } | undefined;
 		try {
 			info = await getPdfInfo(blob);
