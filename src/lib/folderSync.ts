@@ -50,7 +50,7 @@ async function collectBrowserPdfs(
 	for await (const [name, entry] of handle.entries()) {
 		if (name.startsWith('.') || name === 'node_modules') continue;
 		const path = prefix ? `${prefix}/${name}` : name;
-		if (entry.kind === 'file' && name.toLowerCase().ends_with('.pdf')) {
+		if (entry.kind === 'file' && name.toLowerCase().endsWith('.pdf')) {
 			try {
 				result.push({ file: await entry.getFile(), path });
 			} catch (error) {
