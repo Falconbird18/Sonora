@@ -1,190 +1,137 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import {
-		FolderSync,
+		FolderOpen,
 		FolderPlus,
-		Search,
-		Settings2,
 		Grid2X2,
 		List,
+		MoreHorizontal,
+		Music2,
+		RefreshCw,
+		Search,
+		Settings2,
 		Star,
 		Clock3,
-		Music2,
-		Trash2,
-		Tag,
 		X,
-		RefreshCw,
-		MoreHorizontal,
-		Check,
-		FileText
+		FileText,
+		Check
 	} from '@lucide/svelte';
 	import { db } from './db';
-	import {
-		chooseAndAddFolder,
-		syncAllFolders,
-		syncFolder,
-		removeFolder
-	} from './folderSync';
+	import { chooseAndAddFolder, syncAllFolders } from './folderSync';
 	import { getComposerPortrait } from './composerPortraits';
 	import type { FolderSource, ScoreItem } from './types';
 
-	let { onSelectScore }: { onSelectScore: (score: ScoreItem) => void } =
-		$props();
+	let { onSelectScore }: { onSelectScore: (score: ScoreItem) => void } = $props();
 	let scores = $state<ScoreItem[]>([]);
-	let folders = $state<FolderSource[]>([]);
+	let folder = $state<FolderSource | undefined>();
 	let search = $state('');
 	let filter = $state<'all' | 'favorites' | 'recent'>('all');
 	let composer = $state<string | null>(null);
-	let collection = $state<string | null>(null);
-	let tag = $state<string | null>(null);
 	let sort = $state<'recent' | 'title' | 'composer'>('recent');
 	let view = $state<'grid' | 'list'>('grid');
 	let settings = $state(false);
 	let metadata = $state<ScoreItem | null>(null);
 	let newTags = $state('');
-	let newCollection = $state('');
 	let syncing = $state(false);
-	let syncMessage = $state('');
-	let drag = $state(false);
-	let folderError = $state('');
+	let notice = $state('');
+	let error = $state('');
 	let timer: ReturnType<typeof setInterval> | undefined;
-	const folderSelection = $derived(
-		collection?.startsWith('__folder:') ? collection.slice(9) : null
-	);
 
 	async function refresh() {
-		scores = await db.scores.orderBy('addedAt').reverse().toArray();
-		folders = await db.folders.orderBy('addedAt').reverse().toArray();
+		[scores, folder] = await Promise.all([
+			db.scores.orderBy('addedAt').reverse().toArray(),
+			db.folders.get('library-root')
+		]);
 	}
+
 	async function sync() {
 		if (syncing) return;
 		syncing = true;
-		folderError = '';
+		error = '';
 		try {
 			const results = await syncAllFolders();
-			const added = results.reduce((n, r) => n + r.added + r.updated, 0);
-			const removed = results.reduce((n, r) => n + r.removed, 0);
-			syncMessage =
-				added || removed
-					? `${added} updated · ${removed} removed`
-					: 'Library is up to date';
+			const result = results[0];
+			notice = result
+				? result.added || result.updated || result.removed
+					? `${result.added + result.updated} updated · ${result.removed} removed`
+					: 'Library is up to date'
+				: 'Choose a score folder to begin';
 			await refresh();
 		} catch (e) {
-			folderError = e instanceof Error ? e.message : 'Could not sync folders';
+			error = e instanceof Error ? e.message : 'Could not sync the library';
 		} finally {
 			syncing = false;
-			setTimeout(() => (syncMessage = ''), 3000);
+			setTimeout(() => (notice = ''), 3000);
 		}
 	}
-	async function addFolder() {
-		folderError = '';
+
+	async function chooseFolder() {
+		error = '';
 		try {
 			await chooseAndAddFolder();
 			await refresh();
 		} catch (e) {
-			if ((e as DOMException)?.name !== 'AbortError')
-				folderError = e instanceof Error ? e.message : 'Could not add folder';
+			if ((e as DOMException)?.name !== 'AbortError') {
+				error = e instanceof Error ? e.message : 'Could not choose the score folder';
+			}
 		}
 	}
-	async function addFiles(files: File[]) {
-		const pdfs = files.filter(
-			(f) =>
-				f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
-		);
-		for (const file of pdfs) {
-			const id = `manual:${file.name}:${file.size}:${file.lastModified}`;
-			if (await db.scores.get(id)) continue;
-			let pages = 1;
-			let thumb: string | undefined;
-			try {
-				const { getPdfInfo } = await import('./pdfUtils');
-				const info = await getPdfInfo(file);
-				pages = info.totalPages;
-				thumb = info.thumbnailUrl;
-			} catch {}
-			await db.scores.put({
-				id,
-				title: file.name.replace(/\.pdf$/i, ''),
-				composer: 'Unknown Composer',
-				pdfBlob: file,
-				thumbnailUrl: thumb,
-				totalPages: pages,
-				addedAt: Date.now(),
-				favorite: false,
-				tags: [],
-				collection: 'Unsorted',
-				fileSize: file.size,
-				fileModifiedAt: file.lastModified
-			});
-		}
-		await refresh();
-	}
-	async function drop(e: DragEvent) {
-		e.preventDefault();
-		drag = false;
-		await addFiles(Array.from(e.dataTransfer?.files || []));
-	}
-	async function open(score: ScoreItem) {
+
+	async function openScore(score: ScoreItem) {
 		const next = { ...score, lastOpenedAt: Date.now() };
 		await db.scores.put(next);
-		scores = scores.map((s) => (s.id === score.id ? next : s));
+		scores = scores.map((item) => item.id === score.id ? next : item);
 		onSelectScore(next);
 	}
-	async function patch(score: ScoreItem, value: Partial<ScoreItem>) {
-		const next = { ...score, ...value };
+
+	async function toggleFavorite(score: ScoreItem, event: MouseEvent) {
+		event.stopPropagation();
+		const next = { ...score, favorite: !score.favorite };
 		await db.scores.put(next);
-		scores = scores.map((s) => (s.id === score.id ? next : s));
+		scores = scores.map((item) => item.id === score.id ? next : item);
 	}
-	async function favorite(score: ScoreItem, e: MouseEvent) {
-		e.stopPropagation();
-		await patch(score, { favorite: !score.favorite });
-	}
-	async function deleteScore(score: ScoreItem, e: MouseEvent) {
-		e.stopPropagation();
-		if (!confirm(`Remove “${score.title}” from Sonora?`)) return;
-		await db.scores.delete(score.id);
-		await db.annotations.where('scoreId').equals(score.id).delete();
-		await refresh();
-	}
-	function edit(score: ScoreItem, e: MouseEvent) {
-		e.stopPropagation();
+
+	function editMetadata(score: ScoreItem, event: MouseEvent) {
+		event.stopPropagation();
 		metadata = score;
-		newTags = (score.tags || []).join(', ');
-		newCollection = score.collection || '';
+		newTags = (score.tags ?? []).join(', ');
 	}
+
 	async function saveMetadata() {
 		if (!metadata) return;
-		await patch(metadata, {
-			tags: newTags
-				.split(',')
-				.map((x) => x.trim())
-				.filter(Boolean),
-			collection: newCollection.trim() || 'Unsorted'
-		});
+		const next = {
+			...metadata,
+			tags: newTags.split(',').map((tag) => tag.trim()).filter(Boolean)
+		};
+		await db.scores.put(next);
+		scores = scores.map((item) => item.id === next.id ? next : item);
 		metadata = null;
 	}
-	function initials(name: string) {
-		return name
-			.split(/\s+/)
-			.filter(Boolean)
-			.slice(0, 2)
-			.map((x) => x[0])
-			.join('')
-			.toUpperCase();
+
+	async function deleteScore(score: ScoreItem, event: MouseEvent) {
+		event.stopPropagation();
+		if (!confirm(`Remove “${score.title}” from Sonora?`)) return;
+		await db.transaction('rw', db.scores, db.annotations, async () => {
+			await db.scores.delete(score.id);
+			await db.annotations.where('scoreId').equals(score.id).delete();
+		});
+		await refresh();
 	}
-	function portrait(name: string) {
-		return getComposerPortrait(name);
+
+	function initials(name: string) {
+		return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
 	}
 
 	onMount(async () => {
 		await refresh();
 		const saved = localStorage.getItem('sonora-library-settings');
-		if (saved)
+		if (saved) {
 			try {
-				const s = JSON.parse(saved);
-				view = s.view || 'grid';
-				sort = s.sort || 'recent';
-			} catch {}
+				const value = JSON.parse(saved);
+				view = value.view === 'list' ? 'list' : 'grid';
+				sort = ['recent', 'title', 'composer'].includes(value.sort) ? value.sort : 'recent';
+			} catch { /* Ignore old or invalid settings. */ }
+		}
 		await sync();
 		timer = setInterval(sync, 30000);
 		const wake = () => void sync();
@@ -194,1092 +141,192 @@
 			window.removeEventListener('focus', wake);
 		};
 	});
-	const composers = $derived.by(() => {
-		const m: Record<string, number> = {};
-		for (const s of scores)
-			m[s.composer || 'Unknown Composer'] =
-				(m[s.composer || 'Unknown Composer'] || 0) + 1;
-		return m;
+
+	$effect(() => {
+		localStorage.setItem('sonora-library-settings', JSON.stringify({ view, sort }));
 	});
-	const collections = $derived.by(() =>
-		Array.from(new Set(scores.map((s) => s.collection || 'Unsorted'))).sort()
-	);
-	const tags = $derived.by(() =>
-		Array.from(new Set(scores.flatMap((s) => s.tags || []))).sort((a, b) =>
-			a.localeCompare(b)
-		)
-	);
+
+	const composers = $derived.by(() => {
+		const counts: Record<string, number> = {};
+		for (const score of scores) {
+			const name = score.composer || 'Unknown Composer';
+			counts[name] = (counts[name] ?? 0) + 1;
+		}
+		return counts;
+	});
+
 	const filtered = $derived(
 		scores
-			.filter((s) => !composer || s.composer === composer)
-			.filter((s) => !folderSelection || s.sourceFolderId === folderSelection)
-			.filter(
-				(s) =>
-					!collection ||
-					folderSelection ||
-					(s.collection || 'Unsorted') === collection
-			)
-			.filter((s) => !tag || (s.tags || []).includes(tag))
-			.filter(
-				(s) =>
-					filter === 'all' ||
-					(filter === 'favorites' ? !!s.favorite : !!s.lastOpenedAt)
-			)
-			.filter((s) => {
-				const q = search.toLowerCase().trim();
-				return (
-					!q ||
-					s.title.toLowerCase().includes(q) ||
-					s.composer.toLowerCase().includes(q) ||
-					(s.tags || []).some((t) => t.toLowerCase().includes(q)) ||
-					(s.collection || '').toLowerCase().includes(q)
-				);
+			.filter((score) => !composer || score.composer === composer)
+			.filter((score) => filter === 'all' || (filter === 'favorites' ? !!score.favorite : !!score.lastOpenedAt))
+			.filter((score) => {
+				const query = search.trim().toLowerCase();
+				return !query || score.title.toLowerCase().includes(query) || score.composer.toLowerCase().includes(query) || (score.tags ?? []).some((tag) => tag.toLowerCase().includes(query));
 			})
-			.sort((a, b) =>
-				sort === 'title'
-					? a.title.localeCompare(b.title)
-					: sort === 'composer'
-						? a.composer.localeCompare(b.composer)
-						: (b.lastOpenedAt || b.addedAt) - (a.lastOpenedAt || a.addedAt)
-			)
+			.sort((a, b) => sort === 'title'
+				? a.title.localeCompare(b.title)
+				: sort === 'composer'
+					? a.composer.localeCompare(b.composer) || a.title.localeCompare(b.title)
+					: (b.lastOpenedAt || b.addedAt) - (a.lastOpenedAt || a.addedAt))
 	);
+
+	const currentTitle = $derived(composer || filter === 'favorites' ? 'Favorites' : filter === 'recent' ? 'Recently opened' : 'All scores');
 </script>
 
-<div
-	class="library"
-	ondragover={(e) => {
-		e.preventDefault();
-		drag = true;
-	}}
-	ondragleave={() => (drag = false)}
-	ondrop={drop}>
+<div class="library">
 	<header class="header">
-		<div class="brand">
-			<div class="brand-mark"><Music2 size={20} /></div>
-			<div><b>Sonora</b><span>Score Library</span></div>
-		</div>
-		<div class="search">
-			<Search size={17} /><input
-				bind:value={search}
-				placeholder="Search scores, composers, tags…" /><button
-				class:hidden={!search}
-				onclick={() => (search = '')}><X size={15} /></button>
-		</div>
+		<div class="brand"><div class="brand-mark"><Music2 size={20} /></div><strong>Sonora</strong></div>
+		<div class="search"><Search size={17} /><input bind:value={search} placeholder="Search your scores" aria-label="Search scores" />{#if search}<button onclick={() => (search = '')} aria-label="Clear search"><X size={15} /></button>{/if}</div>
 		<div class="actions">
-			<button
-				class="secondary"
-				onclick={addFolder}
-				title="Choose a folder and keep it synchronized"
-				><FolderSync size={17} /><span>Sync folder</span></button
-			><label class="primary"
-				><FolderPlus size={17} /><span>Add PDFs</span><input
-					type="file"
-					accept=".pdf,application/pdf"
-					multiple
-					onchange={e=>addFiles(Array.from((e.currentTarget as HTMLInputElement).files||[]))} /></label
-			><button
-				class="icon"
-				onclick={() => (settings = !settings)}
-				title="Library settings"><Settings2 size={18} /></button>
+			<button class="folder-button" onclick={chooseFolder} title="Choose the folder containing your scores"><FolderPlus size={17} /><span>{folder ? 'Change folder' : 'Choose folder'}</span></button>
+			<button class="icon-button" class:spinning={syncing} onclick={sync} title="Refresh library" aria-label="Refresh library"><RefreshCw size={18} /></button>
+			<button class="icon-button" class:active={settings} onclick={() => (settings = !settings)} title="Library settings" aria-label="Library settings"><Settings2 size={18} /></button>
 		</div>
 	</header>
-	{#if folderError}<div class="notice error">
-			<span>{folderError}</span><button onclick={() => (folderError = '')}
-				><X size={15} /></button>
-		</div>{/if}{#if syncMessage}<div class="notice">
-			<RefreshCw size={14} />{syncMessage}
-		</div>{/if}
+
+	{#if error}<div class="notice error"><span>{error}</span><button onclick={() => (error = '')} aria-label="Dismiss"><X size={15} /></button></div>{/if}
+	{#if notice}<div class="notice"><Check size={15} />{notice}</div>{/if}
+
 	<div class="body">
 		<aside class="sidebar">
-			<section>
-				<label>Library</label><button
-					class:active={!composer && !collection && !tag && filter === 'all'}
-					onclick={() => {
-						composer = null;
-						collection = null;
-						tag = null;
-						filter = 'all';
-					}}><Grid2X2 size={16} />All scores<span>{scores.length}</span></button
-				><button
-					class:active={filter === 'recent'}
-					onclick={() => {
-						filter = 'recent';
-						composer = collection = tag = null;
-					}}><Clock3 size={16} />Recently opened</button
-				><button
-					class:active={filter === 'favorites'}
-					onclick={() => {
-						filter = 'favorites';
-						composer = collection = tag = null;
-					}}><Star size={16} />Favorites</button>
-			</section>
-			<section>
-				<label>Synced folders</label>{#if folders.length === 0}<p class="muted">
-						Choose a folder above. Sonora will keep it synchronized.
-					</p>{:else}{#each folders as folder}<div class="folder-row">
-							<button
-								class:active={folderSelection === folder.id}
-								onclick={() => {
-									collection = `__folder:${folder.id}`;
-									composer = tag = null;
-									filter = 'all';
-								}}
-								><FolderSync size={15} /><span title={folder.name}
-									>{folder.name}</span
-								></button
-							><button
-								class="tiny"
-								title="Sync now"
-								onclick={() => void syncFolder(folder)}
-								><RefreshCw size={13} /></button>
-						</div>{/each}{/if}
-			</section>
-			<section>
-				<label>Composers</label>{#each Object.entries(composers)
-					.sort((a, b) => a[0].localeCompare(b[0]))
-					.slice(0, 20) as [name, count]}<button
-						class:active={composer === name}
-						onclick={() => {
-							composer = name;
-							collection = tag = null;
-							filter = 'all';
-						}}
-						><div class="portrait small">
-							{#if portrait(name)}<img
-									src={portrait(name)}
-									alt=""
-									loading="lazy"
-									onerror={(e)=>((e.currentTarget as HTMLImageElement).style.display='none')} />{/if}<span
-								>{initials(name)}</span>
-						</div>
-						<span class="truncate">{name}</span><em>{count}</em></button
-					>{/each}
-			</section>
-			{#if collections.length > 0}<section>
-					<label>Collections</label>{#each collections as item}<button
-							class:active={collection === item}
-							onclick={() => {
-								collection = item;
-								composer = tag = null;
-								filter = 'all';
-							}}><Tag size={14} /><span>{item}</span></button
-						>{/each}
-				</section>{/if}{#if tags.length > 0}<section>
-					<label>Tags</label>
-					<div class="tag-cloud">
-						{#each tags as item}<button
-								class:active={tag === item}
-								onclick={() => {
-									tag = item;
-									composer = collection = null;
-									filter = 'all';
-								}}>{item}</button
-							>{/each}
-					</div>
-				</section>{/if}
+			<nav aria-label="Library filters">
+				<button class:active={filter === 'all' && !composer} onclick={() => { filter = 'all'; composer = null; }}><Grid2X2 size={16} /><span>All scores</span><b>{scores.length}</b></button>
+				<button class:active={filter === 'recent'} onclick={() => { filter = 'recent'; composer = null; }}><Clock3 size={16} /><span>Recently opened</span></button>
+				<button class:active={filter === 'favorites'} onclick={() => { filter = 'favorites'; composer = null; }}><Star size={16} /><span>Favorites</span></button>
+			</nav>
+
+			{#if folder}
+				<div class="folder-summary"><FolderOpen size={16} /><div><strong>{folder.name}</strong><span>{scores.length} {scores.length === 1 ? 'score' : 'scores'}</span></div></div>
+			{/if}
+
+			{#if Object.keys(composers).length}
+				<section><h2>Composers</h2>{#each Object.entries(composers).sort((a, b) => a[0].localeCompare(b[0])).slice(0, 16) as [name, count]}
+					<button class:active={composer === name} onclick={() => { composer = name; filter = 'all'; }}>
+						<div class="portrait">{#if getComposerPortrait(name)}<img src={getComposerPortrait(name)} alt="" loading="lazy" />{/if}<span>{initials(name)}</span></div><span>{name}</span><b>{count}</b>
+					</button>
+				{/each}</section>
+			{/if}
 		</aside>
+
 		<main class="main">
 			<div class="toolbar">
-				<div>
-					<p>
-						{composer
-							? 'Composer'
-							: folderSelection
-								? 'Synced folder'
-								: collection
-									? 'Collection'
-									: filter === 'favorites'
-										? 'Favorites'
-										: filter === 'recent'
-											? 'Recent'
-											: 'Library'}
-					</p>
-					<h1>
-						{composer ||
-							(folderSelection
-								? folders.find((f) => f.id === folderSelection)?.name ||
-									'Folder'
-								: collection ||
-									(filter === 'favorites'
-										? 'Favorites'
-										: filter === 'recent'
-											? 'Recently opened'
-											: 'All scores'))}
-					</h1>
-					<small
-						>{filtered.length}
-						{filtered.length === 1 ? 'score' : 'scores'}</small>
-				</div>
-				<div class="toolbar-right">
-					<select bind:value={sort}
-						><option value="recent">Recently used</option><option value="title"
-							>Title</option
-						><option value="composer">Composer</option></select>
-					<div class="seg">
-						<button
-							class:active={view === 'grid'}
-							onclick={() => (view = 'grid')}
-							title="Grid view"><Grid2X2 size={16} /></button
-						><button
-							class:active={view === 'list'}
-							onclick={() => (view = 'list')}
-							title="List view"><List size={16} /></button>
-					</div>
-					<button
-						class="sync"
-						class:spinning={syncing}
-						onclick={sync}
-						title="Sync all folders"><RefreshCw size={16} /></button>
+				<div><h1>{currentTitle}</h1><span>{filtered.length} {filtered.length === 1 ? 'score' : 'scores'}</span></div>
+				<div class="toolbar-actions">
+					<select bind:value={sort} aria-label="Sort scores"><option value="recent">Recently used</option><option value="title">Title</option><option value="composer">Composer</option></select>
+					<div class="seg"><button class:active={view === 'grid'} onclick={() => (view = 'grid')} aria-label="Grid view"><Grid2X2 size={16} /></button><button class:active={view === 'list'} onclick={() => (view = 'list')} aria-label="List view"><List size={16} /></button></div>
 				</div>
 			</div>
-			{#if composer}<div class="composer-banner">
-					<div class="portrait large">
-						{#if portrait(composer)}<img
-								src={portrait(composer)}
-								alt={composer} />{/if}<span>{initials(composer)}</span>
-					</div>
-					<div>
-						<label>Composer</label>
-						<h2>{composer}</h2>
-						<p>{composers[composer] || 0} works in your library</p>
-					</div>
-				</div>{/if}{#if filtered.length === 0}<div class="empty">
-					<FolderPlus size={28} />
-					<h2>No scores here</h2>
-					<p>Add PDFs, or choose a folder to keep synchronized.</p>
-					<button class="primary" onclick={addFolder}
-						><FolderSync size={16} />Choose a synced folder</button>
-				</div>{:else}<div
-					class:grid={view === 'grid'}
-					class:list={view === 'list'}>
-					{#each filtered as score (score.id)}<article
-							class="card"
-							onclick={() => open(score)}
-							onkeydown={(e) => e.key === 'Enter' && open(score)}
-							role="button"
-							tabindex="0">
-							<div class="cover">
-								{#if score.thumbnailUrl}<img
-										src={score.thumbnailUrl}
-										alt=""
-										loading="lazy" />{:else}<div class="no-cover">
-										<FileText size={24} /><span>{score.totalPages} pages</span>
-									</div>{/if}{#if score.favorite}<span class="fav"
-										><Star size={13} fill="currentColor" /></span
-									>{/if}
-								<div class="card-actions">
-									<button title="Favorite" onclick={(e) => favorite(score, e)}
-										><Star
-											size={14}
-											fill={score.favorite ? 'currentColor' : 'none'} /></button
-									><button
-										title="Edit tags and collection"
-										onclick={(e) => edit(score, e)}
-										><MoreHorizontal size={14} /></button
-									><button title="Delete" onclick={(e) => deleteScore(score, e)}
-										><Trash2 size={14} /></button>
-								</div>
+
+			{#if !folder && !scores.length}
+				<div class="empty"><div class="empty-icon"><FolderOpen size={30} /></div><h2>Your score library</h2><p>Choose one folder where Sonora will keep all of your scores.</p><button class="primary" onclick={chooseFolder}><FolderPlus size={17} />Choose score folder</button></div>
+			{:else if filtered.length === 0}
+				<div class="empty"><div class="empty-icon"><Search size={28} /></div><h2>No scores found</h2><p>Try another search or filter.</p></div>
+			{:else}
+				<div class:score-grid={view === 'grid'} class:score-list={view === 'list'}>
+					{#each filtered as score (score.id)}
+						<article class="card" role="button" tabindex="0" onclick={() => openScore(score)} onkeydown={(event) => event.key === 'Enter' && openScore(score)}>
+							<div class="cover">{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" loading="lazy" />{:else}<div class="no-cover"><FileText size={24} /><span>{score.totalPages} pages</span></div>{/if}
+								<button class="favorite" class:marked={score.favorite} onclick={(event) => toggleFavorite(score, event)} aria-label="Favorite"><Star size={15} fill={score.favorite ? 'currentColor' : 'none'} /></button>
+								<div class="card-menu"><button onclick={(event) => editMetadata(score, event)} aria-label="Edit score"><MoreHorizontal size={16} /></button><button onclick={(event) => deleteScore(score, event)} aria-label="Remove score"><X size={16} /></button></div>
 							</div>
-							<div class="info">
-								<h3 title={score.title}>{score.title}</h3>
-								<p>{score.composer}</p>
-								<div class="meta">
-									<span
-										>{score.totalPages}
-										{score.totalPages === 1 ? 'page' : 'pages'}</span
-									>{#if score.collection}<span>{score.collection}</span>{/if}
-								</div>
-								{#if score.tags?.length}<div class="tags">
-										{#each score.tags.slice(0, 3) as item}<span>{item}</span
-											>{/each}{#if score.tags.length > 3}<span
-												>+{score.tags.length - 3}</span
-											>{/if}
-									</div>{/if}
-							</div>
-						</article>{/each}
-				</div>{/if}
+							<div class="info"><h3 title={score.title}>{score.title}</h3><p>{score.composer}</p>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0, 2) as tag}<span>{tag}</span>{/each}</div>{/if}</div>
+						</article>
+					{/each}
+				</div>
+			{/if}
 		</main>
 	</div>
-	{#if drag}<div class="drop">
-			<FolderPlus size={30} />
-			<h2>Drop scores here</h2>
-			<p>PDFs will be added to your library.</p>
-		</div>{/if}
-	{#if settings}<div
-			class="modal-backdrop"
-			onclick={(e) => e.target === e.currentTarget && (settings = false)}>
-			<section class="modal">
-				<div class="modal-head">
-					<div>
-						<b>Library settings</b><span
-							>Manage synchronized folders and appearance</span>
-					</div>
-					<button class="icon" onclick={() => (settings = false)}
-						><X size={17} /></button>
-				</div>
-				<div class="settings-list">
-					<div class="setting">
-						<div>
-							<b>Automatic synchronization</b>
-							<p>
-								Synced folders are checked when the library opens, regains
-								focus, and every 30 seconds while Sonora is open.
-							</p>
-						</div>
-						<RefreshCw size={17} />
-					</div>
-					{#each folders as folder}<div class="setting">
-							<div>
-								<b>{folder.name}</b>
-								<p>
-									{folder.lastSyncedAt
-										? `Last synced ${new Date(folder.lastSyncedAt).toLocaleString()}`
-										: 'Not synced yet'}
-								</p>
-							</div>
-							<div class="row">
-								<button
-									class="secondary"
-									onclick={() => void syncFolder(folder)}>Sync</button
-								><button
-									class="danger"
-									onclick={async () => {
-										await removeFolder(folder, false);
-										await refresh();
-									}}>Remove</button>
-							</div>
-						</div>{/each}
-				</div>
-				<button class="primary full" onclick={addFolder}
-					><FolderSync size={16} />Add synchronized folder</button>
-			</section>
-		</div>{/if}
-	{#if metadata}<div
-			class="modal-backdrop"
-			onclick={(e) => e.target === e.currentTarget && (metadata = null)}>
-			<section class="modal small-modal">
-				<div class="modal-head">
-					<div><b>Organize score</b><span>{metadata.title}</span></div>
-					<button class="icon" onclick={() => (metadata = null)}
-						><X size={17} /></button>
-				</div>
-				<label class="field"
-					>Collection<input
-						bind:value={newCollection}
-						placeholder="e.g. Concert, Practice, Repertoire" /></label
-				><label class="field"
-					>Tags<input
-						bind:value={newTags}
-						placeholder="romantic, violin, concerto" /><small
-						>Separate tags with commas.</small
-					></label>
-				<div class="row end">
-					<button class="secondary" onclick={() => (metadata = null)}
-						>Cancel</button
-					><button class="primary" onclick={saveMetadata}
-						><Check size={16} />Save</button>
-				</div>
-			</section>
-		</div>{/if}
+
+	{#if metadata}
+		<div class="dialog-backdrop" role="presentation" onclick={(event) => event.currentTarget === event.target && (metadata = null)}>
+			<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="metadata-title">
+				<header><div><h2 id="metadata-title">Edit score</h2><p>{metadata.title}</p></div><button class="icon-button" onclick={() => (metadata = null)} aria-label="Close"><X size={18} /></button></header>
+				<label>Tags<input bind:value={newTags} placeholder="Concert, piano, practice" /></label>
+				<footer><button onclick={() => (metadata = null)}>Cancel</button><button class="primary" onclick={saveMetadata}>Save</button></footer>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <style>
-	.library {
-		height: 100%;
-		display: flex;
-		flex-direction: column;
-		background: #11110f;
-		color: #f4f4ef;
-		overflow: hidden;
-		font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-	}
-	.header {
-		height: 72px;
-		flex: none;
-		display: flex;
-		align-items: center;
-		gap: 16px;
-		padding: 12px 22px;
-		border-bottom: 1px solid #ffffff10;
-		background: #171714f5;
-		backdrop-filter: blur(18px);
-	}
-	.brand {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		min-width: 190px;
-	}
-	.brand-mark {
-		width: 40px;
-		height: 40px;
-		border-radius: 13px;
-		display: grid;
-		place-items: center;
-		background: linear-gradient(135deg, #7c3aed, #4f46e5);
-		box-shadow: 0 8px 25px #0005;
-	}
-	.brand b {
-		display: block;
-		font-size: 16px;
-	}
-	.brand span {
-		display: block;
-		color: #77776f;
-		font-size: 10px;
-		margin-top: 2px;
-	}
-	.search {
-		height: 42px;
-		max-width: 620px;
-		flex: 1;
-		display: flex;
-		align-items: center;
-		gap: 9px;
-		padding: 0 12px;
-		border: 1px solid #ffffff10;
-		border-radius: 13px;
-		background: #0d0d0b;
-	}
-	.search input {
-		flex: 1;
-		min-width: 0;
-		border: 0;
-		outline: 0;
-		background: none;
-		color: #fff;
-		font-size: 12px;
-	}
-	.search button {
-		border: 0;
-		background: none;
-		color: #777;
-		display: grid;
-		place-items: center;
-	}
-	.search button.hidden {
-		display: none;
-	}
-	.actions {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		margin-left: auto;
-	}
-	.primary,
-	.secondary,
-	.icon,
-	.danger,
-	.sync {
-		border: 1px solid transparent;
-		border-radius: 11px;
-		height: 40px;
-		padding: 0 12px;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 7px;
-		cursor: pointer;
-		font-size: 11px;
-	}
-	.primary {
-		background: #6d28d9;
-		color: #fff;
-	}
-	.primary:hover {
-		background: #7c3aed;
-	}
-	.secondary {
-		background: #ffffff08;
-		border-color: #ffffff0d;
-		color: #bbb;
-	}
-	.secondary:hover,
-	.icon:hover {
-		background: #ffffff0d;
-		color: #fff;
-	}
-	.icon {
-		width: 40px;
-		padding: 0;
-		background: transparent;
-		color: #aaa;
-	}
-	.danger {
-		background: #7f1d1d22;
-		color: #fca5a5;
-	}
-	.body {
-		display: flex;
-		min-height: 0;
-		flex: 1;
-	}
-	.sidebar {
-		width: 255px;
-		flex: none;
-		padding: 18px 12px;
-		border-right: 1px solid #ffffff0c;
-		background: #141411;
-		overflow: auto;
-	}
-	.sidebar section {
-		margin-bottom: 22px;
-	}
-	.sidebar label {
-		display: block;
-		padding: 0 10px 7px;
-		color: #66665f;
-		text-transform: uppercase;
-		letter-spacing: 0.13em;
-		font-size: 9px;
-	}
-	.sidebar section > button,
-	.folder-row > button:first-child {
-		width: 100%;
-		height: 36px;
-		border: 0;
-		border-radius: 9px;
-		background: transparent;
-		color: #999890;
-		display: flex;
-		align-items: center;
-		gap: 9px;
-		padding: 0 10px;
-		text-align: left;
-		cursor: pointer;
-		font-size: 11px;
-	}
-	.sidebar section > button:hover,
-	.sidebar section > button.active,
-	.folder-row > button:first-child.active {
-		background: #ffffff08;
-		color: #fff;
-	}
-	.sidebar section > button span:nth-last-child(1),
-	.sidebar section > button em {
-		margin-left: auto;
-		color: #55554e;
-		font-style: normal;
-		font-size: 9px;
-	}
-	.folder-row {
-		display: flex;
-		gap: 2px;
-	}
-	.folder-row .tiny {
-		width: 30px !important;
-		flex: none !important;
-		justify-content: center !important;
-		padding: 0 !important;
-	}
-	.muted {
-		padding: 0 10px;
-		color: #5e5e58;
-		font-size: 10px;
-		line-height: 1.5;
-	}
-	.portrait {
-		position: relative;
-		overflow: hidden;
-		border-radius: 50%;
-		background: #292925;
-		display: grid;
-		place-items: center;
-		color: #777;
-		font-size: 9px;
-		font-weight: 700;
-	}
-	.portrait.small {
-		width: 25px;
-		height: 25px;
-		flex: none;
-	}
-	.portrait.large {
-		width: 72px;
-		height: 72px;
-		flex: none;
-		font-size: 15px;
-	}
-	.portrait img {
-		position: absolute;
-		inset: 0;
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-	}
-	.portrait span {
-		position: relative;
-		z-index: 0;
-	}
-	.sidebar .tag-cloud {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 5px;
-		padding: 0 8px;
-	}
-	.tag-cloud button {
-		border: 1px solid #ffffff0d;
-		background: #ffffff05;
-		color: #888;
-		border-radius: 8px;
-		padding: 5px 7px;
-		font-size: 9px;
-		cursor: pointer;
-	}
-	.tag-cloud button.active,
-	.tag-cloud button:hover {
-		color: #fff;
-		background: #ffffff0d;
-	}
-	.main {
-		flex: 1;
-		min-width: 0;
-		overflow: auto;
-		padding: 26px clamp(16px, 3vw, 42px);
-		background: radial-gradient(circle at 50% 0, #25251f, #11110f 52%);
-	}
-	.toolbar {
-		display: flex;
-		justify-content: space-between;
-		align-items: end;
-		gap: 15px;
-		margin-bottom: 24px;
-	}
-	.toolbar p {
-		margin: 0 0 3px;
-		color: #9b7bff;
-		font-size: 9px;
-		text-transform: uppercase;
-		letter-spacing: 0.14em;
-	}
-	.toolbar h1 {
-		margin: 0;
-		font-size: 25px;
-		letter-spacing: -0.02em;
-	}
-	.toolbar small {
-		color: #66665f;
-	}
-	.toolbar-right {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
-	.toolbar select {
-		height: 36px;
-		background: #181815;
-		border: 1px solid #ffffff0d;
-		color: #aaa;
-		border-radius: 9px;
-		padding: 0 9px;
-		font-size: 10px;
-	}
-	.seg {
-		display: flex;
-		padding: 3px;
-		background: #181815;
-		border: 1px solid #ffffff0c;
-		border-radius: 10px;
-	}
-	.seg button {
-		width: 31px;
-		height: 29px;
-		border: 0;
-		border-radius: 7px;
-		background: transparent;
-		color: #666;
-		display: grid;
-		place-items: center;
-		cursor: pointer;
-	}
-	.seg button.active {
-		background: #ffffff0d;
-		color: #fff;
-	}
-	.sync {
-		width: 36px;
-		padding: 0;
-		background: #ffffff06;
-		color: #aaa;
-	}
-	.spinning svg {
-		animation: spin 0.8s linear infinite;
-	}
-	.composer-banner {
-		display: flex;
-		align-items: center;
-		gap: 15px;
-		margin-bottom: 22px;
-		padding: 15px;
-		border: 1px solid #ffffff0d;
-		border-radius: 17px;
-		background: #ffffff04;
-	}
-	.composer-banner label {
-		color: #8d7ad8;
-		font-size: 9px;
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-	}
-	.composer-banner h2 {
-		margin: 3px 0;
-		font-size: 19px;
-	}
-	.composer-banner p {
-		margin: 0;
-		color: #777;
-		font-size: 10px;
-	}
-	.grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-		gap: 15px;
-	}
-	.list {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-	.card {
-		position: relative;
-		overflow: hidden;
-		border: 1px solid #ffffff0b;
-		border-radius: 14px;
-		background: #181815;
-		cursor: pointer;
-		transition: 0.16s;
-	}
-	.card:hover {
-		transform: translateY(-2px);
-		border-color: #8b5cf655;
-		box-shadow: 0 16px 35px #0005;
-	}
-	.list .card {
-		display: flex;
-		min-height: 86px;
-	}
-	.list .cover {
-		width: 62px;
-		height: 86px;
-		flex: none;
-	}
-	.list .info {
-		padding: 12px 13px;
-	}
-	.cover {
-		position: relative;
-		aspect-ratio: 0.707;
-		background: #0d0d0b;
-		overflow: hidden;
-	}
-	.cover img {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-	}
-	.no-cover {
-		height: 100%;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 7px;
-		color: #555;
-		font-size: 9px;
-	}
-	.fav {
-		position: absolute;
-		right: 8px;
-		top: 8px;
-		width: 26px;
-		height: 26px;
-		border-radius: 8px;
-		display: grid;
-		place-items: center;
-		background: #0008;
-		color: #fbbf24;
-	}
-	.card-actions {
-		position: absolute;
-		left: 8px;
-		top: 8px;
-		display: flex;
-		gap: 3px;
-		opacity: 0;
-		transition: 0.12s;
-	}
-	.card:hover .card-actions {
-		opacity: 1;
-	}
-	.card-actions button {
-		width: 27px;
-		height: 27px;
-		border: 0;
-		border-radius: 8px;
-		background: #0009;
-		color: #bbb;
-		display: grid;
-		place-items: center;
-		cursor: pointer;
-	}
-	.card-actions button:hover {
-		color: #fff;
-		background: #000c;
-	}
-	.info {
-		padding: 11px 12px;
-	}
-	.info h3 {
-		margin: 0;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		font-size: 11px;
-		font-weight: 600;
-	}
-	.info p {
-		margin: 4px 0 0;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		color: #777;
-		font-size: 10px;
-	}
-	.meta {
-		display: flex;
-		gap: 9px;
-		margin-top: 8px;
-		color: #555;
-		font-size: 9px;
-	}
-	.tags {
-		display: flex;
-		gap: 4px;
-		overflow: hidden;
-		margin-top: 7px;
-	}
-	.tags span {
-		white-space: nowrap;
-		background: #ffffff08;
-		color: #777;
-		border-radius: 5px;
-		padding: 3px 5px;
-		font-size: 8px;
-	}
-	.empty {
-		min-height: 45vh;
-		border: 1px dashed #ffffff12;
-		border-radius: 20px;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		text-align: center;
-		color: #666;
-		gap: 5px;
-	}
-	.empty h2 {
-		margin: 7px 0 0;
-		color: #ccc;
-		font-size: 15px;
-	}
-	.empty p {
-		margin: 0 0 10px;
-		font-size: 10px;
-	}
-	.drop {
-		position: absolute;
-		inset: 0;
-		z-index: 80;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		background: #25174dcc;
-		backdrop-filter: blur(5px);
-		border: 3px dashed #a78bfa;
-		color: #fff;
-	}
-	.drop h2 {
-		margin: 8px 0 0;
-	}
-	.drop p {
-		color: #bbb;
-		font-size: 11px;
-	}
-	.modal-backdrop {
-		position: absolute;
-		inset: 0;
-		z-index: 80;
-		display: grid;
-		place-items: center;
-		background: #0009;
-		backdrop-filter: blur(5px);
-	}
-	.modal {
-		width: min(520px, calc(100% - 28px));
-		max-height: 80vh;
-		overflow: auto;
-		padding: 18px;
-		border: 1px solid #ffffff12;
-		border-radius: 18px;
-		background: #1b1b18;
-		box-shadow: 0 30px 90px #0009;
-	}
-	.small-modal {
-		width: min(440px, calc(100% - 28px));
-	}
-	.modal-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: start;
-		margin-bottom: 18px;
-	}
-	.modal-head b {
-		display: block;
-		font-size: 14px;
-	}
-	.modal-head span {
-		display: block;
-		color: #666;
-		font-size: 9px;
-		margin-top: 3px;
-	}
-	.settings-list {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-bottom: 13px;
-	}
-	.setting {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		padding: 12px;
-		border: 1px solid #ffffff0a;
-		border-radius: 11px;
-		background: #ffffff03;
-	}
-	.setting b {
-		font-size: 10px;
-	}
-	.setting p {
-		margin: 4px 0 0;
-		color: #666;
-		font-size: 9px;
-		line-height: 1.4;
-	}
-	.row {
-		display: flex;
-		gap: 6px;
-	}
-	.end {
-		justify-content: flex-end;
-		margin-top: 15px;
-	}
-	.full {
-		width: 100%;
-	}
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		color: #aaa;
-		font-size: 10px;
-		margin-bottom: 13px;
-	}
-	.field input {
-		height: 38px;
-		padding: 0 10px;
-		border: 1px solid #ffffff10;
-		border-radius: 9px;
-		background: #10100e;
-		color: #fff;
-		outline: 0;
-	}
-	.field small {
-		color: #5f5f58;
-	}
-	.notice {
-		height: 32px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 7px;
-		color: #b5a5ff;
-		background: #6d28d912;
-		border-bottom: 1px solid #6d28d922;
-		font-size: 10px;
-	}
-	.notice.error {
-		color: #fca5a5;
-		background: #7f1d1d22;
-	}
-	.notice button {
-		border: 0;
-		background: none;
-		color: inherit;
-	}
-	.truncate {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	@keyframes spin {
-		to {
-			transform: rotate(360deg);
-		}
-	}
-	@media (max-width: 900px) {
-		.sidebar {
-			display: none;
-		}
-		.brand {
-			min-width: auto;
-		}
-		.brand > div:last-child {
-			display: none;
-		}
-		.header {
-			padding: 10px;
-		}
-		.actions span {
-			display: none;
-		}
-		.primary,
-		.secondary {
-			width: 40px;
-			padding: 0;
-		}
-		.main {
-			padding: 20px 14px;
-		}
-		.grid {
-			grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
-		}
-	}
-	@media (max-width: 600px) {
-		.toolbar {
-			align-items: start;
-		}
-		.toolbar-right select {
-			display: none;
-		}
-		.search {
-			order: 3;
-			flex-basis: 100%;
-			max-width: none;
-		}
-		.header {
-			height: auto;
-			flex-wrap: wrap;
-		}
-		.actions {
-			margin-left: 0;
-		}
-		.grid {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-	}
+	.library { height:100%; display:flex; flex-direction:column; background:var(--library-bg,#11110f); color:var(--library-fg,#f5f5f4); }
+	button,input,select { font:inherit; }
+	button { border:0; color:inherit; background:transparent; cursor:pointer; }
+	.header { height:72px; display:grid; grid-template-columns:auto minmax(240px,560px) auto; align-items:center; gap:28px; padding:0 28px; border-bottom:1px solid color-mix(in srgb,currentColor 10%,transparent); }
+	.brand { display:flex; align-items:center; gap:11px; font-size:1.05rem; }
+	.brand-mark { width:36px; height:36px; display:grid; place-items:center; border-radius:11px; background:color-mix(in srgb,currentColor 9%,transparent); }
+	.search { min-width:0; height:42px; display:flex; align-items:center; gap:10px; padding:0 12px; border:1px solid color-mix(in srgb,currentColor 13%,transparent); border-radius:12px; background:color-mix(in srgb,currentColor 5%,transparent); }
+	.search input { flex:1; min-width:0; border:0; outline:0; background:transparent; color:inherit; }
+	.search button { display:grid; place-items:center; opacity:.6; }
+	.actions,.toolbar-actions,.seg { display:flex; align-items:center; gap:8px; }
+	.actions { justify-content:flex-end; }
+	.folder-button,.primary { min-height:40px; display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:0 14px; border-radius:10px; }
+	.folder-button { background:color-mix(in srgb,currentColor 8%,transparent); }
+	.primary { background:currentColor; color:#11110f; font-weight:650; }
+	.icon-button { width:40px; height:40px; display:grid; place-items:center; border-radius:10px; }
+	.icon-button:hover,.icon-button.active,.seg button:hover,.seg button.active { background:color-mix(in srgb,currentColor 10%,transparent); }
+	.spinning svg { animation:spin .8s linear infinite; }
+	.notice { position:absolute; z-index:5; top:82px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:8px; padding:9px 13px; border-radius:9px; background:color-mix(in srgb,#fff 12%,#11110f); box-shadow:0 8px 30px #0004; font-size:.86rem; }
+	.notice.error { background:#522525; }
+	.notice button { display:grid; place-items:center; }
+	.body { flex:1; min-height:0; display:grid; grid-template-columns:245px minmax(0,1fr); }
+	.sidebar { overflow:auto; padding:22px 14px; border-right:1px solid color-mix(in srgb,currentColor 9%,transparent); }
+	.sidebar nav { display:flex; flex-direction:column; gap:3px; }
+	.sidebar nav button,.sidebar section button { min-height:40px; width:100%; display:flex; align-items:center; gap:10px; padding:0 10px; border-radius:9px; text-align:left; }
+	.sidebar button:hover,.sidebar button.active { background:color-mix(in srgb,currentColor 9%,transparent); }
+	.sidebar b { margin-left:auto; opacity:.45; font-size:.78rem; font-weight:500; }
+	.folder-summary { display:flex; gap:10px; align-items:flex-start; margin:22px 8px; padding:12px 10px; border-radius:10px; background:color-mix(in srgb,currentColor 5%,transparent); }
+	.folder-summary div { min-width:0; display:flex; flex-direction:column; gap:2px; }
+	.folder-summary strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.88rem; }
+	.folder-summary span { opacity:.5; font-size:.76rem; }
+	.sidebar section { margin-top:20px; }
+	.sidebar h2 { margin:0 10px 7px; font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; opacity:.45; font-weight:650; }
+	.portrait { width:27px; height:27px; flex:none; display:grid; place-items:center; position:relative; overflow:hidden; border-radius:50%; background:color-mix(in srgb,currentColor 10%,transparent); font-size:.65rem; }
+	.portrait img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+	.main { min-width:0; min-height:0; overflow:auto; padding:28px 32px 48px; }
+	.toolbar { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin-bottom:26px; }
+	.toolbar h1 { margin:0; font-size:1.65rem; letter-spacing:-.025em; }
+	.toolbar span { display:block; margin-top:4px; opacity:.48; font-size:.82rem; }
+	.toolbar select { height:38px; border:1px solid color-mix(in srgb,currentColor 12%,transparent); border-radius:9px; padding:0 10px; background:transparent; color:inherit; }
+	.seg { padding:3px; border-radius:9px; background:color-mix(in srgb,currentColor 6%,transparent); }
+	.seg button { width:34px; height:32px; display:grid; place-items:center; border-radius:7px; }
+	.score-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:24px 18px; }
+	.card { min-width:0; cursor:pointer; }
+	.card:focus-visible { outline:2px solid currentColor; outline-offset:5px; border-radius:8px; }
+	.cover { position:relative; aspect-ratio:3/4; overflow:hidden; border-radius:8px; background:color-mix(in srgb,currentColor 6%,transparent); box-shadow:0 5px 16px #0003; }
+	.cover > img { width:100%; height:100%; object-fit:cover; display:block; background:#fff; }
+	.no-cover { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; opacity:.42; font-size:.78rem; }
+	.favorite,.card-menu { position:absolute; top:8px; display:grid; place-items:center; width:30px; height:30px; border-radius:8px; background:#111b; backdrop-filter:blur(8px); opacity:0; transition:opacity .15s; }
+	.favorite { right:8px; }
+	.card-menu { left:8px; grid-template-columns:1fr 1fr; width:62px; }
+	.cover:hover .favorite,.cover:hover .card-menu,.favorite.marked { opacity:1; }
+	.favorite.marked { color:#f4c95d; }
+	.info { padding:10px 2px 0; }
+	.info h3 { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.94rem; font-weight:600; }
+	.info p { margin:4px 0 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.52; font-size:.8rem; }
+	.tags { display:flex; gap:4px; margin-top:7px; overflow:hidden; }
+	.tags span { padding:2px 6px; border-radius:5px; background:color-mix(in srgb,currentColor 7%,transparent); opacity:.65; font-size:.68rem; white-space:nowrap; }
+	.score-list { display:flex; flex-direction:column; gap:4px; }
+	.score-list .card { display:grid; grid-template-columns:52px minmax(0,1fr); gap:14px; align-items:center; padding:7px; border-radius:9px; }
+	.score-list .card:hover { background:color-mix(in srgb,currentColor 6%,transparent); }
+	.score-list .cover { width:52px; aspect-ratio:3/4; box-shadow:none; }
+	.score-list .info { padding:0; }
+	.score-list .favorite,.score-list .card-menu { opacity:1; transform:scale(.85); }
+	.empty { min-height:420px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+	.empty-icon { width:64px; height:64px; display:grid; place-items:center; margin-bottom:16px; border-radius:18px; background:color-mix(in srgb,currentColor 7%,transparent); opacity:.75; }
+	.empty h2 { margin:0; font-size:1.15rem; }
+	.empty p { max-width:380px; margin:8px 0 18px; opacity:.5; font-size:.86rem; }
+	.dialog-backdrop { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:20px; background:#0008; backdrop-filter:blur(4px); }
+	.dialog { width:min(420px,100%); padding:20px; border:1px solid color-mix(in srgb,currentColor 12%,transparent); border-radius:14px; background:#1b1b19; box-shadow:0 24px 70px #0008; }
+	.dialog header { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }
+	.dialog h2 { margin:0; font-size:1.05rem; }
+	.dialog header p { max-width:300px; margin:4px 0 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.5; font-size:.8rem; }
+	.dialog label { display:flex; flex-direction:column; gap:7px; margin:22px 0; font-size:.78rem; font-weight:600; }
+	.dialog input { height:42px; padding:0 11px; border:1px solid color-mix(in srgb,currentColor 14%,transparent); border-radius:9px; outline:0; background:transparent; color:inherit; }
+	.dialog footer { display:flex; justify-content:flex-end; gap:8px; }
+	.dialog footer button { min-height:40px; padding:0 13px; border-radius:9px; }
+	@keyframes spin { to { transform:rotate(360deg); } }
+	@media (max-width:850px) { .header { grid-template-columns:auto minmax(0,1fr) auto; gap:12px; padding:0 16px; } .folder-button span { display:none; } .body { grid-template-columns:190px minmax(0,1fr); } .main { padding:22px 20px 40px; } }
+	@media (max-width:650px) { .header { height:64px; } .brand strong { display:none; } .body { display:block; } .sidebar { display:none; } .main { padding:18px 14px 32px; } .toolbar { align-items:center; margin-bottom:20px; } .toolbar-actions select { display:none; } .score-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px 12px; } }
+	@media (prefers-reduced-motion:reduce) { .spinning svg { animation:none; } }
 </style>
