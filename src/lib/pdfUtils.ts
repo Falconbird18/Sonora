@@ -1,4 +1,10 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+
+// Ensure the worker is configured in every entry that uses PDF.js.
+if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+	pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+}
 
 class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
 	private pending = new Map<string, Promise<void>>();
@@ -40,6 +46,10 @@ async function openWithData(blob: Blob) {
 }
 
 export async function openPdf(blob: Blob) {
+	if (!blob || blob.size === 0) {
+		throw new Error('PDF data is empty');
+	}
+
 	if (blob.size <= DIRECT_LOAD_LIMIT) {
 		try {
 			const document = await openWithData(blob);
@@ -86,9 +96,9 @@ export async function getPdfInfo(blob: Blob) {
 async function renderThumbnail(document: pdfjsLib.PDFDocumentProxy) {
 	const page = await document.getPage(1);
 	try {
-		const viewport = page.getViewport({ scale: 0.3 });
-		const canvas = document.createElement('canvas');
-		const dpr = Math.min(window.devicePixelRatio || 1, 2);
+		const viewport = page.getViewport({ scale: 0.35 });
+		const canvas = globalThis.document.createElement('canvas');
+		const dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
 		canvas.width = Math.ceil(viewport.width * dpr);
 		canvas.height = Math.ceil(viewport.height * dpr);
 		const context = canvas.getContext('2d', { alpha: false });
@@ -96,7 +106,8 @@ async function renderThumbnail(document: pdfjsLib.PDFDocumentProxy) {
 		context.setTransform(dpr, 0, 0, dpr, 0, 0);
 		context.fillStyle = '#fff';
 		context.fillRect(0, 0, viewport.width, viewport.height);
-		await page.render({ canvasContext: context, viewport }).promise;
+		// PDF.js v5.4+/v6 expects the canvas element as well as the context.
+		await page.render({ canvas, canvasContext: context, viewport }).promise;
 		return canvas.toDataURL('image/jpeg', 0.74);
 	} finally {
 		page.cleanup();
