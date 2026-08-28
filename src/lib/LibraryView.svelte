@@ -9,7 +9,6 @@
 		Music2,
 		RefreshCw,
 		Search,
-		Settings2,
 		Star,
 		Clock3,
 		X,
@@ -29,7 +28,6 @@
 	let composer = $state<string | null>(null);
 	let sort = $state<'recent' | 'title' | 'composer'>('recent');
 	let view = $state<'grid' | 'list'>('grid');
-	let settings = $state(false);
 	let metadata = $state<ScoreItem | null>(null);
 	let newTags = $state('');
 	let syncing = $state(false);
@@ -170,7 +168,7 @@
 					: (b.lastOpenedAt || b.addedAt) - (a.lastOpenedAt || a.addedAt))
 	);
 
-	const currentTitle = $derived(composer || filter === 'favorites' ? 'Favorites' : filter === 'recent' ? 'Recently opened' : 'All scores');
+	const currentTitle = $derived(composer ? composer : filter === 'favorites' ? 'Favorites' : filter === 'recent' ? 'Recently opened' : 'All scores');
 </script>
 
 <div class="library">
@@ -180,7 +178,6 @@
 		<div class="actions">
 			<button class="folder-button" onclick={chooseFolder} title="Choose the folder containing your scores"><FolderPlus size={17} /><span>{folder ? 'Change folder' : 'Choose folder'}</span></button>
 			<button class="icon-button" class:spinning={syncing} onclick={sync} title="Refresh library" aria-label="Refresh library"><RefreshCw size={18} /></button>
-			<button class="icon-button" class:active={settings} onclick={() => (settings = !settings)} title="Library settings" aria-label="Library settings"><Settings2 size={18} /></button>
 		</div>
 	</header>
 
@@ -264,7 +261,7 @@
 	.folder-button { background:color-mix(in srgb,currentColor 8%,transparent); }
 	.primary { background:currentColor; color:#11110f; font-weight:650; }
 	.icon-button { width:40px; height:40px; display:grid; place-items:center; border-radius:10px; }
-	.icon-button:hover,.icon-button.active,.seg button:hover,.seg button.active { background:color-mix(in srgb,currentColor 10%,transparent); }
+	.icon-button:hover,.seg button:hover,.seg button.active { background:color-mix(in srgb,currentColor 10%,transparent); }
 	.spinning svg { animation:spin .8s linear infinite; }
 	.notice { position:absolute; z-index:5; top:82px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:8px; padding:9px 13px; border-radius:9px; background:color-mix(in srgb,#fff 12%,#11110f); box-shadow:0 8px 30px #0004; font-size:.86rem; }
 	.notice.error { background:#522525; }
