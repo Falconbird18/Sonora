@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/Cargo.lock
