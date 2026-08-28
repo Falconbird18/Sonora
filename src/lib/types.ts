@@ -19,7 +19,8 @@ export interface ScoreItem {
 export interface FolderSource {
 	id: string;
 	name: string;
-	handle: FileSystemDirectoryHandle;
+	handle?: FileSystemDirectoryHandle;
+	nativePath?: string;
 	addedAt: number;
 	lastSyncedAt?: number;
 	autoSync: boolean;
