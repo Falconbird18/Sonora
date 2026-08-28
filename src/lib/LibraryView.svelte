@@ -15,10 +15,16 @@
 		FileText,
 		Check
 	} from '@lucide/svelte';
+	import { invoke } from '@tauri-apps/api/core';
 	import { db } from './db';
 	import { chooseAndAddFolder, syncAllFolders } from './folderSync';
 	import { getComposerPortrait } from './composerPortraits';
+	import { getPdfInfo } from './pdfUtils';
 	import type { FolderSource, ScoreItem } from './types';
+
+	function isTauri() {
+		return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+	}
 
 	let { onSelectScore }: { onSelectScore: (score: ScoreItem) => void } = $props();
 	let scores = $state<ScoreItem[]>([]);
@@ -55,6 +61,7 @@
 					: 'Library is up to date'
 				: 'Choose a score folder to begin';
 			await refresh();
+			void backfillThumbnails();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Could not sync the library';
 		} finally {
@@ -68,6 +75,7 @@
 		try {
 			await chooseAndAddFolder();
 			await refresh();
+			void backfillThumbnails();
 		} catch (e) {
 			if ((e as DOMException)?.name !== 'AbortError') {
 				error = e instanceof Error ? e.message : 'Could not choose the score folder';
@@ -75,11 +83,74 @@
 		}
 	}
 
+	function joinNativePath(root: string, relative: string) {
+		const sep = root.includes('\\') ? '\\' : '/';
+		const base = root.replace(/[/\\]+$/, '');
+		const rel = relative.replace(/^[/\\]+/, '').replace(/\\/g, sep).replace(/\//g, sep);
+		return `${base}${sep}${rel}`;
+	}
+
+	async function ensureScoreBlob(score: ScoreItem): Promise<ScoreItem> {
+		// Prefer a fresh read from disk on desktop so opening always works
+		// even if the IndexedDB blob was lost or never stored correctly.
+		if (isTauri() && score.sourcePath && folder?.nativePath) {
+			try {
+				const filePath = joinNativePath(folder.nativePath, score.sourcePath);
+				const bytes = await invoke<number[] | Uint8Array | ArrayBuffer>('read_score_file', {
+					path: filePath
+				});
+				const buffer =
+					bytes instanceof ArrayBuffer
+						? new Uint8Array(bytes)
+						: bytes instanceof Uint8Array
+							? bytes
+							: new Uint8Array(bytes);
+				if (buffer.byteLength > 0) {
+					return { ...score, pdfBlob: new Blob([buffer], { type: 'application/pdf' }) };
+				}
+			} catch (err) {
+				console.warn('Could not re-read score from disk', score.sourcePath, err);
+			}
+		}
+		if (score.pdfBlob && score.pdfBlob.size > 0) return score;
+		throw new Error(`“${score.title}” has no PDF data. Try refreshing the library.`);
+	}
+
 	async function openScore(score: ScoreItem) {
-		const next = { ...score, lastOpenedAt: Date.now() };
-		await db.scores.put(next);
-		scores = scores.map((item) => item.id === score.id ? next : item);
-		onSelectScore(next);
+		error = '';
+		try {
+			const withBlob = await ensureScoreBlob(score);
+			const next = { ...withBlob, lastOpenedAt: Date.now() };
+			// Persist metadata without blocking the viewer if storage is slow.
+			void db.scores.put(next).catch((err) => console.warn('Could not update last opened', err));
+			scores = scores.map((item) => (item.id === score.id ? next : item));
+			onSelectScore(next);
+		} catch (e) {
+			console.error('Open score failed', e);
+			error = e instanceof Error ? e.message : 'Could not open this score';
+		}
+	}
+
+	async function backfillThumbnails() {
+		// Generate previews for any score missing a thumbnail.
+		// On desktop, re-read from disk when the IndexedDB blob is missing.
+		const missing = scores.filter((s) => !s.thumbnailUrl);
+		if (!missing.length) return;
+		for (const score of missing.slice(0, 16)) {
+			try {
+				const withBlob = await ensureScoreBlob(score);
+				const info = await getPdfInfo(withBlob.pdfBlob);
+				const next = {
+					...withBlob,
+					thumbnailUrl: info.thumbnailUrl,
+					totalPages: info.totalPages || withBlob.totalPages || 1
+				};
+				await db.scores.put(next);
+				scores = scores.map((item) => (item.id === score.id ? next : item));
+			} catch (err) {
+				console.warn('Thumbnail backfill failed', score.title, err);
+			}
+		}
 	}
 
 	async function toggleFavorite(score: ScoreItem, event: MouseEvent) {
@@ -131,6 +202,7 @@
 			} catch { /* Ignore old or invalid settings. */ }
 		}
 		await sync();
+		void backfillThumbnails();
 		timer = setInterval(sync, 30000);
 		const wake = () => void sync();
 		window.addEventListener('focus', wake);
@@ -293,10 +365,10 @@
 	.cover { position:relative; aspect-ratio:3/4; overflow:hidden; border-radius:8px; background:color-mix(in srgb,currentColor 6%,transparent); box-shadow:0 5px 16px #0003; }
 	.cover > img { width:100%; height:100%; object-fit:cover; display:block; background:#fff; }
 	.no-cover { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; opacity:.42; font-size:.78rem; }
-	.favorite,.card-menu { position:absolute; top:8px; display:grid; place-items:center; width:30px; height:30px; border-radius:8px; background:#111b; backdrop-filter:blur(8px); opacity:0; transition:opacity .15s; }
+	.favorite,.card-menu { position:absolute; top:8px; display:grid; place-items:center; width:30px; height:30px; border-radius:8px; background:#111b; backdrop-filter:blur(8px); opacity:0; pointer-events:none; transition:opacity .15s; }
 	.favorite { right:8px; }
 	.card-menu { left:8px; grid-template-columns:1fr 1fr; width:62px; }
-	.cover:hover .favorite,.cover:hover .card-menu,.favorite.marked { opacity:1; }
+	.cover:hover .favorite,.cover:hover .card-menu,.favorite.marked { opacity:1; pointer-events:auto; }
 	.favorite.marked { color:#f4c95d; }
 	.info { padding:10px 2px 0; }
 	.info h3 { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.94rem; font-weight:600; }
