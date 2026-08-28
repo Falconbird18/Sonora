@@ -23,15 +23,6 @@ export interface FolderSource {
 	addedAt: number;
 	lastSyncedAt?: number;
 	autoSync: boolean;
-	collapsed?: boolean;
-	parentId?: string;
-}
-
-export interface LibraryPreferences {
-	view?: 'grid' | 'list';
-	sort?: 'recent' | 'title' | 'composer';
-	compact?: boolean;
-	sidebarCollapsed?: boolean;
 }
 
 export interface Point { x: number; y: number; pressure?: number; }
