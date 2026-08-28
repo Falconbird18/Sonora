@@ -8,16 +8,16 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
-    "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.13.3",
     "prettier-plugin-svelte": "^3.2.2",
-    "tailwindcss": "^4.3.3",
     "svelte": "^5.56.8",
     "svelte-check": "^4.7.3",
     "typescript": "~6.0.2",
