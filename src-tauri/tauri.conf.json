@@ -18,7 +18,9 @@
         "minWidth": 760,
         "minHeight": 560,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "center": true,
+        "focus": true
       }
     ],
     "security": {
@@ -31,6 +33,8 @@
     "category": "Music",
     "shortDescription": "Sheet music library and score viewer",
     "longDescription": "Sonora is a fast, offline-capable sheet music library and score viewer with annotations.",
-    "icon": []
+    "icon": [
+      "icons/icon.png"
+    ]
   }
 }
