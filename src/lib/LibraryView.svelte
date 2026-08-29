@@ -139,13 +139,24 @@
 		}
 	}
 
+	function yieldToMain() {
+		return new Promise<void>((resolve) => {
+			if (typeof requestIdleCallback === 'function') {
+				requestIdleCallback(() => resolve(), { timeout: 120 });
+			} else {
+				setTimeout(resolve, 16);
+			}
+		});
+	}
+
 	async function backfillThumbnails() {
 		if (backfillRunning) return;
 		backfillRunning = true;
 		try {
 			const missing = scores.filter((s) => !s.thumbnailUrl);
 			if (!missing.length) return;
-			for (const score of missing.slice(0, 24)) {
+			// Process a modest batch so large libraries do not freeze the UI.
+			for (const score of missing.slice(0, 16)) {
 				try {
 					const withBlob = await ensureScoreBlob(score);
 					const info = await getPdfInfo(withBlob.pdfBlob!);
@@ -160,12 +171,21 @@
 					});
 					scores = scores.map((item) =>
 						item.id === score.id
-							? { ...item, thumbnailUrl: next.thumbnailUrl, totalPages: next.totalPages }
+							? {
+									...item,
+									thumbnailUrl: next.thumbnailUrl,
+									totalPages: next.totalPages
+								  }
 							: item
 					);
 				} catch (err) {
 					console.warn('Thumbnail backfill failed', score.title, err);
 				}
+				await yieldToMain();
+			}
+			// Continue remaining thumbs later without blocking.
+			if (scores.some((s) => !s.thumbnailUrl)) {
+				setTimeout(() => void backfillThumbnails(), 1500);
 			}
 		} finally {
 			backfillRunning = false;
@@ -219,7 +239,8 @@
 		}
 		await sync();
 		void backfillThumbnails();
-		timer = setInterval(sync, 60000);
+		// Background refresh every 5 minutes (was 60s) — less CPU/IO when idle.
+		timer = setInterval(sync, 5 * 60 * 1000);
 		const wake = () => void sync();
 		window.addEventListener('focus', wake);
 		return () => {
@@ -247,7 +268,12 @@
 			.filter((score) => filter === 'all' || (filter === 'favorites' ? !!score.favorite : !!score.lastOpenedAt))
 			.filter((score) => {
 				const query = search.trim().toLowerCase();
-				return !query || score.title.toLowerCase().includes(query) || score.composer.toLowerCase().includes(query) || (score.tags ?? []).some((tag) => tag.toLowerCase().includes(query));
+				return (
+					!query ||
+					score.title.toLowerCase().includes(query) ||
+					score.composer.toLowerCase().includes(query) ||
+					(score.tags ?? []).some((tag) => tag.toLowerCase().includes(query))
+				);
 			})
 			.sort((a, b) =>
 				sort === 'title'
@@ -258,7 +284,15 @@
 			)
 	);
 
-	const currentTitle = $derived(composer ? composer : filter === 'favorites' ? 'Favorites' : filter === 'recent' ? 'Recently opened' : 'All scores');
+	const currentTitle = $derived(
+		composer
+			? composer
+			: filter === 'favorites'
+				? 'Favorites'
+				: filter === 'recent'
+					? 'Recently opened'
+					: 'All scores'
+	);
 </script>
 
 <div class="library">
