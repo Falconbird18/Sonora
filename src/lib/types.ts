@@ -2,7 +2,8 @@ export interface ScoreItem {
 	id: string;
 	title: string;
 	composer: string;
-	pdfBlob: Blob;
+	/** PDF bytes. On desktop this may be empty and reloaded from disk on open. */
+	pdfBlob?: Blob;
 	thumbnailUrl?: string;
 	totalPages: number;
 	addedAt: number;
