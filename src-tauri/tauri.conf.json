@@ -29,7 +29,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["deb", "rpm"],
     "category": "Music",
     "shortDescription": "Sheet music library and score viewer",
     "longDescription": "Sonora is a fast, offline-capable sheet music library and score viewer with annotations.",
