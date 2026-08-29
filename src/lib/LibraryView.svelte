@@ -15,16 +15,12 @@
 		FileText,
 		Check
 	} from '@lucide/svelte';
-	import { invoke } from '@tauri-apps/api/core';
 	import { db } from './db';
-	import { chooseAndAddFolder, syncAllFolders } from './folderSync';
+	import { chooseAndAddFolder, syncAllFolders, resolveScoreSource } from './folderSync';
 	import { getComposerPortrait } from './composerPortraits';
-	import { getPdfInfo } from './pdfUtils';
+	import { getPdfInfoFromSource } from './pdfUtils';
+	import { isTauri } from './paths';
 	import type { FolderSource, ScoreItem } from './types';
-
-	function isTauri() {
-		return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-	}
 
 	let { onSelectScore }: { onSelectScore: (score: ScoreItem) => void } = $props();
 	let scores = $state<ScoreItem[]>([]);
@@ -87,42 +83,28 @@
 		}
 	}
 
-	function joinNativePath(root: string, relative: string) {
-		const sep = root.includes('\\') ? '\\' : '/';
-		const base = root.replace(/[/\\]+$/, '');
-		const rel = relative.replace(/^[/\\]+/, '').replace(/\\/g, sep).replace(/\//g, sep);
-		return `${base}${sep}${rel}`;
-	}
-
-	async function ensureScoreBlob(score: ScoreItem): Promise<ScoreItem> {
-		if (isTauri() && score.sourcePath && folder?.nativePath) {
-			try {
-				const filePath = joinNativePath(folder.nativePath, score.sourcePath);
-				const bytes = await invoke<number[] | Uint8Array | ArrayBuffer>('read_score_file', {
-					path: filePath
-				});
-				const buffer =
-					bytes instanceof ArrayBuffer
-						? new Uint8Array(bytes)
-						: bytes instanceof Uint8Array
-							? bytes
-							: new Uint8Array(bytes);
-				if (buffer.byteLength > 0) {
-					return { ...score, pdfBlob: new Blob([buffer], { type: 'application/pdf' }) };
-				}
-			} catch (err) {
-				console.warn('Could not re-read score from disk', score.sourcePath, err);
-			}
-		}
-		if (score.pdfBlob && score.pdfBlob.size > 0) return score;
-		throw new Error(`\u201c${score.title}\u201d has no PDF data. Try refreshing the library.`);
+	/** Prepare score for the viewer — never copy multi-MB PDF bytes over IPC. */
+	function prepareScore(score: ScoreItem): ScoreItem {
+		const source = resolveScoreSource(score, folder);
+		return {
+			...score,
+			pdfUrl: source.url || score.pdfUrl,
+			nativePath: source.nativePath || score.nativePath,
+			// Keep blob only for browser mode; desktop uses asset URL.
+			pdfBlob: isTauri() ? undefined : source.blob || score.pdfBlob
+		};
 	}
 
 	async function openScore(score: ScoreItem) {
 		error = '';
 		openingId = score.id;
 		try {
-			const withBlob = await ensureScoreBlob(score);
+			const prepared = prepareScore(score);
+			if (!prepared.pdfUrl && !(prepared.pdfBlob && prepared.pdfBlob.size > 0)) {
+				throw new Error(
+					`\u201c${score.title}\u201d has no PDF source. Try refreshing the library.`
+				);
+			}
 			const openedAt = Date.now();
 			void db.scores.update(score.id, { lastOpenedAt: openedAt }).catch((err) =>
 				console.warn('Could not update last opened', err)
@@ -130,7 +112,7 @@
 			scores = scores.map((item) =>
 				item.id === score.id ? { ...item, lastOpenedAt: openedAt } : item
 			);
-			onSelectScore({ ...withBlob, lastOpenedAt: openedAt });
+			onSelectScore({ ...prepared, lastOpenedAt: openedAt });
 		} catch (e) {
 			console.error('Open score failed', e);
 			error = e instanceof Error ? e.message : 'Could not open this score';
@@ -142,9 +124,9 @@
 	function yieldToMain() {
 		return new Promise<void>((resolve) => {
 			if (typeof requestIdleCallback === 'function') {
-				requestIdleCallback(() => resolve(), { timeout: 120 });
+				requestIdleCallback(() => resolve(), { timeout: 200 });
 			} else {
-				setTimeout(resolve, 16);
+				setTimeout(resolve, 24);
 			}
 		});
 	}
@@ -155,19 +137,26 @@
 		try {
 			const missing = scores.filter((s) => !s.thumbnailUrl);
 			if (!missing.length) return;
-			// Process a modest batch so large libraries do not freeze the UI.
-			for (const score of missing.slice(0, 16)) {
+			// Small batches + idle yields keep the UI responsive on large libraries.
+			const batch = missing.slice(0, 8);
+			for (const score of batch) {
 				try {
-					const withBlob = await ensureScoreBlob(score);
-					const info = await getPdfInfo(withBlob.pdfBlob!);
+					const source = resolveScoreSource(score, folder);
+					if (!source.url && !source.blob) continue;
+					const info = await getPdfInfoFromSource({
+						url: source.url,
+						blob: source.blob
+					});
 					const next = {
 						...score,
 						thumbnailUrl: info.thumbnailUrl,
 						totalPages: info.totalPages || score.totalPages || 1
 					};
+					// Persist metadata only — never store PDF bytes in IndexedDB on desktop.
+					const { pdfBlob: _drop, ...toStore } = next as ScoreItem & { pdfBlob?: Blob };
 					await db.scores.put({
-						...next,
-						pdfBlob: isTauri() ? undefined : withBlob.pdfBlob
+						...toStore,
+						pdfBlob: isTauri() ? undefined : next.pdfBlob
 					});
 					scores = scores.map((item) =>
 						item.id === score.id
@@ -175,7 +164,7 @@
 									...item,
 									thumbnailUrl: next.thumbnailUrl,
 									totalPages: next.totalPages
-								  }
+							  }
 							: item
 					);
 				} catch (err) {
@@ -183,9 +172,8 @@
 				}
 				await yieldToMain();
 			}
-			// Continue remaining thumbs later without blocking.
 			if (scores.some((s) => !s.thumbnailUrl)) {
-				setTimeout(() => void backfillThumbnails(), 1500);
+				setTimeout(() => void backfillThumbnails(), 2000);
 			}
 		} finally {
 			backfillRunning = false;
@@ -239,7 +227,6 @@
 		}
 		await sync();
 		void backfillThumbnails();
-		// Background refresh every 5 minutes (was 60s) — less CPU/IO when idle.
 		timer = setInterval(sync, 5 * 60 * 1000);
 		const wake = () => void sync();
 		window.addEventListener('focus', wake);
@@ -328,7 +315,7 @@
 			</div>
 			{#if !folder && !scores.length}<div class="empty"><div class="empty-icon"><FolderOpen size={30} /></div><h2>Your score library</h2><p>Choose one folder where Sonora will keep all of your scores.</p><button class="primary" onclick={chooseFolder}><FolderPlus size={17} />Choose score folder</button></div>
 			{:else if filtered.length === 0}<div class="empty"><div class="empty-icon"><Search size={28} /></div><h2>No scores found</h2><p>Try another search or filter, or refresh the library.</p></div>
-			{:else}<div class:score-grid={view === 'grid'} class:score-list={view === 'list'}>{#each filtered as score (score.id)}<div class="card" class:opening={openingId === score.id} role="button" tabindex="0" onclick={() => openScore(score)} onkeydown={(event) => event.key === 'Enter' && openScore(score)}><div class="cover">{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" loading="lazy" />{:else}<div class="no-cover"><FileText size={24} /><span>{score.totalPages || '\u2026'} pages</span></div>{/if}<button class="favorite" class:marked={score.favorite} onclick={(event) => toggleFavorite(score, event)} aria-label="Favorite"><Star size={15} fill={score.favorite ? 'currentColor' : 'none'} /></button><div class="card-menu"><button onclick={(event) => editMetadata(score, event)} aria-label="Edit score"><MoreHorizontal size={16} /></button><button onclick={(event) => deleteScore(score, event)} aria-label="Remove score"><X size={16} /></button></div></div><div class="info"><h3 title={score.title}>{score.title}</h3><p>{score.composer}</p>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0, 2) as tag}<span>{tag}</span>{/each}</div>{/if}</div></div>{/each}</div>{/if}
+			{:else}<div class:score-grid={view === 'grid'} class:score-list={view === 'list'}>{#each filtered as score (score.id)}<div class="card" class:opening={openingId === score.id} role="button" tabindex="0" onclick={() => openScore(score)} onkeydown={(event) => event.key === 'Enter' && openScore(score)}><div class="cover">{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" loading="lazy" decoding="async" />{:else}<div class="no-cover"><FileText size={24} /><span>{score.totalPages || '\u2026'} pages</span></div>{/if}<button class="favorite" class:marked={score.favorite} onclick={(event) => toggleFavorite(score, event)} aria-label="Favorite"><Star size={15} fill={score.favorite ? 'currentColor' : 'none'} /></button><div class="card-menu"><button onclick={(event) => editMetadata(score, event)} aria-label="Edit score"><MoreHorizontal size={16} /></button><button onclick={(event) => deleteScore(score, event)} aria-label="Remove score"><X size={16} /></button></div></div><div class="info"><h3 title={score.title}>{score.title}</h3><p>{score.composer}</p>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0, 2) as tag}<span>{tag}</span>{/each}</div>{/if}</div></div>{/each}</div>{/if}
 		</main>
 	</div>
 	{#if metadata}<div class="dialog-backdrop" role="presentation" onclick={(event) => event.currentTarget === event.target && (metadata = null)}><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="metadata-title"><header><div><h2 id="metadata-title">Edit score</h2><p>{metadata.title}</p></div><button class="icon-button" onclick={() => (metadata = null)} aria-label="Close"><X size={18} /></button></header><label>Tags<input bind:value={newTags} placeholder="Concert, piano, practice" /></label><footer><button onclick={() => (metadata = null)}>Cancel</button><button class="primary" onclick={saveMetadata}>Save</button></footer></div></div>{/if}
