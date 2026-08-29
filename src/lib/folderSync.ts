@@ -1,10 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { db } from './db';
 import type { FolderSource, ScoreItem } from './types';
-import { getPdfInfo } from './pdfUtils';
+import { getPdfInfoFromSource } from './pdfUtils';
+import { isTauri, joinNativePath, nativeFileUrl } from './paths';
 
 const ROOT_FOLDER_ID = 'library-root';
-const METADATA_CONCURRENCY = 3;
+/** Max concurrent PDF opens for thumbnail/metadata — keep low to avoid jank. */
+const METADATA_CONCURRENCY = 2;
 
 type NativeScoreFile = {
 	path: string;
@@ -13,10 +15,6 @@ type NativeScoreFile = {
 	size: number;
 	modified_at: number;
 };
-
-function isTauri() {
-	return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
 
 export function supportsDirectoryAccess() {
 	return isTauri() || (typeof window !== 'undefined' && 'showDirectoryPicker' in window);
@@ -93,16 +91,6 @@ function composerFromPath(path: string) {
 	return parts.length > 1 ? parts[parts.length - 2] : 'Unknown Composer';
 }
 
-function bytesToBlob(bytes: number[] | Uint8Array | ArrayBuffer): Blob {
-	const buffer =
-		bytes instanceof ArrayBuffer
-			? new Uint8Array(bytes)
-			: bytes instanceof Uint8Array
-				? bytes
-				: new Uint8Array(bytes);
-	return new Blob([buffer], { type: 'application/pdf' });
-}
-
 async function removeOldRoots() {
 	const folders = await db.folders.toArray();
 	for (const folder of folders) {
@@ -158,6 +146,11 @@ export async function chooseAndAddFolder() {
 	return folder;
 }
 
+/**
+ * Desktop sync is intentionally metadata-only.
+ * Never read PDF bytes over IPC here — that was the main performance killer.
+ * Thumbnails are filled later via asset-protocol URLs.
+ */
 async function syncNativeFolder(folder: FolderSource) {
 	if (!folder.nativePath) return { added: 0, updated: 0, removed: 0 };
 
@@ -172,37 +165,26 @@ async function syncNativeFolder(folder: FolderSource) {
 	const existing = await db.scores.where('sourceFolderId').equals(folder.id).toArray();
 	const existingById = new Map(existing.map((score) => [score.id, score]));
 	const present = new Set(files.map((file) => stableId(file.relative_path)));
-
-	// Safety: never wipe the library if the OS returned an empty list while we still
-	// have scores (folder temporarily unavailable, permission glitch, etc.).
 	const allowRemovals = files.length > 0 || existing.length === 0;
 
-	const changed = files.filter((file) => {
-		const old = existingById.get(stableId(file.relative_path));
-		return (
+	let added = 0;
+	let updated = 0;
+	const toWrite: ScoreItem[] = [];
+
+	for (const file of files) {
+		const id = stableId(file.relative_path);
+		const old = existingById.get(id);
+		const changed =
 			!old ||
 			old.fileSize !== file.size ||
 			old.fileModifiedAt !== file.modified_at ||
-			!old.thumbnailUrl
-		);
-	});
+			!old.nativePath;
 
-	const results = await mapConcurrent(changed, METADATA_CONCURRENCY, async (file) => {
-		const id = stableId(file.relative_path);
-		const old = existingById.get(id);
-		const bytes = await invoke<number[] | Uint8Array | ArrayBuffer>('read_score_file', {
-			path: file.path
-		});
-		const blob = bytesToBlob(bytes);
-		let info: { totalPages: number; thumbnailUrl: string } | undefined;
-		try {
-			info = await getPdfInfo(blob);
-		} catch (error) {
-			console.warn('PDF metadata failed', file.relative_path, error);
+		if (!changed && old) {
+			// Still refresh pdfUrl in memory path is cheap; skip DB write.
+			continue;
 		}
 
-		// Desktop: store thumbnail + metadata only. Re-read the PDF from disk on open
-		// so IndexedDB never has to hold multi-megabyte blobs for every score.
 		const next: ScoreItem = {
 			...(old || {}),
 			id,
@@ -212,8 +194,11 @@ async function syncNativeFolder(folder: FolderSource) {
 					? old.composer
 					: composerFromPath(file.relative_path),
 			pdfBlob: undefined,
-			thumbnailUrl: info?.thumbnailUrl || old?.thumbnailUrl,
-			totalPages: info?.totalPages || old?.totalPages || 1,
+			// Asset URL is computed at open/backfill time from nativePath (stable across sessions).
+			pdfUrl: undefined,
+			nativePath: file.path,
+			thumbnailUrl: old?.thumbnailUrl,
+			totalPages: old?.totalPages || 1,
 			addedAt: old?.addedAt || Date.now(),
 			lastOpenedAt: old?.lastOpenedAt || 0,
 			favorite: old?.favorite || false,
@@ -224,11 +209,20 @@ async function syncNativeFolder(folder: FolderSource) {
 			fileSize: file.size,
 			fileModifiedAt: file.modified_at
 		};
-		return { next, existed: !!old };
-	});
+
+		// File content changed → drop stale thumbnail
+		if (old && (old.fileSize !== file.size || old.fileModifiedAt !== file.modified_at)) {
+			next.thumbnailUrl = undefined;
+			next.totalPages = 1;
+		}
+
+		toWrite.push(next);
+		if (old) updated++;
+		else added++;
+	}
 
 	await db.transaction('rw', db.scores, db.annotations, db.folders, async () => {
-		for (const { next } of results) await db.scores.put(next);
+		for (const next of toWrite) await db.scores.put(next);
 		if (allowRemovals) {
 			for (const old of existing) {
 				if (!present.has(old.id)) {
@@ -241,8 +235,8 @@ async function syncNativeFolder(folder: FolderSource) {
 	});
 
 	return {
-		added: results.filter((result) => !result.existed).length,
-		updated: results.filter((result) => result.existed).length,
+		added,
+		updated,
 		removed: allowRemovals ? existing.filter((score) => !present.has(score.id)).length : 0
 	};
 }
@@ -270,9 +264,9 @@ async function syncBrowserFolder(folder: FolderSource) {
 	const results = await mapConcurrent(changed, METADATA_CONCURRENCY, async ({ file, path }) => {
 		const id = stableId(path);
 		const old = existingById.get(id);
-		let info: { totalPages: number; thumbnailUrl: string } | undefined;
+		let info: { totalPages: number; thumbnailUrl?: string } | undefined;
 		try {
-			info = await getPdfInfo(file);
+			info = await getPdfInfoFromSource({ blob: file });
 		} catch (error) {
 			console.warn('PDF metadata failed', path, error);
 		}
@@ -325,10 +319,30 @@ export async function syncFolder(folder: FolderSource) {
 	return folder.nativePath ? syncNativeFolder(folder) : syncBrowserFolder(folder);
 }
 
-export async function syncAllFolders() {
+export async function syncAllFolders(force = false) {
 	const folder = await db.folders.get(ROOT_FOLDER_ID);
 	if (!folder || !folder.autoSync) return [];
+	if (!force && folder.lastSyncedAt && Date.now() - folder.lastSyncedAt < 60_000) {
+		return [{ added: 0, updated: 0, removed: 0, skipped: true as const }];
+	}
 	return [await syncFolder(folder)];
+}
+
+export function resolveScoreSource(score: ScoreItem, folder?: FolderSource): {
+	url?: string;
+	blob?: Blob;
+	nativePath?: string;
+} {
+	if (score.pdfUrl) return { url: score.pdfUrl, blob: score.pdfBlob, nativePath: score.nativePath };
+	if (score.nativePath && isTauri()) {
+		return { url: nativeFileUrl(score.nativePath), nativePath: score.nativePath, blob: score.pdfBlob };
+	}
+	if (isTauri() && score.sourcePath && folder?.nativePath) {
+		const absolute = joinNativePath(folder.nativePath, score.sourcePath);
+		return { url: nativeFileUrl(absolute), nativePath: absolute, blob: score.pdfBlob };
+	}
+	if (score.pdfBlob && score.pdfBlob.size > 0) return { blob: score.pdfBlob };
+	return {};
 }
 
 export async function removeFolder(folder: FolderSource, removeScores = false) {

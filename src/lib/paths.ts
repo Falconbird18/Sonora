@@ -14,7 +14,7 @@ export function joinNativePath(root: string, relative: string) {
 	return `${base}${sep}${rel}`;
 }
 
-/** Build a webview-loadable URL for a native filesystem path (no IPC byte copy). */
+/** Webview-loadable URL for a native path — no IPC byte copy. */
 export function nativeFileUrl(absolutePath: string): string {
 	return convertFileSrc(absolutePath);
 }
