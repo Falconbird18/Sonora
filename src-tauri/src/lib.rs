@@ -1,5 +1,9 @@
 use serde::Serialize;
-use std::{fs, path::{Path, PathBuf}, time::UNIX_EPOCH};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::UNIX_EPOCH,
+};
 
 #[derive(Debug, Serialize)]
 struct NativeScoreFile {
@@ -11,7 +15,8 @@ struct NativeScoreFile {
 }
 
 fn collect_pdfs(root: &Path, current: &Path, files: &mut Vec<NativeScoreFile>) -> Result<(), String> {
-    for entry in fs::read_dir(current).map_err(|error| error.to_string())? {
+    let entries = fs::read_dir(current).map_err(|error| error.to_string())?;
+    for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
@@ -23,7 +28,9 @@ fn collect_pdfs(root: &Path, current: &Path, files: &mut Vec<NativeScoreFile>) -
         if metadata.is_dir() {
             collect_pdfs(root, &path, files)?;
         } else if metadata.is_file() && name.to_lowercase().ends_with(".pdf") {
-            let relative = path.strip_prefix(root).map_err(|error| error.to_string())?;
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|error| error.to_string())?;
             let modified_at = metadata
                 .modified()
                 .ok()
@@ -63,9 +70,39 @@ fn list_score_files(path: String) -> Result<Vec<NativeScoreFile>, String> {
     Ok(files)
 }
 
+/// Read a file as base64. Prefer convertFileSrc / asset protocol for viewing;
+/// this is only for rare cases (download fallback) where bytes are required in JS.
 #[tauri::command]
-fn read_score_file(path: String) -> Result<Vec<u8>, String> {
-    fs::read(path).map_err(|error| error.to_string())
+fn read_score_file_base64(path: String) -> Result<String, String> {
+    use std::io::Read;
+    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    Ok(data_encoding_base64(&buf))
+}
+
+fn data_encoding_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 63) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((triple >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(triple & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }
 
 #[tauri::command]
@@ -78,7 +115,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![pick_score_folder, list_score_files, read_score_file, read_text_file])
+        .invoke_handler(tauri::generate_handler![
+            pick_score_folder,
+            list_score_files,
+            read_score_file_base64,
+            read_text_file
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Sonora");
 }
