@@ -10,6 +10,7 @@
 		TextNote
 	} from './types';
 	import { MUSIC_SYMBOLS, MUSIC_SYMBOL_CATEGORIES } from './musicSymbols';
+	import { openPdf, MAX_CANVAS_PIXELS } from './pdfUtils';
 	import {
 		ArrowLeft,
 		ArrowUpRight,
@@ -74,39 +75,8 @@
 		id?: string;
 	};
 
-	class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
-		private blob: Blob;
-		private stopped = false;
-		private pending = new Map<string, Promise<void>>();
-		constructor(blob: Blob) {
-			super(blob.size, null, false, 'score.pdf');
-			this.blob = blob;
-		}
-		requestDataRange(begin: number, end: number) {
-			if (this.stopped) return;
-			const key = `${begin}:${end}`;
-			if (this.pending.has(key)) return;
-			const request = this.blob
-				.slice(begin, end)
-				.arrayBuffer()
-				.then((buffer) => {
-					if (this.stopped) return;
-					this.onDataRange(begin, new Uint8Array(buffer));
-					this.onDataProgress(Math.min(end, this.blob.size), this.blob.size);
-				});
-			this.pending.set(key, request);
-			request
-				.catch((reason) => this.onError(reason))
-				.finally(() => this.pending.delete(key));
-		}
-		abort() {
-			this.stopped = true;
-			this.pending.clear();
-		}
-	}
-
 	let pdf = $state<pdfjsLib.PDFDocumentProxy | null>(null);
-	let rangeTransport: BlobRangeTransport | null = null;
+	let rangeTransport: { abort: () => void } | null = null;
 	let page = $state(1);
 	let pageInput = $state('1');
 	let zoom = $state(1);
@@ -156,9 +126,10 @@
 		stroke?: Stroke;
 		raf?: number;
 	} | null = null;
+	/** Avoid full loading spinner on pure resize re-renders after first paint. */
+	let hasPainted = false;
 
 	const prefs = `sonora-viewer-${score.id}`;
-	const maxPixels = 6000000;
 	const colors = [
 		'#c2410c',
 		'#2563eb',
@@ -246,7 +217,7 @@
 		window.addEventListener('keydown', key);
 		const observer = new ResizeObserver(() => {
 			clearTimeout(resizeTimer);
-			resizeTimer = setTimeout(() => void render(), 150);
+			resizeTimer = setTimeout(() => void render({ quiet: true }), 180);
 		});
 		if (host) observer.observe(host);
 		return () => {
@@ -263,32 +234,16 @@
 	async function load() {
 		loading = true;
 		error = '';
+		hasPainted = false;
 		loadingText = 'Opening score…';
 		try {
 			await destroyDocument();
-			rangeTransport = new BlobRangeTransport(score.pdfBlob);
-			try {
-				pdf = await pdfjsLib.getDocument({
-					range: rangeTransport,
-					rangeChunkSize: 1024 * 1024,
-					disableRange: false,
-					disableStream: true,
-					disableAutoFetch: true,
-					isEvalSupported: false,
-					useWorkerFetch: false
-				}).promise;
-			} catch (rangeError) {
-				console.warn(
-					'Range PDF loading failed; retrying with complete document',
-					rangeError
-				);
-				rangeTransport.abort();
-				pdf = await pdfjsLib.getDocument({
-					data: new Uint8Array(await score.pdfBlob.arrayBuffer()),
-					isEvalSupported: false,
-					useWorkerFetch: false
-				}).promise;
+			if (!score.pdfBlob || score.pdfBlob.size === 0) {
+				throw new Error('PDF data is missing. Try refreshing the library and open again.');
 			}
+			const opened = await openPdf(score.pdfBlob);
+			pdf = opened.document;
+			rangeTransport = opened.transport;
 			const records = await db.annotations
 				.where('scoreId')
 				.equals(score.id)
@@ -312,7 +267,9 @@
 		} catch (reason) {
 			console.error('PDF load failed', reason);
 			error =
-				'This PDF could not be opened by the renderer. Sonora will preserve the score in your library, but this document may need to be re-exported.';
+				reason instanceof Error && reason.message.includes('missing')
+					? reason.message
+					: 'This PDF could not be opened by the renderer. Sonora will preserve the score in your library, but this document may need to be re-exported.';
 		} finally {
 			loading = false;
 		}
@@ -338,18 +295,22 @@
 		tasks = [];
 	}
 
-	async function render() {
+	async function render(opts?: { quiet?: boolean }) {
 		if (!pdf || !host) return;
 		cancelRender();
 		const current = ++generation;
-		loading = true;
-		loadingText = dual ? 'Rendering pages…' : 'Rendering page…';
+		if (!opts?.quiet || !hasPainted) {
+			loading = true;
+			loadingText = dual ? 'Rendering pages…' : 'Rendering page…';
+		}
+		error = '';
 		try {
 			if (dual && host.clientWidth < 800) dual = false;
 			for (let index = 0; index < visiblePages.length; index++) {
 				await renderPage(visiblePages[index], index, current);
 				if (current !== generation) return;
 			}
+			if (current === generation) hasPainted = true;
 		} catch (reason) {
 			if (
 				!(
@@ -378,43 +339,89 @@
 				dual ? (host.clientWidth - 92) / 2 : host.clientWidth - 58
 			);
 			const availableHeight = Math.max(280, host.clientHeight - 72);
-			let scale =
+			let desired =
 				(fit === 'width'
 					? availableWidth / base.width
 					: Math.min(
 							availableWidth / base.width,
 							availableHeight / base.height
 						)) * zoom;
-			const safeScale = Math.sqrt(
-				maxPixels / Math.max(1, base.width * base.height)
-			);
-			scale = Math.max(0.2, Math.min(3, scale, safeScale));
-			const viewport = pdfPage.getViewport({ scale });
-			const dpr = Math.min(window.devicePixelRatio || 1, 2);
-			const widthPx = Math.ceil(viewport.width);
-			const heightPx = Math.ceil(viewport.height);
-			const pdfCanvas = index === 0 ? leftPdf : rightPdf;
-			const inkCanvas = index === 0 ? leftInk : rightInk;
-			if (!pdfCanvas || !inkCanvas) return;
-			for (const canvas of [pdfCanvas, inkCanvas]) {
-				canvas.width = Math.ceil(widthPx * dpr);
-				canvas.height = Math.ceil(heightPx * dpr);
-				canvas.style.width = `${widthPx}px`;
-				canvas.style.height = `${heightPx}px`;
+
+			// Prefer high quality, then step down if canvas would exceed safe budget.
+			const attempts: Array<{ scale: number; dpr: number }> = [];
+			for (const dprCap of [Math.min(window.devicePixelRatio || 1, 2), 1.25, 1]) {
+				const area = Math.max(1, base.width * base.height);
+				const safeScale = Math.sqrt(MAX_CANVAS_PIXELS / (area * dprCap * dprCap));
+				const scale = Math.max(0.15, Math.min(3, desired, safeScale));
+				attempts.push({ scale, dpr: dprCap });
+				if (scale < desired * 0.98) {
+					// Also try an even smaller scale for stubborn large pages
+					attempts.push({ scale: Math.max(0.12, scale * 0.7), dpr: 1 });
+				}
 			}
-			const context = pdfCanvas.getContext('2d', { alpha: false })!;
-			context.setTransform(dpr, 0, 0, dpr, 0, 0);
-			context.fillStyle = '#fff';
-			context.fillRect(0, 0, widthPx, heightPx);
-			const task = pdfPage.render({ canvas: pdfCanvas, canvasContext: context, viewport });
-			tasks.push(task);
-			await task.promise;
-			if (current === generation) redraw(number, inkCanvas);
+
+			let lastError: unknown;
+			for (const attempt of attempts) {
+				if (current !== generation) return;
+				try {
+					await paintPage(pdfPage, number, index, attempt.scale, attempt.dpr, current);
+					return;
+				} catch (err) {
+					lastError = err;
+					if (
+						err instanceof Error &&
+						err.name === 'RenderingCancelledException'
+					)
+						return;
+					console.warn('Render attempt failed, trying lower resolution', attempt, err);
+				}
+			}
+			throw lastError ?? new Error('Unable to render page');
 		} finally {
 			try {
 				pdfPage.cleanup();
 			} catch {}
 		}
+	}
+
+	async function paintPage(
+		pdfPage: pdfjsLib.PDFPageProxy,
+		number: number,
+		index: number,
+		scale: number,
+		dpr: number,
+		current: number
+	) {
+		const viewport = pdfPage.getViewport({ scale });
+		const widthPx = Math.ceil(viewport.width);
+		const heightPx = Math.ceil(viewport.height);
+		const canvasW = Math.ceil(widthPx * dpr);
+		const canvasH = Math.ceil(heightPx * dpr);
+		if (canvasW * canvasH > MAX_CANVAS_PIXELS) {
+			throw new Error('Canvas exceeds safe pixel budget');
+		}
+		const pdfCanvas = index === 0 ? leftPdf : rightPdf;
+		const inkCanvas = index === 0 ? leftInk : rightInk;
+		if (!pdfCanvas || !inkCanvas) return;
+		for (const canvas of [pdfCanvas, inkCanvas]) {
+			canvas.width = canvasW;
+			canvas.height = canvasH;
+			canvas.style.width = `${widthPx}px`;
+			canvas.style.height = `${heightPx}px`;
+		}
+		const context = pdfCanvas.getContext('2d', { alpha: false });
+		if (!context) throw new Error('2D context unavailable');
+		context.setTransform(dpr, 0, 0, dpr, 0, 0);
+		context.fillStyle = '#fff';
+		context.fillRect(0, 0, widthPx, heightPx);
+		const task = pdfPage.render({
+			canvas: pdfCanvas,
+			canvasContext: context,
+			viewport
+		});
+		tasks.push(task);
+		await task.promise;
+		if (current === generation) redraw(number, inkCanvas);
 	}
 
 	function position(event: PointerEvent, canvas: HTMLCanvasElement): Point {
@@ -850,6 +857,7 @@
 		searchStatus = 'Not found';
 	}
 	function downloadScore() {
+		if (!score.pdfBlob) return;
 		const url = URL.createObjectURL(score.pdfBlob);
 		const link = document.createElement('a');
 		link.href = url;

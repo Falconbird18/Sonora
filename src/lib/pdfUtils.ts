@@ -35,6 +35,8 @@ class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
 }
 
 const DIRECT_LOAD_LIMIT = 64 * 1024 * 1024;
+/** Soft cap for canvas pixels (width * height * dpr^2). Browsers often fail above ~16–32M. */
+export const MAX_CANVAS_PIXELS = 16_000_000;
 
 async function openWithData(blob: Blob) {
 	return pdfjsLib.getDocument({
@@ -86,7 +88,14 @@ export async function openPdf(blob: Blob) {
 export async function getPdfInfo(blob: Blob) {
 	const { document, transport } = await openPdf(blob);
 	try {
-		return { totalPages: document.numPages, thumbnailUrl: await renderThumbnail(document) };
+		const totalPages = document.numPages;
+		let thumbnailUrl: string | undefined;
+		try {
+			thumbnailUrl = await renderThumbnail(document);
+		} catch (err) {
+			console.warn('Thumbnail render failed', err);
+		}
+		return { totalPages, thumbnailUrl };
 	} finally {
 		transport?.abort();
 		await document.destroy();
@@ -96,19 +105,32 @@ export async function getPdfInfo(blob: Blob) {
 async function renderThumbnail(document: pdfjsLib.PDFDocumentProxy) {
 	const page = await document.getPage(1);
 	try {
-		const viewport = page.getViewport({ scale: 0.35 });
+		const base = page.getViewport({ scale: 1 });
+		const area = Math.max(1, base.width * base.height);
+		// Target ~220px-wide thumbs; never exceed pixel budget (including dpr).
+		const dpr = Math.min(globalThis.devicePixelRatio || 1, 1.5);
+		const targetWidth = 220;
+		let scale = targetWidth / Math.max(1, base.width);
+		const maxScale = Math.sqrt(MAX_CANVAS_PIXELS / (area * dpr * dpr));
+		scale = Math.min(scale, maxScale, 0.5);
+		scale = Math.max(0.05, scale);
+
+		const viewport = page.getViewport({ scale });
 		const canvas = globalThis.document.createElement('canvas');
-		const dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
-		canvas.width = Math.ceil(viewport.width * dpr);
-		canvas.height = Math.ceil(viewport.height * dpr);
+		const widthPx = Math.ceil(viewport.width);
+		const heightPx = Math.ceil(viewport.height);
+		canvas.width = Math.ceil(widthPx * dpr);
+		canvas.height = Math.ceil(heightPx * dpr);
+		if (canvas.width * canvas.height > MAX_CANVAS_PIXELS) {
+			throw new Error('Thumbnail canvas exceeds safe pixel budget');
+		}
 		const context = canvas.getContext('2d', { alpha: false });
 		if (!context) throw new Error('Canvas is unavailable');
 		context.setTransform(dpr, 0, 0, dpr, 0, 0);
 		context.fillStyle = '#fff';
-		context.fillRect(0, 0, viewport.width, viewport.height);
-		// PDF.js v5.4+/v6 expects the canvas element as well as the context.
+		context.fillRect(0, 0, widthPx, heightPx);
 		await page.render({ canvas, canvasContext: context, viewport }).promise;
-		return canvas.toDataURL('image/jpeg', 0.74);
+		return canvas.toDataURL('image/jpeg', 0.72);
 	} finally {
 		page.cleanup();
 	}
