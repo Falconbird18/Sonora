@@ -62,11 +62,13 @@ async function openWithData(blob: Blob): Promise<pdfjsLib.PDFDocumentProxy> {
 
 /** Open from a file/asset URL (preferred on desktop — no full copy into JS). */
 export async function openPdfFromUrl(url: string): Promise<OpenedPdf> {
+	// Stream + range: only fetch needed page data. Critical for large scores on desktop.
 	const document = await pdfjsLib.getDocument({
 		url,
-		rangeChunkSize: 1024 * 1024,
-		disableAutoFetch: false,
+		rangeChunkSize: 512 * 1024,
+		disableAutoFetch: true,
 		disableStream: false,
+		disableRange: false,
 		...commonOpts
 	}).promise;
 	return { document, transport: null };
