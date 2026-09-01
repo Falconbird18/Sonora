@@ -45,7 +45,7 @@
     "shortDescription": "Sheet music library and score viewer",
     "longDescription": "Sonora is a fast, offline-capable sheet music library and score viewer with annotations.",
     "icon": [
-      "icons/icon.png"
+      "icons/app-icon.svg"
     ]
   }
 }
