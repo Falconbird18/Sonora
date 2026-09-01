@@ -1,9 +1,8 @@
+import './compat';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
-if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-	pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
-}
+if (!pdfjsLib.GlobalWorkerOptions.workerSrc) pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 function blobFilename(blob: Blob) {
 	return typeof File !== 'undefined' && blob instanceof File && blob.name ? blob.name : 'score.pdf';
@@ -12,11 +11,7 @@ function blobFilename(blob: Blob) {
 class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
 	private pending = new Map<string, Promise<void>>();
 	private stopped = false;
-
-	constructor(private readonly blob: Blob) {
-		super(blob.size, null, false, blobFilename(blob));
-	}
-
+	constructor(private readonly blob: Blob) { super(blob.size, null, false, blobFilename(blob)); }
 	requestDataRange(begin: number, end: number) {
 		if (this.stopped) return;
 		const safeBegin = Math.max(0, Math.min(begin, this.blob.size));
@@ -27,34 +22,21 @@ class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
 		const request = this.blob.slice(safeBegin, safeEnd).arrayBuffer().then((buffer) => {
 			if (!this.stopped) this.onDataRange(safeBegin, new Uint8Array(buffer));
 		}).catch((error) => {
-			if (!this.stopped) {
-				console.warn('PDF range request failed', error);
-				this.stopped = true;
-			}
+			if (!this.stopped) { console.warn('PDF range request failed', error); this.stopped = true; }
 		});
 		this.pending.set(key, request);
 		void request.finally(() => this.pending.delete(key));
 	}
-
-	abort() {
-		this.stopped = true;
-		this.pending.clear();
-	}
+	abort() { this.stopped = true; this.pending.clear(); }
 }
 
 const DIRECT_LOAD_LIMIT = 48 * 1024 * 1024;
 export const MAX_CANVAS_PIXELS = 16_000_000;
-
-export type OpenedPdf = {
-	document: pdfjsLib.PDFDocumentProxy;
-	transport: BlobRangeTransport | null;
-};
-
+export type OpenedPdf = { document: pdfjsLib.PDFDocumentProxy; transport: BlobRangeTransport | null };
 const commonOpts = { isEvalSupported: false, useWorkerFetch: false, useSystemFonts: true } as const;
 
 async function openWithData(blob: Blob): Promise<pdfjsLib.PDFDocumentProxy> {
-	const buffer = await blob.arrayBuffer();
-	return pdfjsLib.getDocument({ data: buffer, ...commonOpts }).promise;
+	return pdfjsLib.getDocument({ data: await blob.arrayBuffer(), ...commonOpts }).promise;
 }
 
 export async function openPdfFromUrl(url: string): Promise<OpenedPdf> {
@@ -94,13 +76,9 @@ export async function getPdfInfoFromSource(source: { url?: string; blob?: Blob }
 	try {
 		const totalPages = document.numPages;
 		let thumbnailUrl: string | undefined;
-		try { thumbnailUrl = await renderThumbnail(document); }
-		catch (err) { console.warn('Thumbnail render failed', err); }
+		try { thumbnailUrl = await renderThumbnail(document); } catch (err) { console.warn('Thumbnail render failed', err); }
 		return { totalPages, thumbnailUrl };
-	} finally {
-		transport?.abort();
-		await document.cleanup();
-	}
+	} finally { transport?.abort(); await document.cleanup(); }
 }
 
 export async function getPdfInfo(blob: Blob) { return getPdfInfoFromSource({ blob }); }
@@ -110,19 +88,15 @@ async function renderThumbnail(document: pdfjsLib.PDFDocumentProxy) {
 	try {
 		const base = page.getViewport({ scale: 1 });
 		const area = Math.max(1, base.width * base.height);
-		const targetWidth = 180;
-		let scale = targetWidth / Math.max(1, base.width);
-		const maxScale = Math.sqrt(MAX_CANVAS_PIXELS / area);
-		scale = Math.max(0.04, Math.min(scale, maxScale, 0.4));
+		let scale = 180 / Math.max(1, base.width);
+		scale = Math.max(0.04, Math.min(scale, Math.sqrt(MAX_CANVAS_PIXELS / area), 0.4));
 		const viewport = page.getViewport({ scale });
 		const canvas = globalThis.document.createElement('canvas');
-		canvas.width = Math.ceil(viewport.width);
-		canvas.height = Math.ceil(viewport.height);
+		canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
 		if (canvas.width * canvas.height > MAX_CANVAS_PIXELS) throw new Error('Thumbnail canvas exceeds safe pixel budget');
 		const context = canvas.getContext('2d', { alpha: false });
 		if (!context) throw new Error('Canvas is unavailable');
-		context.fillStyle = '#fff';
-		context.fillRect(0, 0, canvas.width, canvas.height);
+		context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height);
 		await page.render({ canvas, canvasContext: context, viewport }).promise;
 		return canvas.toDataURL('image/jpeg', 0.65);
 	} finally { page.cleanup(); }
