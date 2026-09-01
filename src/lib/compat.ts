@@ -1,6 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
-declare module 'pdfjs-dist/types/src/display/api' {
+declare module 'pdfjs-dist/types/src/display/api.js' {
 	interface PDFDocumentProxy {
 		destroy(): Promise<void>;
 	}
