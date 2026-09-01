@@ -5,25 +5,34 @@ if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
 	pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 }
 
+function blobFilename(blob: Blob) {
+	return typeof File !== 'undefined' && blob instanceof File && blob.name
+		? blob.name
+		: 'score.pdf';
+}
+
 class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
 	private pending = new Map<string, Promise<void>>();
 	private stopped = false;
 
 	constructor(private readonly blob: Blob) {
-		super(blob.size, null, false, blob.name || 'score.pdf');
+		super(blob.size, null, false, blobFilename(blob));
 	}
 
 	requestDataRange(begin: number, end: number) {
 		if (this.stopped) return;
-		const key = `${begin}:${end}`;
+		const safeBegin = Math.max(0, Math.min(begin, this.blob.size));
+		const safeEnd = Math.max(safeBegin, Math.min(end, this.blob.size));
+		if (safeEnd <= safeBegin) return;
+		const key = `${safeBegin}:${safeEnd}`;
 		if (this.pending.has(key)) return;
 		const request = this.blob
-			.slice(begin, end)
+			.slice(safeBegin, safeEnd)
 			.arrayBuffer()
 			.then((buffer) => {
 				if (!this.stopped) {
-					this.onDataRange(begin, new Uint8Array(buffer));
-					this.onDataProgress(Math.min(end, this.blob.size), this.blob.size);
+					this.onDataRange(safeBegin, new Uint8Array(buffer));
+					this.onDataProgress(safeEnd, this.blob.size);
 				}
 			});
 		this.pending.set(key, request);
@@ -62,6 +71,7 @@ async function openWithData(blob: Blob): Promise<pdfjsLib.PDFDocumentProxy> {
 
 /** Open from a file/asset URL (preferred on desktop — no full copy into JS). */
 export async function openPdfFromUrl(url: string): Promise<OpenedPdf> {
+	if (!url.trim()) throw new Error('PDF URL is empty');
 	// Stream + range: only fetch needed page data. Critical for large scores on desktop.
 	const document = await pdfjsLib.getDocument({
 		url,
@@ -173,7 +183,8 @@ async function renderThumbnail(document: pdfjsLib.PDFDocumentProxy) {
 		if (!context) throw new Error('Canvas is unavailable');
 		context.fillStyle = '#fff';
 		context.fillRect(0, 0, widthPx, heightPx);
-		await page.render({ canvas, canvasContext: context, viewport }).promise;
+		const renderTask = page.render({ canvas, canvasContext: context, viewport });
+		await renderTask.promise;
 		return canvas.toDataURL('image/jpeg', 0.65);
 	} finally {
 		page.cleanup();
