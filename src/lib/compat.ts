@@ -6,6 +6,10 @@ declare module 'pdfjs-dist' {
 	}
 }
 
+declare module 'svelte' {
+	export function onMount(fn: () => void | (() => void) | Promise<void | (() => void)>): void;
+}
+
 declare global {
 	interface FileSystemDirectoryHandle {
 		queryPermission(options?: { mode?: 'read' | 'readwrite' }): Promise<PermissionState>;
