@@ -1,15 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
-/**
- * Project-wide compatibility declarations for browser APIs and the current
- * Svelte/PDF.js versions. The runtime PDF.js shim below restores the old
- * PDFDocumentProxy.destroy() convenience method removed in PDF.js 6.
- */
-
-declare module 'svelte' {
-	export function onMount(fn: () => void | (() => void) | Promise<void | (() => void)>): void;
-}
-
 declare module 'pdfjs-dist' {
 	interface PDFDocumentProxy {
 		destroy(): Promise<void>;
@@ -31,16 +21,10 @@ declare global {
 	}
 }
 
-export function attachPdfDestroy(document: pdfjsLib.PDFDocumentProxy): pdfjsLib.PDFDocumentProxy {
-	const candidate = document as pdfjsLib.PDFDocumentProxy & {
-		destroy?: () => Promise<void>;
-	};
-
-	if (!candidate.destroy) {
-		candidate.destroy = () => document.loadingTask.destroy();
-	}
-
-	return document;
+/** Safely clean up a PDF.js 6 document. */
+export async function destroyPdfDocument(document: pdfjsLib.PDFDocumentProxy | null | undefined) {
+	if (!document) return;
+	await document.cleanup();
 }
 
 export {};
