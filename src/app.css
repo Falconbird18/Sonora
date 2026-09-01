@@ -1,1 +1,17 @@
-@import "tailwindcss";
+html, body, #app { -webkit-tap-highlight-color: transparent; }
+
+button, input, select { font: inherit; }
+button { touch-action: manipulation; }
+
+@media (pointer: coarse) {
+	button { min-height: 40px; }
+	input, select { min-height: 40px; }
+}
+
+@media (max-width: 900px) {
+	:root { --sonora-touch-target: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after { scroll-behavior: auto !important; }
+}
