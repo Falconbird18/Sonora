@@ -25,7 +25,17 @@ declare global {
 	}
 }
 
-/** Safely clean up a PDF.js 6 document. */
+/** PDF.js 6 removed the proxy destroy convenience method; cleanup is its replacement. */
+const pdfDocumentPrototype = (pdfjsLib as typeof pdfjsLib & {
+	PDFDocumentProxy?: { prototype: { destroy?: () => Promise<void>; cleanup?: () => Promise<void> } };
+}).PDFDocumentProxy?.prototype;
+
+if (pdfDocumentPrototype && !pdfDocumentPrototype.destroy && pdfDocumentPrototype.cleanup) {
+	pdfDocumentPrototype.destroy = async function () {
+		await this.cleanup?.();
+	};
+}
+
 export async function destroyPdfDocument(document: pdfjsLib.PDFDocumentProxy | null | undefined) {
 	if (!document) return;
 	await document.cleanup();
