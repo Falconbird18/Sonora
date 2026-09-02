@@ -10,8 +10,12 @@ if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
 const PDFJS_VERSION = pdfjsLib.version || '4.0.379';
 
 const commonOpts = {
-    // MUST be true (or omitted) for PDF.js to compile embedded Type1/CFF musical fonts
+    // Keep PDF.js' JS glyph compiler enabled for embedded Type1/CFF fonts.
     isEvalSupported: true,
+    // Avoid browser/WebView font sanitization for embedded score fonts. Some
+    // otherwise-valid music PDFs contain embedded fonts which PDF.js can parse
+    // but the WebView rejects as downloadable fonts, leaving a white canvas.
+    disableFontFace: true,
     useWorkerFetch: false,
     useSystemFonts: true,
     cMapUrl: `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/cmaps/`,
@@ -30,9 +34,6 @@ function blobFilename(blob: Blob) {
     return typeof File !== 'undefined' && blob instanceof File && blob.name ? blob.name : 'score.pdf';
 }
 
-/**
- * Clones buffer to prevent worker thread buffer-neutering in the main thread.
- */
 function safeCloneUint8Array(buffer: ArrayBuffer): Uint8Array {
     const copy = new Uint8Array(buffer.byteLength);
     copy.set(new Uint8Array(buffer));
@@ -52,25 +53,16 @@ class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
         const safeBegin = Math.max(0, Math.min(begin, this.blob.size));
         const safeEnd = Math.max(safeBegin, Math.min(end, this.blob.size));
         if (safeEnd <= safeBegin) return;
-
         const key = `${safeBegin}:${safeEnd}`;
         if (this.pending.has(key)) return;
-
-        const request = this.blob
-            .slice(safeBegin, safeEnd)
-            .arrayBuffer()
-            .then((buffer) => {
-                if (!this.stopped) {
-                    this.onDataRange(safeBegin, safeCloneUint8Array(buffer));
-                }
-            })
-            .catch((error) => {
-                if (!this.stopped) {
-                    console.warn('PDF range request failed', error);
-                    this.stopped = true;
-                }
-            });
-
+        const request = this.blob.slice(safeBegin, safeEnd).arrayBuffer().then((buffer) => {
+            if (!this.stopped) this.onDataRange(safeBegin, safeCloneUint8Array(buffer));
+        }).catch((error) => {
+            if (!this.stopped) {
+                console.warn('PDF range request failed', error);
+                this.stopped = true;
+            }
+        });
         this.pending.set(key, request);
         void request.finally(() => this.pending.delete(key));
     }
@@ -86,9 +78,7 @@ function isLocalProtocolUrl(url: string) {
 }
 
 async function resolveTauriUrl(pathOrUrl: string): Promise<string> {
-    if (!isTauri() || /^(https?|blob|data|asset|tauri):/i.test(pathOrUrl)) {
-        return pathOrUrl;
-    }
+    if (!isTauri() || /^(https?|blob|data|asset|tauri):/i.test(pathOrUrl)) return pathOrUrl;
     try {
         const { convertFileSrc } = await import('@tauri-apps/api/core');
         return convertFileSrc(pathOrUrl);
@@ -106,8 +96,7 @@ async function readNativePdf(path: string): Promise<Blob> {
 
 async function openWithData(blob: Blob): Promise<pdfjsLib.PDFDocumentProxy> {
     const rawBuffer = await blob.arrayBuffer();
-    const clonedData = safeCloneUint8Array(rawBuffer);
-    return pdfjsLib.getDocument({ data: clonedData, ...commonOpts }).promise;
+    return pdfjsLib.getDocument({ data: safeCloneUint8Array(rawBuffer), ...commonOpts }).promise;
 }
 
 async function fetchPdfBlob(url: string): Promise<Blob> {
@@ -121,8 +110,6 @@ async function fetchPdfBlob(url: string): Promise<Blob> {
 
 export async function openPdf(blob: Blob): Promise<OpenedPdf> {
     if (!blob || blob.size === 0) throw new Error('PDF data is empty');
-
-    // Favor direct ArrayBuffer loading for files under the limit
     if (blob.size <= DIRECT_LOAD_LIMIT) {
         try {
             return { document: await openWithData(blob), transport: null };
@@ -130,7 +117,6 @@ export async function openPdf(blob: Blob): Promise<OpenedPdf> {
             console.warn('Direct PDF loading failed; retrying with range loading', error);
         }
     }
-
     const transport = new BlobRangeTransport(blob);
     try {
         const document = await pdfjsLib.getDocument({
@@ -156,7 +142,6 @@ export async function openPdfFromUrl(url: string): Promise<OpenedPdf> {
     if (!url.trim()) throw new Error('PDF URL is empty');
     const targetUrl = await resolveTauriUrl(url);
     const local = isLocalProtocolUrl(targetUrl);
-
     try {
         const document = await pdfjsLib.getDocument({
             url: targetUrl,
@@ -174,7 +159,6 @@ export async function openPdfFromUrl(url: string): Promise<OpenedPdf> {
 }
 
 export async function openPdfSource(source: PdfSource): Promise<OpenedPdf> {
-    // 1. In Tauri desktop mode, prioritize Rust binary reading to bypass Asset Protocol scope errors
     if (source.nativePath && isTauri()) {
         try {
             return await openPdf(await readNativePdf(source.nativePath));
@@ -182,8 +166,6 @@ export async function openPdfSource(source: PdfSource): Promise<OpenedPdf> {
             console.warn('Native IPC score read failed; falling back to URL/blob', err);
         }
     }
-
-    // 2. Fall back to URL loading
     if (source.url) {
         try {
             return await openPdfFromUrl(source.url);
@@ -192,23 +174,14 @@ export async function openPdfSource(source: PdfSource): Promise<OpenedPdf> {
             if (!source.blob) throw err;
         }
     }
-
-    // 3. Fall back to Blob loading
-    if (source.blob) {
-        return openPdf(source.blob);
-    }
-
+    if (source.blob) return openPdf(source.blob);
     throw new Error('No valid PDF source available');
 }
 
 export async function closePdf(opened: OpenedPdf | null | undefined) {
     if (!opened) return;
-    try {
-        opened.transport?.abort();
-    } catch {}
-    try {
-        await opened.document.cleanup();
-    } catch {}
+    try { opened.transport?.abort(); } catch {}
+    try { await opened.document.cleanup(); } catch {}
 }
 
 export async function getPdfInfoFromSource(source: PdfSource) {
@@ -216,11 +189,8 @@ export async function getPdfInfoFromSource(source: PdfSource) {
     try {
         const totalPages = opened.document.numPages;
         let thumbnailUrl: string | undefined;
-        try {
-            thumbnailUrl = await renderThumbnail(opened.document);
-        } catch (err) {
-            console.warn('Thumbnail render failed', err);
-        }
+        try { thumbnailUrl = await renderThumbnail(opened.document); }
+        catch (err) { console.warn('Thumbnail render failed', err); }
         return { totalPages, thumbnailUrl };
     } finally {
         await closePdf(opened);
@@ -242,9 +212,7 @@ async function renderThumbnail(document: pdfjsLib.PDFDocumentProxy) {
         const canvas = globalThis.document.createElement('canvas');
         canvas.width = Math.ceil(viewport.width);
         canvas.height = Math.ceil(viewport.height);
-        if (canvas.width * canvas.height > MAX_CANVAS_PIXELS) {
-            throw new Error('Thumbnail canvas exceeds safe pixel budget');
-        }
+        if (canvas.width * canvas.height > MAX_CANVAS_PIXELS) throw new Error('Thumbnail canvas exceeds safe pixel budget');
         const context = canvas.getContext('2d', { alpha: false });
         if (!context) throw new Error('Canvas is unavailable');
         context.fillStyle = '#fff';
@@ -255,8 +223,6 @@ async function renderThumbnail(document: pdfjsLib.PDFDocumentProxy) {
         canvas.height = 0;
         return url;
     } finally {
-        try {
-            page.cleanup();
-        } catch {}
+        try { page.cleanup(); } catch {}
     }
 }
