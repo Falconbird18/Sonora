@@ -13,7 +13,9 @@
 		Clock3,
 		X,
 		FileText,
-		Check
+		Check,
+		Tag,
+		Trash2
 	} from '@lucide/svelte';
 	import { db } from './db';
 	import { chooseAndAddFolder, syncAllFolders, resolveScoreSource } from './folderSync';
@@ -34,6 +36,7 @@
 	let sort = $state<'recent' | 'title' | 'composer'>('recent');
 	let view = $state<'grid' | 'list'>('grid');
 	let metadata = $state<ScoreItem | null>(null);
+	let menuScoreId = $state<string | null>(null);
 	let newTags = $state('');
 	let syncing = $state(false);
 	let notice = $state('');
@@ -86,7 +89,6 @@
 		}
 	}
 
-	/** Prepare score for the viewer — never copy multi-MB PDF bytes over IPC. */
 	function prepareScore(score: ScoreItem): ScoreItem {
 		const source = resolveScoreSource(score, folder);
 		return {
@@ -99,13 +101,12 @@
 
 	async function openScore(score: ScoreItem) {
 		error = '';
+		menuScoreId = null;
 		openingId = score.id;
 		try {
 			const prepared = prepareScore(score);
 			if (!prepared.pdfUrl && !prepared.nativePath && !(prepared.pdfBlob && prepared.pdfBlob.size > 0)) {
-				throw new Error(
-					`\u201c${score.title}\u201d has no PDF source. Try refreshing the library.`
-				);
+				throw new Error(`“${score.title}” has no PDF source. Try refreshing the library.`);
 			}
 			const openedAt = Date.now();
 			void db.scores.update(score.id, { lastOpenedAt: openedAt }).catch((err) =>
@@ -162,11 +163,7 @@
 					});
 					scores = scores.map((item) =>
 						item.id === score.id
-							? {
-									...item,
-									thumbnailUrl: next.thumbnailUrl,
-									totalPages: next.totalPages
-							  }
+							? { ...item, thumbnailUrl: next.thumbnailUrl, totalPages: next.totalPages }
 							: item
 					);
 				} catch (err) {
@@ -189,8 +186,14 @@
 		scores = scores.map((item) => (item.id === score.id ? next : item));
 	}
 
-	function editMetadata(score: ScoreItem, event: MouseEvent) {
+	function toggleScoreMenu(score: ScoreItem, event: MouseEvent) {
 		event.stopPropagation();
+		menuScoreId = menuScoreId === score.id ? null : score.id;
+	}
+
+	function editMetadata(score: ScoreItem, event?: MouseEvent) {
+		event?.stopPropagation();
+		menuScoreId = null;
 		metadata = score;
 		newTags = (score.tags ?? []).join(', ');
 	}
@@ -203,9 +206,10 @@
 		metadata = null;
 	}
 
-	async function deleteScore(score: ScoreItem, event: MouseEvent) {
-		event.stopPropagation();
-		if (!confirm(`Remove \u201c${score.title}\u201d from Sonora?`)) return;
+	async function deleteScore(score: ScoreItem, event?: MouseEvent) {
+		event?.stopPropagation();
+		menuScoreId = null;
+		if (!confirm(`Remove “${score.title}” from Sonora?`)) return;
 		await db.transaction('rw', db.scores, db.annotations, async () => {
 			await db.scores.delete(score.id);
 			await db.annotations.where('scoreId').equals(score.id).delete();
@@ -225,24 +229,27 @@
 
 	onMount(() => {
 		void (async () => {
-		await refresh();
-		const saved = localStorage.getItem('sonora-library-settings');
-		if (saved) {
-			try {
-				const value = JSON.parse(saved);
-				view = value.view === 'list' ? 'list' : 'grid';
-				sort = ['recent', 'title', 'composer'].includes(value.sort) ? value.sort : 'recent';
-			} catch {}
-		}
+			await refresh();
+			const saved = localStorage.getItem('sonora-library-settings');
+			if (saved) {
+				try {
+					const value = JSON.parse(saved);
+					view = value.view === 'list' ? 'list' : 'grid';
+					sort = ['recent', 'title', 'composer'].includes(value.sort) ? value.sort : 'recent';
+				} catch {}
+			}
 			await sync();
 			void backfillThumbnails();
 			timer = setInterval(sync, 5 * 60 * 1000);
 		})();
 		const wake = () => void sync();
+		const closeMenus = () => (menuScoreId = null);
 		window.addEventListener('focus', wake);
+		window.addEventListener('resize', closeMenus);
 		return () => {
 			clearInterval(timer);
 			window.removeEventListener('focus', wake);
+			window.removeEventListener('resize', closeMenus);
 		};
 	});
 
@@ -269,12 +276,7 @@
 			.filter((score) => filter === 'all' || (filter === 'favorites' ? !!score.favorite : !!score.lastOpenedAt))
 			.filter((score) => {
 				const query = search.trim().toLowerCase();
-				return (
-					!query ||
-					score.title.toLowerCase().includes(query) ||
-					score.composer.toLowerCase().includes(query) ||
-					(score.tags ?? []).some((tag) => tag.toLowerCase().includes(query))
-				);
+				return !query || score.title.toLowerCase().includes(query) || score.composer.toLowerCase().includes(query) || (score.tags ?? []).some((tag) => tag.toLowerCase().includes(query));
 			})
 			.sort((a, b) =>
 				sort === 'title'
@@ -286,13 +288,7 @@
 	);
 
 	const currentTitle = $derived(
-		composer
-			? composer
-			: filter === 'favorites'
-				? 'Favorites'
-				: filter === 'recent'
-					? 'Recently opened'
-					: 'All scores'
+		composer ? composer : filter === 'favorites' ? 'Favorites' : filter === 'recent' ? 'Recently opened' : 'All scores'
 	);
 </script>
 
@@ -327,9 +323,34 @@
 					<div class="seg"><button class:active={view === 'grid'} onclick={() => (view = 'grid')} aria-label="Grid view"><Grid2X2 size={16} /></button><button class:active={view === 'list'} onclick={() => (view = 'list')} aria-label="List view"><List size={16} /></button></div>
 				</div>
 			</div>
-			{#if !folder && !scores.length}<div class="empty"><div class="empty-icon"><FolderOpen size={30} /></div><h2>Your score library</h2><p>Choose one folder where Sonora will keep all of your scores.</p><button class="primary" onclick={chooseFolder}><FolderPlus size={17} />Choose score folder</button></div>
-			{:else if filtered.length === 0}<div class="empty"><div class="empty-icon"><Search size={28} /></div><h2>No scores found</h2><p>Try another search or filter, or refresh the library.</p></div>
-			{:else}<div class:score-grid={view === 'grid'} class:score-list={view === 'list'}>{#each filtered as score (score.id)}<div class="card" class:opening={openingId === score.id} role="button" tabindex="0" onclick={() => openScore(score)} onkeydown={(event) => event.key === 'Enter' && openScore(score)}><div class="cover">{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" loading="lazy" decoding="async" />{:else}<div class="no-cover"><FileText size={24} /><span>{score.totalPages ? `${score.totalPages} pages` : 'Preparing preview'}</span></div>{/if}<button class="favorite" class:marked={score.favorite} onclick={(event) => toggleFavorite(score, event)} aria-label="Favorite"><Star size={15} fill={score.favorite ? 'currentColor' : 'none'} /></button><div class="card-menu"><button onclick={(event) => editMetadata(score, event)} aria-label="Edit score"><MoreHorizontal size={16} /></button><button onclick={(event) => deleteScore(score, event)} aria-label="Remove score"><X size={16} /></button></div></div><div class="info"><h3 title={score.title}>{score.title}</h3><p>{score.composer}</p>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0, 2) as tag}<span>{tag}</span>{/each}</div>{/if}</div></div>{/each}</div>{/if}
+			{#if !folder && !scores.length}
+				<div class="empty"><div class="empty-icon"><FolderOpen size={30} /></div><h2>Your score library</h2><p>Choose one folder where Sonora will keep all of your scores.</p><button class="primary" onclick={chooseFolder}><FolderPlus size={17} />Choose score folder</button></div>
+			{:else if filtered.length === 0}
+				<div class="empty"><div class="empty-icon"><Search size={28} /></div><h2>No scores found</h2><p>Try another search or filter, or refresh the library.</p></div>
+			{:else}
+				<div class:score-grid={view === 'grid'} class:score-list={view === 'list'}>
+					{#each filtered as score (score.id)}
+						<div class="card" class:opening={openingId === score.id} role="button" tabindex="0" onclick={() => openScore(score)} onkeydown={(event) => event.key === 'Enter' && openScore(score)}>
+							<div class="cover">
+								{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" loading="lazy" decoding="async" />{:else}<div class="no-cover"><FileText size={24} /><span>{score.totalPages ? `${score.totalPages} pages` : 'Preparing preview'}</span></div>{/if}
+								<div class="card-actions">
+									<button class="action-button favorite" class:marked={score.favorite} onclick={(event) => toggleFavorite(score, event)} aria-label={score.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={score.favorite} title={score.favorite ? 'Remove from favorites' : 'Add to favorites'}><Star size={16} fill={score.favorite ? 'currentColor' : 'none'} /></button>
+									<div class="menu-wrap">
+										<button class="action-button menu-trigger" class:active={menuScoreId === score.id} onclick={(event) => toggleScoreMenu(score, event)} aria-label="More score actions" aria-expanded={menuScoreId === score.id} title="More actions"><MoreHorizontal size={17} /></button>
+										{#if menuScoreId === score.id}
+											<div class="score-menu" role="menu" onclick={(event) => event.stopPropagation()}>
+												<button role="menuitem" onclick={(event) => editMetadata(score, event)}><Tag size={15} /><span>Edit tags</span></button>
+												<button class="danger" role="menuitem" onclick={(event) => deleteScore(score, event)}><Trash2 size={15} /><span>Remove from library</span></button>
+											</div>
+										{/if}
+									</div>
+								</div>
+							</div>
+							<div class="info"><h3 title={score.title}>{score.title}</h3><p>{score.composer}</p>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0, 2) as tag}<span>{tag}</span>{/each}</div>{/if}</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
 		</main>
 	</div>
 	{#if metadata}<div class="dialog-backdrop" role="presentation" onclick={(event) => event.currentTarget === event.target && (metadata = null)}><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="metadata-title"><header><div><h2 id="metadata-title">Edit score</h2><p>{metadata.title}</p></div><button class="icon-button" onclick={() => (metadata = null)} aria-label="Close"><X size={18} /></button></header><label>Tags<input bind:value={newTags} placeholder="Concert, piano, practice" /></label><footer><button onclick={() => (metadata = null)}>Cancel</button><button class="primary" onclick={saveMetadata}>Save</button></footer></div></div>{/if}
@@ -383,14 +404,22 @@
 	.card { min-width:0; cursor:pointer; }
 	.card.opening { opacity:.7; }
 	.card:focus-visible { outline:2px solid currentColor; outline-offset:5px; border-radius:8px; }
-	.cover { position:relative; aspect-ratio:3/4; overflow:hidden; border-radius:8px; background:color-mix(in srgb,currentColor 6%,transparent); box-shadow:0 5px 16px #0003; }
-	.cover > img { width:100%; height:100%; object-fit:cover; display:block; background:#fff; }
-	.no-cover { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; opacity:.42; font-size:.78rem; }
-	.favorite,.card-menu { position:absolute; top:8px; display:grid; place-items:center; width:30px; height:30px; border-radius:8px; background:#111b; backdrop-filter:blur(8px); opacity:0; pointer-events:none; transition:opacity .15s; }
-	.favorite { right:8px; }
-	.card-menu { left:8px; grid-template-columns:1fr 1fr; width:62px; }
-	.cover:hover .favorite,.cover:hover .card-menu,.favorite.marked { opacity:1; pointer-events:auto; }
+	.cover { position:relative; aspect-ratio:3/4; overflow:visible; border-radius:8px; background:color-mix(in srgb,currentColor 6%,transparent); box-shadow:0 5px 16px #0003; }
+	.cover::before { content:""; position:absolute; inset:0; z-index:0; overflow:hidden; border-radius:8px; pointer-events:none; }
+	.cover > img { position:relative; z-index:1; width:100%; height:100%; object-fit:cover; display:block; border-radius:8px; background:#fff; }
+	.no-cover { position:relative; z-index:1; width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; border-radius:8px; opacity:.42; font-size:.78rem; }
+	.card-actions { position:absolute; z-index:4; top:9px; right:9px; display:flex; align-items:center; gap:5px; padding:4px; border-radius:10px; background:#111b; backdrop-filter:blur(10px); box-shadow:0 3px 12px #0003; opacity:0; transform:translateY(-2px); transition:opacity .16s ease,transform .16s ease; }
+	.card:hover .card-actions,.card:focus-within .card-actions,.card-actions:has(.favorite.marked) { opacity:1; transform:none; }
+	.action-button { width:29px; height:29px; display:grid; place-items:center; border-radius:7px; color:#f5f5f4; }
+	.action-button:hover,.action-button.active { background:#ffffff1a; }
 	.favorite.marked { color:#f4c95d; }
+	.favorite.marked:hover { background:#f4c95d1c; }
+	.menu-wrap { position:relative; }
+	.score-menu { position:absolute; top:34px; right:0; z-index:20; width:184px; padding:5px; border:1px solid #ffffff14; border-radius:10px; background:#1b1b19f5; box-shadow:0 14px 36px #0009; backdrop-filter:blur(14px); }
+	.score-menu button { width:100%; min-height:34px; display:flex; align-items:center; gap:9px; padding:0 9px; border-radius:7px; text-align:left; font-size:.78rem; }
+	.score-menu button:hover { background:#ffffff0e; }
+	.score-menu button.danger { color:#f19a9a; }
+	.score-menu button.danger:hover { background:#a63c3c22; }
 	.info { padding:10px 2px 0; }
 	.info h3 { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.94rem; font-weight:600; }
 	.info p { margin:4px 0 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.52; font-size:.8rem; }
@@ -399,9 +428,11 @@
 	.score-list { display:flex; flex-direction:column; gap:4px; }
 	.score-list .card { display:grid; grid-template-columns:52px minmax(0,1fr); gap:14px; align-items:center; padding:7px; border-radius:9px; }
 	.score-list .card:hover { background:color-mix(in srgb,currentColor 6%,transparent); }
-	.score-list .cover { width:52px; aspect-ratio:3/4; box-shadow:none; }
+	.score-list .cover { width:52px; aspect-ratio:3/4; box-shadow:none; overflow:visible; }
+	.score-list .cover > img,.score-list .no-cover { border-radius:5px; }
+	.score-list .card-actions { top:50%; right:-7px; transform:translateY(-50%) scale(.86); transform-origin:right center; opacity:0; }
+	.score-list .card:hover .card-actions,.score-list .card:focus-within .card-actions,.score-list .card-actions:has(.favorite.marked) { opacity:1; transform:translateY(-50%) scale(.86); }
 	.score-list .info { padding:0; }
-	.score-list .favorite,.score-list .card-menu { opacity:1; transform:scale(.85); }
 	.empty { min-height:420px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
 	.empty-icon { width:64px; height:64px; display:grid; place-items:center; margin-bottom:16px; border-radius:18px; background:color-mix(in srgb,currentColor 7%,transparent); opacity:.75; }
 	.empty h2 { margin:0; font-size:1.15rem; }
@@ -418,5 +449,5 @@
 	@keyframes spin { to { transform:rotate(360deg); } }
 	@media (max-width:850px) { .header { grid-template-columns:auto minmax(0,1fr) auto; gap:12px; padding:0 16px; } .folder-button span { display:none; } .body { grid-template-columns:190px minmax(0,1fr); } .main { padding:22px 20px 40px; } }
 	@media (max-width:650px) { .header { height:64px; } .brand strong { display:none; } .body { display:block; } .sidebar { display:none; } .main { padding:18px 14px 32px; } .toolbar { align-items:center; margin-bottom:20px; } .toolbar-actions .sort-select { display:none; } .score-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px 12px; } }
-	@media (prefers-reduced-motion:reduce) { :global(.spinning svg) { animation:none; } }
+	@media (prefers-reduced-motion:reduce) { .card-actions { transition:none; } :global(.spinning svg) { animation:none; } }
 </style>
