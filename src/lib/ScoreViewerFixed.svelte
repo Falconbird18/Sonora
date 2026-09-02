@@ -859,6 +859,43 @@
 			><Minimize2 size={17} /><span>Exit reading</span></button>
 	{/if}
 
+	{#if !reading}
+		<footer class="bottombar">
+			<div class="footer-section">
+				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Grid2X2 size={16} /></button>
+				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><Move size={17} /></button>
+				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.1)}><ZoomOut size={17} /></button>
+				<span>{Math.round(zoom * 100)}%</span>
+				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.1)}><ZoomIn size={17} /></button>
+			</div>
+			<input
+				class="page-scrubber"
+				type="range"
+				min="1"
+				max={pdf?.numPages || 1}
+				value={page}
+				aria-label="Scrub pages"
+				oninput={scrubPage}
+			/>
+			<div class="footer-section">
+				<button
+					class:active={dual}
+					class="text-button"
+					onclick={() => {
+						dual = !dual;
+						persistPrefs();
+						void render({ quiet: hasPainted });
+					}}><Columns2 size={15} />{dual ? 'Single page' : 'Two pages'}</button>
+				<button class="icon-button" title="Show/hide annotations" onclick={toggleAnnotations}
+					>{#if annotationsVisible}<Eye size={17} />{:else}<EyeOff size={17} />{/if}</button>
+				<button class="icon-button" title="Fullscreen" onclick={toggleFullScreen}
+					>{#if isFullscreen}<Minimize2 size={17} />{:else}<Maximize2 size={17} />{/if}</button>
+				<button class="icon-button" title="Settings" onclick={() => (settingsOpen = !settingsOpen)}><Settings2 size={17} /></button>
+			</div>
+		</footer>
+	{/if}
+
+
 	{#if searchOpen && !reading}<div class="search-panel">
 			<Search size={17} /><input bind:value={searchText} placeholder="Find text in this score…" onkeydown={(e) => e.key === 'Enter' && searchPdf()} />
 			<button class="text-button" onclick={searchPdf}>Find</button>
@@ -989,41 +1026,6 @@
 		</section>
 	{/if}
 
-	{#if !reading}
-		<footer class="bottombar">
-			<div class="footer-section">
-				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Grid2X2 size={16} /></button>
-				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><Move size={17} /></button>
-				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.1)}><ZoomOut size={17} /></button>
-				<span>{Math.round(zoom * 100)}%</span>
-				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.1)}><ZoomIn size={17} /></button>
-			</div>
-			<input
-				class="page-scrubber"
-				type="range"
-				min="1"
-				max={pdf?.numPages || 1}
-				value={page}
-				aria-label="Scrub pages"
-				oninput={scrubPage}
-			/>
-			<div class="footer-section">
-				<button
-					class:active={dual}
-					class="text-button"
-					onclick={() => {
-						dual = !dual;
-						persistPrefs();
-						void render({ quiet: hasPainted });
-					}}><Columns2 size={15} />{dual ? 'Single page' : 'Two pages'}</button>
-				<button class="icon-button" title="Show/hide annotations" onclick={toggleAnnotations}
-					>{#if annotationsVisible}<Eye size={17} />{:else}<EyeOff size={17} />{/if}</button>
-				<button class="icon-button" title="Fullscreen" onclick={toggleFullScreen}
-					>{#if isFullscreen}<Minimize2 size={17} />{:else}<Maximize2 size={17} />{/if}</button>
-				<button class="icon-button" title="Settings" onclick={() => (settingsOpen = !settingsOpen)}><Settings2 size={17} /></button>
-			</div>
-		</footer>
-	{/if}
 
 	{#if settingsOpen && !reading}
 		<div class="settings-card">
@@ -1066,18 +1068,27 @@
 		backdrop-filter: blur(18px);
 	}
 	.bottombar {
-		position: absolute;
+		position: relative;
+		display: flex;
+		justify-content: space-between;
+		width: 100%;
 		z-index: 30;
-		left: 12px;
-		right: 12px;
-		bottom: 8px;
-		min-height: 44px;
-		padding: 5px 10px;
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 14px;
-		background: rgba(25, 25, 22, 0.78);
-		backdrop-filter: blur(18px);
+		top: 8px;
 	}
+
+	.footer-section {
+    	display: flex;
+        align-items: center;
+        gap: 5px;
+    	z-index: 30;
+    	min-height: 44px;
+    	padding: 5px;
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 14px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
+	}
+
 	.topbar-left,
 	.topbar-right,
 	.page-controls,
@@ -1315,18 +1326,18 @@
 		position: absolute;
 		z-index: 35;
 		left: 50%;
-		bottom: 65px;
+		bottom: -50px;
 		transform: translateX(-50%);
 		display: flex;
 		align-items: center;
-		gap: 6px;
+		gap: 5px;
 		max-width: calc(100% - 24px);
-		padding: 6px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 15px;
-		background: rgba(28, 28, 25, 0.97);
+		padding: 5px;
 		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
-		backdrop-filter: blur(18px);
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 14px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
 	}
 	.tool-button {
 		min-width: 48px;
