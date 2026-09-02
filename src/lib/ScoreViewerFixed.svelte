@@ -123,7 +123,7 @@
 		try {
 			const saved = JSON.parse(localStorage.getItem(prefs) || '{}');
 			bookmarked = !!saved.bookmarked;
-			dual = !!saved.dual;
+			dual = typeof saved.dual === 'boolean' ? saved.dual : window.innerWidth >= 800;
 			zoom = typeof saved.zoom === 'number' ? saved.zoom : 1;
 			fit = saved.fit === 'width' ? 'width' : 'page';
 			annotationsVisible = saved.annotationsVisible !== false;
@@ -308,7 +308,7 @@
 		}
 		error = '';
 		try {
-			if (dual && host.clientWidth < 800) dual = false;
+			if (host.clientWidth < 800) dual = false;
 			for (let index = 0; index < visiblePages.length; index++) {
 				await renderPage(visiblePages[index], index, current);
 				if (current !== generation) return;
@@ -859,6 +859,43 @@
 			><Minimize2 size={17} /><span>Exit reading</span></button>
 	{/if}
 
+	{#if !reading}
+		<footer class="bottombar">
+			<div class="footer-section">
+				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Grid2X2 size={16} /></button>
+				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><Move size={17} /></button>
+				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.1)}><ZoomOut size={17} /></button>
+				<span>{Math.round(zoom * 100)}%</span>
+				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.1)}><ZoomIn size={17} /></button>
+			</div>
+			<input
+				class="page-scrubber"
+				type="range"
+				min="1"
+				max={pdf?.numPages || 1}
+				value={page}
+				aria-label="Scrub pages"
+				oninput={scrubPage}
+			/>
+			<div class="footer-section">
+				<button
+					class:active={dual}
+					class="text-button"
+					onclick={() => {
+						dual = !dual;
+						persistPrefs();
+						void render({ quiet: hasPainted });
+					}}><Columns2 size={15} />{dual ? 'Single page' : 'Two pages'}</button>
+				<button class="icon-button" title="Show/hide annotations" onclick={toggleAnnotations}
+					>{#if annotationsVisible}<Eye size={17} />{:else}<EyeOff size={17} />{/if}</button>
+				<button class="icon-button" title="Fullscreen" onclick={toggleFullScreen}
+					>{#if isFullscreen}<Minimize2 size={17} />{:else}<Maximize2 size={17} />{/if}</button>
+				<button class="icon-button" title="Settings" onclick={() => (settingsOpen = !settingsOpen)}><Settings2 size={17} /></button>
+			</div>
+		</footer>
+	{/if}
+
+
 	{#if searchOpen && !reading}<div class="search-panel">
 			<Search size={17} /><input bind:value={searchText} placeholder="Find text in this score…" onkeydown={(e) => e.key === 'Enter' && searchPdf()} />
 			<button class="text-button" onclick={searchPdf}>Find</button>
@@ -989,41 +1026,6 @@
 		</section>
 	{/if}
 
-	{#if !reading}
-		<footer class="bottombar">
-			<div class="footer-section">
-				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Grid2X2 size={16} /></button>
-				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><Move size={17} /></button>
-				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.1)}><ZoomOut size={17} /></button>
-				<span>{Math.round(zoom * 100)}%</span>
-				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.1)}><ZoomIn size={17} /></button>
-			</div>
-			<input
-				class="page-scrubber"
-				type="range"
-				min="1"
-				max={pdf?.numPages || 1}
-				value={page}
-				aria-label="Scrub pages"
-				oninput={scrubPage}
-			/>
-			<div class="footer-section">
-				<button
-					class:active={dual}
-					class="text-button"
-					onclick={() => {
-						dual = !dual;
-						persistPrefs();
-						void render({ quiet: hasPainted });
-					}}><Columns2 size={15} />{dual ? 'Single page' : 'Two pages'}</button>
-				<button class="icon-button" title="Show/hide annotations" onclick={toggleAnnotations}
-					>{#if annotationsVisible}<Eye size={17} />{:else}<EyeOff size={17} />{/if}</button>
-				<button class="icon-button" title="Fullscreen" onclick={toggleFullScreen}
-					>{#if isFullscreen}<Minimize2 size={17} />{:else}<Maximize2 size={17} />{/if}</button>
-				<button class="icon-button" title="Settings" onclick={() => (settingsOpen = !settingsOpen)}><Settings2 size={17} /></button>
-			</div>
-		</footer>
-	{/if}
 
 	{#if settingsOpen && !reading}
 		<div class="settings-card">
@@ -1053,8 +1055,7 @@
 		color: #f4f4f0;
 		font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 	}
-	.topbar,
-	.bottombar {
+	.topbar {
 		position: relative;
 		z-index: 30;
 		display: flex;
@@ -1067,10 +1068,27 @@
 		backdrop-filter: blur(18px);
 	}
 	.bottombar {
-		border-top: 1px solid rgba(255, 255, 255, 0.08);
-		border-bottom: 0;
-		min-height: 55px;
+		position: relative;
+		display: flex;
+		justify-content: space-between;
+		width: 100%;
+		z-index: 30;
+		top: 8px;
 	}
+
+	.footer-section {
+    	display: flex;
+        align-items: center;
+        gap: 5px;
+    	z-index: 30;
+    	min-height: 44px;
+    	padding: 5px;
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 14px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
+	}
+
 	.topbar-left,
 	.topbar-right,
 	.page-controls,
@@ -1141,6 +1159,7 @@
 		padding: 7px 10px;
 		gap: 5px;
 		font-size: 11px;
+		animation: settings-in 160ms cubic-bezier(.2,.8,.2,1);
 	}
 	.page-controls input {
 		width: 48px;
@@ -1165,13 +1184,17 @@
 	}
 	.workspace {
 		position: absolute;
-		inset: 56px 0 55px;
+		inset: 56px 0 8px;
 		overflow: auto;
+		scrollbar-width: none;
+		-ms-overflow-style: none;
 		display: flex;
 		justify-content: center;
 		padding: 28px;
 		background: radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%);
 	}
+	.workspace::-webkit-scrollbar { display: none; }
+
 	.pages {
 		display: flex;
 		align-items: flex-start;
@@ -1181,8 +1204,19 @@
 		margin: auto;
 	}
 	.pages.dual {
-		gap: 14px;
+		gap: 0;
 	}
+	.pages.dual .page-shell { box-shadow: 0 18px 55px rgba(0,0,0,.42); }
+	.pages.dual .page-shell::after {
+		content: '';
+		position: absolute;
+		top: 0; bottom: 0;
+		width: 12px;
+		pointer-events: none;
+		background: linear-gradient(90deg, rgba(0,0,0,.12), rgba(0,0,0,0));
+	}
+	.pages.dual .page-shell:first-child::after { right: 0; }
+	.pages.dual .page-shell:last-child::after { left: 0; transform: scaleX(-1); }
 	.page-shell {
 		position: relative;
 		flex: 0 0 auto;
@@ -1207,7 +1241,7 @@
 		position: absolute;
 		z-index: 15;
 		top: 56px;
-		bottom: 55px;
+		bottom: 8px;
 		width: min(9vw, 88px);
 		border: 0;
 		background: transparent;
@@ -1292,18 +1326,18 @@
 		position: absolute;
 		z-index: 35;
 		left: 50%;
-		bottom: 65px;
+		bottom: -50px;
 		transform: translateX(-50%);
 		display: flex;
 		align-items: center;
-		gap: 6px;
+		gap: 5px;
 		max-width: calc(100% - 24px);
-		padding: 7px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 16px;
-		background: rgba(28, 28, 25, 0.97);
+		padding: 5px;
 		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
-		backdrop-filter: blur(18px);
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 14px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
 	}
 	.tool-button {
 		min-width: 48px;
@@ -1560,8 +1594,8 @@
 	.settings-card {
 		position: absolute;
 		z-index: 55;
+		top: 50px;
 		right: 12px;
-		bottom: 66px;
 		width: 250px;
 		display: flex;
 		flex-direction: column;
@@ -1614,7 +1648,11 @@
 		bottom: 0;
 	}
 	.reading .pages {
-		padding: 20px;
+		padding: 12px;
+	}
+	@keyframes settings-in {
+		from { opacity: 0; transform: translateY(-5px) scale(.98); }
+		to { opacity: 1; transform: translateY(0) scale(1); }
 	}
 	@keyframes spin {
 		to {

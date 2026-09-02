@@ -223,7 +223,8 @@
 		img.removeAttribute('src');
 	}
 
-	onMount(async () => {
+	onMount(() => {
+		void (async () => {
 		await refresh();
 		const saved = localStorage.getItem('sonora-library-settings');
 		if (saved) {
@@ -233,9 +234,10 @@
 				sort = ['recent', 'title', 'composer'].includes(value.sort) ? value.sort : 'recent';
 			} catch {}
 		}
-		await sync();
-		void backfillThumbnails();
-		timer = setInterval(sync, 5 * 60 * 1000);
+			await sync();
+			void backfillThumbnails();
+			timer = setInterval(sync, 5 * 60 * 1000);
+		})();
 		const wake = () => void sync();
 		window.addEventListener('focus', wake);
 		return () => {

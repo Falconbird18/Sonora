@@ -1,5 +1,6 @@
 import { mount } from 'svelte'
 import './app.css'
+import './lib/scoreViewerPolish.css'
 import App from './App.svelte'
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {

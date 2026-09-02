@@ -43,7 +43,7 @@ export const pdfiumRenderer: PdfRenderer = {
 
         const engine = await getEngine();
         const document = await engine
-            .openDocumentBuffer({ id, content: data })
+            .openDocumentBuffer({ id, content: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer })
             .toPromise();
 
         const pages: PdfPageInfo[] = document.pages.map((page, index) => ({
@@ -75,7 +75,7 @@ export const pdfiumRenderer: PdfRenderer = {
                 if (!document.pages[pageIndex]) {
                     throw new Error(`PDF page ${pageIndex + 1} does not exist`);
                 }
-                return engine.getPageText(document, pageIndex).toPromise();
+                return (engine as unknown as { getPageText(doc: unknown, page: number): { toPromise(): Promise<string> } }).getPageText(document, pageIndex).toPromise();
             },
 
             async close() {
