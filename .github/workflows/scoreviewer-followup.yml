@@ -1,0 +1,96 @@
+name: ScoreViewer followup
+
+on:
+  push:
+    branches: [feature/scoreviewer-polish]
+
+permissions:
+  contents: write
+
+jobs:
+  polish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/scoreviewer-polish
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply fixes and polish
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('src/lib/LibraryView.svelte')
+          s = p.read_text()
+          s = s.replace("const info = await getPdfInfoFromSource({\n\t\t\t\t\t\turl: source.url,\n\t\t\t\t\t\tblob: source.blob\n\t\t\t\t\t});", "const info = await getPdfInfoFromSource({\n\t\t\t\t\t\turl: source.url,\n\t\t\t\t\t\tblob: source.blob,\n\t\t\t\t\t\tnativePath: source.nativePath\n\t\t\t\t\t});")
+          s = s.replace("\tonMount(async () => {\n\t\tawait refresh();", "\tonMount(() => {\n\t\tvoid (async () => {\n\t\tawait refresh();")
+          s = s.replace("\t\tawait sync();\n\t\tvoid backfillThumbnails();\n\t\ttimer = setInterval(sync, 5 * 60 * 1000);", "\t\t\tawait sync();\n\t\t\tvoid backfillThumbnails();\n\t\t\ttimer = setInterval(sync, 5 * 60 * 1000);")
+          s = s.replace("\t\tconst wake = () => void sync();\n\t\twindow.addEventListener('focus', wake);\n\t\treturn () => {\n\t\t\tclearInterval(timer);\n\t\t\twindow.removeEventListener('focus', wake);\n\t\t};\n\t});", "\t\t})();\n\t\tconst wake = () => void sync();\n\t\twindow.addEventListener('focus', wake);\n\t\treturn () => {\n\t\t\tclearInterval(timer);\n\t\t\twindow.removeEventListener('focus', wake);\n\t\t\twindow.removeEventListener('focus', wake);\n\t\t};\n\t});")
+          # Remove accidental duplicate cleanup listener if present after the transformation.
+          s = s.replace("\t\t\twindow.removeEventListener('focus', wake);\n\t\t\twindow.removeEventListener('focus', wake);", "\t\t\twindow.removeEventListener('focus', wake);")
+          p.write_text(s)
+
+          p = Path('src/lib/pdfiumRenderer.ts')
+          s = p.read_text()
+          s = s.replace(".openDocumentBuffer({ id, content: data })", ".openDocumentBuffer({ id, content: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer })")
+          s = s.replace("return engine.getPageText(document, pageIndex).toPromise();", "return (engine as unknown as { getPageText(doc: unknown, page: number): { toPromise(): Promise<string> } }).getPageText(document, pageIndex).toPromise();")
+          p.write_text(s)
+
+          p = Path('src/lib/folderSync.ts')
+          s = p.read_text()
+          s = s.replace("const state = await handle.queryPermission({ mode: 'read' });", "const fsHandle = handle as FileSystemDirectoryHandle & { queryPermission(options: { mode: 'read' }): Promise<PermissionState>; requestPermission(options: { mode: 'read' }): Promise<PermissionState> };\n\tconst state = await fsHandle.queryPermission({ mode: 'read' });")
+          s = s.replace("return (await handle.requestPermission({ mode: 'read' })) === 'granted';", "return (await fsHandle.requestPermission({ mode: 'read' })) === 'granted';")
+          s = s.replace("const handle = await window.showDirectoryPicker({ mode: 'read' });", "const showDirectoryPicker = (window as typeof window & { showDirectoryPicker(options: { mode: 'read' }): Promise<FileSystemDirectoryHandle> }).showDirectoryPicker;\n\t\tconst handle = await showDirectoryPicker.call(window, { mode: 'read' });")
+          p.write_text(s)
+
+          p = Path('src/lib/ScoreViewerFixed.svelte')
+          s = p.read_text()
+          s = s.replace("\t\t\tdual = !!saved.dual;", "\t\t\tdual = typeof saved.dual === 'boolean' ? saved.dual : window.innerWidth >= 800;")
+          s = s.replace("\t\tinset: 56px 0 55px;", "\t\tinset: 56px 0 8px;")
+          s = s.replace("\t\toverflow: auto;\n\t\tdisplay: flex;", "\t\toverflow: auto;\n\t\tscrollbar-width: none;\n\t\t-ms-overflow-style: none;\n\t\tdisplay: flex;", 1)
+          if '.workspace::-webkit-scrollbar' not in s:
+              s = s.replace("\t.pages {", "\t.workspace::-webkit-scrollbar { display: none; }\n\n\t.pages {", 1)
+
+          # Position bottom controls as overlays so the score area gets nearly full height.
+          s = s.replace("\t.topbar,\n\t.bottombar {", "\t.topbar {")
+          s = re.sub(r"\n\t\.bottombar \{\n(?:\t\t.*\n){0,14}\t\}", "\n\t.bottombar {\n\t\tposition: absolute;\n\t\tz-index: 30;\n\t\tleft: 12px;\n\t\tright: 12px;\n\t\tbottom: 8px;\n\t\tmin-height: 44px;\n\t\tpadding: 5px 10px;\n\t\tborder: 1px solid rgba(255, 255, 255, 0.08);\n\t\tborder-radius: 14px;\n\t\tbackground: rgba(25, 25, 22, 0.78);\n\t\tbackdrop-filter: blur(18px);\n\t}", s, count=1)
+
+          # Lower editing dock, but keep a deliberate breathing space under it.
+          s = s.replace("\t\tbottom: 10px;", "\t\tbottom: 18px;", 1)
+          s = s.replace("\t\tpadding: 7px;\n\t\tborder: 1px solid rgba(255, 255, 255, 0.1);\n\t\tborder-radius: 16px;", "\t\tpadding: 6px;\n\t\tborder: 1px solid rgba(255, 255, 255, 0.1);\n\t\tborder-radius: 15px;", 1)
+          
+          # Settings popover belongs below the toolbar, not beside the bottom controls.
+          s = re.sub(r"\.settings-card \{\n\t\tposition: absolute;\n\t\tz-index: 55;\n\t\tright: 12px;\n\t\tbottom: 66px;", ".settings-card {\n\t\tposition: absolute;\n\t\tz-index: 55;\n\t\ttop: 50px;\n\t\tright: 12px;", s, count=1)
+          s = s.replace("\t\tfont-size: 11px;\n\t}", "\t\tfont-size: 11px;\n\t\tanimation: settings-in 160ms cubic-bezier(.2,.8,.2,1);\n\t}", 1)
+
+          # Side-by-side pages meet at the center seam. Use subtle inward shading to imply a bound score.
+          s = s.replace("\t.pages.dual {\n\t\tgap: 14px;\n\t}", "\t.pages.dual {\n\t\tgap: 0;\n\t}")
+          if '.pages.dual .page-shell::after' not in s:
+              s = s.replace("\t.page-shell {\n", "\t.pages.dual .page-shell { box-shadow: 0 18px 55px rgba(0,0,0,.42); }\n\t.pages.dual .page-shell::after {\n\t\tcontent: '';\n\t\tposition: absolute;\n\t\ttop: 0; bottom: 0;\n\t\twidth: 12px;\n\t\tpointer-events: none;\n\t\tbackground: linear-gradient(90deg, rgba(0,0,0,.12), rgba(0,0,0,0));\n\t}\n\t.pages.dual .page-shell:first-child::after { right: 0; }\n\t.pages.dual .page-shell:last-child::after { left: 0; transform: scaleX(-1); }\n\t.page-shell {\n", 1)
+
+          # Mobile should always become single-page below the desktop threshold.
+          s = s.replace("\t\tif (dual && host.clientWidth < 800) dual = false;", "\t\tif (host.clientWidth < 800) dual = false;")
+          if '@keyframes settings-in' not in s:
+              s = s.replace("\t@keyframes spin {", "\t@keyframes settings-in {\n\t\tfrom { opacity: 0; transform: translateY(-5px) scale(.98); }\n\t\tto { opacity: 1; transform: translateY(0) scale(1); }\n\t}\n\t@keyframes spin {")
+          s = re.sub(r"\n\t\.page-hit \{", "\n\t.page-hit {", s, count=1)
+          s = s.replace("\t\ttop: 56px;\n\t\tbottom: 55px;", "\t\ttop: 56px;\n\t\tbottom: 8px;", 1)
+          s = s.replace("\t.reading .pages {\n\t\tpadding: 20px;\n\t}", "\t.reading .pages {\n\t\tpadding: 12px;\n\t}")
+          p.write_text(s)
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check
+        run: npm run check
+      - name: Build
+        run: npm run build
+      - name: Commit changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/lib/LibraryView.svelte src/lib/pdfiumRenderer.ts src/lib/folderSync.ts src/lib/ScoreViewerFixed.svelte
+          git commit -m 'Polish ScoreViewer and restore native thumbnails' || exit 0
+          git push origin feature/scoreviewer-polish
