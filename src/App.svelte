@@ -11,8 +11,18 @@
 	async function loadLibraryView() {
 		if (libraryView || libraryError) return;
 		try {
-			const module = await import('./lib/LibraryViewRedesign.svelte');
+			console.info('Sonora: loading LibraryViewRedesign.svelte');
+			const module = await Promise.race([
+				import('./lib/LibraryViewRedesign.svelte'),
+				new Promise<never>((_, reject) =>
+					setTimeout(
+						() => reject(new Error('Timed out after 10 seconds while loading LibraryViewRedesign.svelte')),
+					10_000
+					)
+				)
+			]);
 			libraryView = module.default;
+			console.info('Sonora: LibraryViewRedesign.svelte loaded');
 		} catch (reason) {
 			console.error('Sonora library failed to load', reason);
 			libraryError = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
