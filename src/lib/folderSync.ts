@@ -14,9 +14,10 @@ export function supportsDirectoryAccess() {
 	return isTauri() || (typeof window !== 'undefined' && 'showDirectoryPicker' in window);
 }
 async function verifyBrowserPermission(handle: FileSystemDirectoryHandle) {
-	const state = await handle.queryPermission({ mode: 'read' });
+	const fsHandle = handle as FileSystemDirectoryHandle & { queryPermission(options: { mode: 'read' }): Promise<PermissionState>; requestPermission(options: { mode: 'read' }): Promise<PermissionState> };
+	const state = await fsHandle.queryPermission({ mode: 'read' });
 	if (state === 'granted') return true;
-	return (await handle.requestPermission({ mode: 'read' })) === 'granted';
+	return (await fsHandle.requestPermission({ mode: 'read' })) === 'granted';
 }
 export async function verifyFolderPermission(folder: FolderSource) {
 	if (folder.nativePath) {
@@ -74,7 +75,8 @@ export async function chooseAndAddFolder() {
 		if (!path) throw new DOMException('Folder selection cancelled', 'AbortError');
 		folder = { id: ROOT_FOLDER_ID, name: path.split(/[\\/]/).filter(Boolean).pop() || 'Score Library', nativePath: path, addedAt: existing?.addedAt || Date.now(), lastSyncedAt: existing?.lastSyncedAt, autoSync: true };
 	} else {
-		const handle = await window.showDirectoryPicker({ mode: 'read' });
+		const showDirectoryPicker = (window as typeof window & { showDirectoryPicker(options: { mode: 'read' }): Promise<FileSystemDirectoryHandle> }).showDirectoryPicker;
+		const handle = await showDirectoryPicker.call(window, { mode: 'read' });
 		if (!(await verifyBrowserPermission(handle))) throw new Error('Sonora was not granted access to the score folder.');
 		folder = { id: ROOT_FOLDER_ID, name: handle.name, handle, addedAt: existing?.addedAt || Date.now(), lastSyncedAt: existing?.lastSyncedAt, autoSync: true };
 	}
