@@ -1,13 +1,14 @@
 {
   "name": "sonora",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "portraits": "node ./scripts/download-composer-portraits.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "pretauri:build": "tauri icon ./src-tauri/icons/app-icon.svg",
@@ -25,9 +26,10 @@
     "vite": "^8.2.0"
   },
   "dependencies": {
+    "@embedpdf/engines": "^2.15.0",
+    "@embedpdf/pdfium": "^2.15.0",
     "@lucide/svelte": "^1.34.0",
     "@tauri-apps/api": "^2",
-    "dexie": "^4.4.5",
-    "pdfjs-dist": "^6.2.108"
+    "dexie": "^4.4.5"
   }
 }

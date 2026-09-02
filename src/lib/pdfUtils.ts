@@ -1,103 +1,229 @@
-import './compat';
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import { isTauri } from './paths';
+import { pdfiumRenderer } from './pdfiumRenderer';
+import type { PdfDocumentRenderer, PdfPageInfo } from './pdfRenderer';
 
-if (!pdfjsLib.GlobalWorkerOptions.workerSrc) pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+export const MAX_CANVAS_PIXELS = 12_000_000;
+
+export type PdfSource = { url?: string; blob?: Blob; nativePath?: string };
+
+type Viewport = { scale: number; width: number; height: number };
+type RenderParams = {
+	canvas: HTMLCanvasElement;
+	canvasContext: CanvasRenderingContext2D;
+	viewport: Viewport;
+};
+
+export type PdfRenderTask = {
+	promise: Promise<void>;
+	cancel(): void;
+};
+
+export type PdfPageProxy = {
+	pageNumber: number;
+	getViewport(options: { scale: number }): Viewport;
+	render(params: RenderParams): PdfRenderTask;
+	getTextContent(): Promise<{ items: Array<{ str: string }> }>;
+	cleanup(): void;
+};
+
+export type PdfDocumentProxy = {
+	numPages: number;
+	getPage(pageNumber: number): Promise<PdfPageProxy>;
+	cleanup(): Promise<void>;
+};
+
+export type OpenedPdf = { document: PdfDocumentProxy };
 
 function blobFilename(blob: Blob) {
 	return typeof File !== 'undefined' && blob instanceof File && blob.name ? blob.name : 'score.pdf';
 }
 
-class BlobRangeTransport extends pdfjsLib.PDFDataRangeTransport {
-	private pending = new Map<string, Promise<void>>();
-	private stopped = false;
-	constructor(private readonly blob: Blob) { super(blob.size, null, false, blobFilename(blob)); }
-	requestDataRange(begin: number, end: number) {
-		if (this.stopped) return;
-		const safeBegin = Math.max(0, Math.min(begin, this.blob.size));
-		const safeEnd = Math.max(safeBegin, Math.min(end, this.blob.size));
-		if (safeEnd <= safeBegin) return;
-		const key = `${safeBegin}:${safeEnd}`;
-		if (this.pending.has(key)) return;
-		const request = this.blob.slice(safeBegin, safeEnd).arrayBuffer().then((buffer) => {
-			if (!this.stopped) this.onDataRange(safeBegin, new Uint8Array(buffer));
-		}).catch((error) => {
-			if (!this.stopped) { console.warn('PDF range request failed', error); this.stopped = true; }
-		});
-		this.pending.set(key, request);
-		void request.finally(() => this.pending.delete(key));
+async function readNativePdf(path: string): Promise<Uint8Array> {
+	const { invoke } = await import('@tauri-apps/api/core');
+	const bytes = await invoke<number[] | Uint8Array>('read_score_file', { path });
+	return bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+}
+
+function isLocalProtocolUrl(url: string) {
+	return /^(asset:|file:|tauri:)/i.test(url) || /asset\.localhost|tauri\.localhost/i.test(url);
+}
+
+async function resolveTauriUrl(pathOrUrl: string): Promise<string> {
+	if (!isTauri() || /^(https?|blob|data|asset|tauri):/i.test(pathOrUrl)) return pathOrUrl;
+	try {
+		const { convertFileSrc } = await import('@tauri-apps/api/core');
+		return convertFileSrc(pathOrUrl);
+	} catch {
+		return pathOrUrl;
 	}
-	abort() { this.stopped = true; this.pending.clear(); }
 }
 
-const DIRECT_LOAD_LIMIT = 48 * 1024 * 1024;
-export const MAX_CANVAS_PIXELS = 16_000_000;
-export type OpenedPdf = { document: pdfjsLib.PDFDocumentProxy; transport: BlobRangeTransport | null };
-const commonOpts = { isEvalSupported: false, useWorkerFetch: false, useSystemFonts: true } as const;
-
-async function openWithData(blob: Blob): Promise<pdfjsLib.PDFDocumentProxy> {
-	return pdfjsLib.getDocument({ data: await blob.arrayBuffer(), ...commonOpts }).promise;
+async function fetchPdfBytes(url: string): Promise<Uint8Array> {
+	const resolvedUrl = await resolveTauriUrl(url);
+	const response = await fetch(resolvedUrl);
+	if (!response.ok) throw new Error(`Failed to fetch PDF (${response.status})`);
+	const bytes = new Uint8Array(await response.arrayBuffer());
+	if (!bytes.byteLength) throw new Error('Fetched PDF was empty');
+	return bytes;
 }
 
-export async function openPdfFromUrl(url: string): Promise<OpenedPdf> {
-	if (!url.trim()) throw new Error('PDF URL is empty');
-	const document = await pdfjsLib.getDocument({ url, rangeChunkSize: 512 * 1024, disableAutoFetch: true, disableStream: false, disableRange: false, ...commonOpts }).promise;
-	return { document, transport: null };
+function createPage(document: PdfDocumentRenderer, info: PdfPageInfo): PdfPageProxy {
+	return {
+		pageNumber: info.index + 1,
+		getViewport({ scale }) {
+			const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+			return {
+				scale: safeScale,
+				width: info.width * safeScale,
+				height: info.height * safeScale
+			};
+		},
+		render({ canvas, canvasContext, viewport }) {
+			let cancelled = false;
+			let objectUrl: string | undefined;
+			const promise = (async () => {
+				const rendered = await document.renderPage(info.index, {
+					width: Math.max(1, Math.ceil(viewport.width)),
+					height: Math.max(1, Math.ceil(viewport.height))
+				});
+				if (cancelled) return;
+				objectUrl = URL.createObjectURL(rendered.blob);
+				try {
+					const image = await createImageBitmap(rendered.blob);
+					if (cancelled) {
+						image.close();
+						return;
+					}
+					canvasContext.clearRect(0, 0, canvas.width, canvas.height);
+					canvasContext.drawImage(image, 0, 0, viewport.width, viewport.height);
+					image.close();
+				} finally {
+					if (objectUrl) URL.revokeObjectURL(objectUrl);
+					objectUrl = undefined;
+				}
+			})();
+			return {
+				promise,
+				cancel() {
+					cancelled = true;
+					if (objectUrl) {
+						URL.revokeObjectURL(objectUrl);
+						objectUrl = undefined;
+					}
+				}
+			};
+		},
+		async getTextContent() {
+			const text = document.getPageText ? await document.getPageText(info.index) : '';
+			return { items: text ? [{ str: text }] : [] };
+		},
+		cleanup() {}
+	};
+}
+
+export async function openPdfBytes(bytes: Uint8Array, id = 'score.pdf'): Promise<OpenedPdf> {
+	if (!bytes.byteLength) throw new Error('PDF data is empty');
+	const document = await pdfiumRenderer.open(bytes, id);
+	const pages = document.pages;
+	const proxy: PdfDocumentProxy = {
+		numPages: pages.length,
+		getPage(pageNumber) {
+			const info = pages[pageNumber - 1];
+			if (!info) return Promise.reject(new Error(`PDF page ${pageNumber} does not exist`));
+			return Promise.resolve(createPage(document, info));
+		},
+		cleanup: document.close
+	};
+	return { document: proxy };
 }
 
 export async function openPdf(blob: Blob): Promise<OpenedPdf> {
 	if (!blob || blob.size === 0) throw new Error('PDF data is empty');
-	if (blob.size <= DIRECT_LOAD_LIMIT) {
-		try { return { document: await openWithData(blob), transport: null }; }
-		catch (error) { console.warn('Direct PDF loading failed; retrying with range loading', error); }
-	}
-	const transport = new BlobRangeTransport(blob);
+	return openPdfBytes(new Uint8Array(await blob.arrayBuffer()), blobFilename(blob));
+}
+
+export async function openPdfFromUrl(url: string): Promise<OpenedPdf> {
+	if (!url.trim()) throw new Error('PDF URL is empty');
+	const targetUrl = await resolveTauriUrl(url);
 	try {
-		const document = await pdfjsLib.getDocument({ range: transport, rangeChunkSize: 2 * 1024 * 1024, disableRange: false, disableStream: true, disableAutoFetch: false, ...commonOpts }).promise;
-		return { document, transport };
+		return await openPdfBytes(await fetchPdfBytes(targetUrl), targetUrl);
 	} catch (error) {
-		transport.abort();
-		try { return { document: await openWithData(blob), transport: null }; }
-		catch (fallbackError) { throw new AggregateError([error, fallbackError], 'Unable to open PDF'); }
+		if (isLocalProtocolUrl(targetUrl)) throw error;
+		console.warn('URL PDF open failed', error);
+		return openPdfBytes(await fetchPdfBytes(targetUrl), targetUrl);
 	}
 }
 
-export async function openPdfSource(source: { url?: string; blob?: Blob }): Promise<OpenedPdf> {
+export async function openPdfSource(source: PdfSource): Promise<OpenedPdf> {
+	if (source.nativePath && isTauri()) {
+		try {
+			return await openPdfBytes(await readNativePdf(source.nativePath), source.nativePath);
+		} catch (error) {
+			console.warn('Native IPC score read failed; falling back to URL/blob', error);
+		}
+	}
 	if (source.url) {
-		try { return await openPdfFromUrl(source.url); }
-		catch (err) { console.warn('URL PDF open failed; falling back to blob if present', err); if (!source.blob) throw err; }
+		try {
+			return await openPdfFromUrl(source.url);
+		} catch (error) {
+			console.warn('URL PDF open failed', error);
+			if (!source.blob) throw error;
+		}
 	}
 	if (source.blob) return openPdf(source.blob);
-	throw new Error('No PDF source available');
+	throw new Error('No valid PDF source available');
 }
 
-export async function getPdfInfoFromSource(source: { url?: string; blob?: Blob }) {
-	const { document, transport } = await openPdfSource(source);
+export async function closePdf(opened: OpenedPdf | null | undefined) {
+	if (!opened) return;
 	try {
-		const totalPages = document.numPages;
-		let thumbnailUrl: string | undefined;
-		try { thumbnailUrl = await renderThumbnail(document); } catch (err) { console.warn('Thumbnail render failed', err); }
-		return { totalPages, thumbnailUrl };
-	} finally { transport?.abort(); await document.cleanup(); }
+		await opened.document.cleanup();
+	} catch {}
 }
 
-export async function getPdfInfo(blob: Blob) { return getPdfInfoFromSource({ blob }); }
-
-async function renderThumbnail(document: pdfjsLib.PDFDocumentProxy) {
+async function renderThumbnail(document: PdfDocumentProxy) {
 	const page = await document.getPage(1);
 	try {
 		const base = page.getViewport({ scale: 1 });
 		const area = Math.max(1, base.width * base.height);
-		let scale = 180 / Math.max(1, base.width);
-		scale = Math.max(0.04, Math.min(scale, Math.sqrt(MAX_CANVAS_PIXELS / area), 0.4));
+		let scale = 160 / Math.max(1, base.width);
+		scale = Math.max(0.04, Math.min(scale, Math.sqrt(MAX_CANVAS_PIXELS / area), 0.35));
 		const viewport = page.getViewport({ scale });
 		const canvas = globalThis.document.createElement('canvas');
-		canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+		canvas.width = Math.ceil(viewport.width);
+		canvas.height = Math.ceil(viewport.height);
 		if (canvas.width * canvas.height > MAX_CANVAS_PIXELS) throw new Error('Thumbnail canvas exceeds safe pixel budget');
 		const context = canvas.getContext('2d', { alpha: false });
 		if (!context) throw new Error('Canvas is unavailable');
-		context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height);
-		await page.render({ canvas, canvasContext: context, viewport }).promise;
-		return canvas.toDataURL('image/jpeg', 0.65);
-	} finally { page.cleanup(); }
+		context.fillStyle = '#fff';
+		context.fillRect(0, 0, canvas.width, canvas.height);
+		const task = page.render({ canvas, canvasContext: context, viewport });
+		await task.promise;
+		const url = canvas.toDataURL('image/jpeg', 0.58);
+		canvas.width = 0;
+		canvas.height = 0;
+		return url;
+	} finally {
+		page.cleanup();
+	}
+}
+
+export async function getPdfInfoFromSource(source: PdfSource) {
+	const opened = await openPdfSource(source);
+	try {
+		const totalPages = opened.document.numPages;
+		let thumbnailUrl: string | undefined;
+		try {
+			thumbnailUrl = await renderThumbnail(opened.document);
+		} catch (error) {
+			console.warn('Thumbnail render failed', error);
+		}
+		return { totalPages, thumbnailUrl };
+	} finally {
+		await closePdf(opened);
+	}
+}
+
+export async function getPdfInfo(blob: Blob) {
+	return getPdfInfoFromSource({ blob });
 }
