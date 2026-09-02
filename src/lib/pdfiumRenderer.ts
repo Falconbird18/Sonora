@@ -12,12 +12,9 @@ import type {
 let enginePromise: Promise<PdfEngine> | null = null;
 
 /**
- * PDFium-backed renderer.
- *
- * PDF.js remains untouched during the first migration step. This module is the
- * new rendering boundary: the viewer will eventually depend on this interface
- * rather than PDFDocumentProxy/RenderTask. Keeping the boundary small lets us
- * switch the viewer incrementally without mixing the two rendering models.
+ * Lazily initialized, process-wide PDFium engine.
+ * The WASM binary is fetched only once and the engine is reused by all score
+ * views and thumbnail requests.
  */
 async function getEngine(): Promise<PdfEngine> {
     if (!enginePromise) {
@@ -26,29 +23,30 @@ async function getEngine(): Promise<PdfEngine> {
             if (!response.ok) {
                 throw new Error(`Could not load PDFium WebAssembly (${response.status})`);
             }
+
             const wasmBinary = await response.arrayBuffer();
-            const module = await init({ wasmBinary });
-            const native = new PdfiumNative(module);
+            const pdfiumModule = await init({ wasmBinary });
+            const native = new PdfiumNative(pdfiumModule);
+
             return new PdfEngine(native, {
                 imageConverter: browserImageDataToBlobConverter
             });
         })();
     }
+
     return enginePromise;
 }
 
 function renderOptions(options?: PdfRenderOptions) {
-    if (options?.width || options?.height) {
-        return {
-            ...(options.width ? { width: Math.max(1, Math.round(options.width)) } : {}),
-            ...(options.height ? { height: Math.max(1, Math.round(options.height)) } : {})
-        };
-    }
-    return { scale: options?.scale ?? 1 };
+    // Keep this adapter intentionally narrow. PDFium's high-level render API
+    // accepts a scale directly, which maps naturally to Sonora's viewer scale.
+    return { scale: Math.max(0.01, options?.scale ?? 1) };
 }
 
 export const pdfiumRenderer: PdfRenderer = {
     async open(data: Uint8Array, id = `score-${Date.now()}`): Promise<PdfDocumentRenderer> {
+        if (!data.byteLength) throw new Error('PDF data is empty');
+
         const engine = await getEngine();
         const document = await engine
             .openDocumentBuffer({ id, content: data })
@@ -80,11 +78,10 @@ export const pdfiumRenderer: PdfRenderer = {
             },
 
             async getPageText(pageIndex) {
-                const page = document.pages[pageIndex];
-                if (!page) throw new Error(`PDF page ${pageIndex + 1} does not exist`);
-                return engine.extractPageText
-                    ? await engine.extractPageText(document, page).toPromise()
-                    : '';
+                if (!document.pages[pageIndex]) {
+                    throw new Error(`PDF page ${pageIndex + 1} does not exist`);
+                }
+                return engine.getPageText(document, pageIndex).toPromise();
             },
 
             async close() {
@@ -94,6 +91,7 @@ export const pdfiumRenderer: PdfRenderer = {
     }
 };
 
+/** Pre-initialize PDFium so the first score render does not pay WASM startup cost. */
 export async function warmPdfium() {
     await getEngine();
 }
