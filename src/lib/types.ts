@@ -74,3 +74,5 @@ export interface AnnotationRecord {
 	stamps: SymbolStamp[];
 	notes: TextNote[];
 }
+
+// viewer restoration workflow trigger
