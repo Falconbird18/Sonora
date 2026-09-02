@@ -2,6 +2,7 @@ import './compat';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { isTauri } from './paths';
+import { pdfiumRenderer } from './pdfiumRenderer';
 
 if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
     pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -10,11 +11,7 @@ if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
 const PDFJS_VERSION = pdfjsLib.version || '4.0.379';
 
 const commonOpts = {
-    // Keep PDF.js' JS glyph compiler enabled for embedded Type1/CFF fonts.
     isEvalSupported: true,
-    // Avoid browser/WebView font sanitization for embedded score fonts. Some
-    // otherwise-valid music PDFs contain embedded fonts which PDF.js can parse
-    // but the WebView rejects as downloadable fonts, leaving a white canvas.
     disableFontFace: true,
     useWorkerFetch: false,
     useSystemFonts: true,
@@ -108,6 +105,7 @@ async function fetchPdfBlob(url: string): Promise<Blob> {
     return blob;
 }
 
+/** Existing PDF.js opening path, retained temporarily while the viewer migrates. */
 export async function openPdf(blob: Blob): Promise<OpenedPdf> {
     if (!blob || blob.size === 0) throw new Error('PDF data is empty');
     if (blob.size <= DIRECT_LOAD_LIMIT) {
@@ -184,45 +182,96 @@ export async function closePdf(opened: OpenedPdf | null | undefined) {
     try { await opened.document.cleanup(); } catch {}
 }
 
-export async function getPdfInfoFromSource(source: PdfSource) {
-    const opened = await openPdfSource(source);
-    try {
-        const totalPages = opened.document.numPages;
-        let thumbnailUrl: string | undefined;
-        try { thumbnailUrl = await renderThumbnail(opened.document); }
-        catch (err) { console.warn('Thumbnail render failed', err); }
-        return { totalPages, thumbnailUrl };
-    } finally {
-        await closePdf(opened);
+/** Read a score into bytes for the new PDFium renderer. */
+export async function readPdfSource(source: PdfSource): Promise<Uint8Array> {
+    let blob: Blob;
+
+    if (source.nativePath && isTauri()) {
+        try {
+            blob = await readNativePdf(source.nativePath);
+        } catch (err) {
+            console.warn('Native IPC score read failed; falling back to URL/blob', err);
+            blob = source.url ? await fetchPdfBlob(source.url) : source.blob ?? new Blob();
+        }
+    } else if (source.url) {
+        try {
+            blob = await fetchPdfBlob(source.url);
+        } catch (err) {
+            console.warn('URL PDF fetch failed; falling back to blob', err);
+            if (!source.blob) throw err;
+            blob = source.blob;
+        }
+    } else if (source.blob) {
+        blob = source.blob;
+    } else {
+        throw new Error('No valid PDF source available');
     }
+
+    if (!blob.size) throw new Error('PDF data is empty');
+    return new Uint8Array(await blob.arrayBuffer());
 }
 
-export async function getPdfInfo(blob: Blob) {
-    return getPdfInfoFromSource({ blob });
-}
+async function renderPdfiumThumbnail(document: Awaited<ReturnType<typeof pdfiumRenderer.open>>) {
+    const firstPage = document.pages[0];
+    if (!firstPage) throw new Error('PDF contains no pages');
 
-async function renderThumbnail(document: pdfjsLib.PDFDocumentProxy) {
-    const page = await document.getPage(1);
+    const targetWidth = 160;
+    const scale = Math.max(0.04, Math.min(targetWidth / firstPage.width, 0.35));
+    const rendered = await document.renderPage(0, { scale });
+
+    if (typeof createImageBitmap !== 'function') {
+        return blobToDataUrl(rendered.blob);
+    }
+
+    const bitmap = await createImageBitmap(rendered.blob);
     try {
-        const base = page.getViewport({ scale: 1 });
-        const area = Math.max(1, base.width * base.height);
-        let scale = 160 / Math.max(1, base.width);
-        scale = Math.max(0.04, Math.min(scale, Math.sqrt(MAX_CANVAS_PIXELS / area), 0.35));
-        const viewport = page.getViewport({ scale });
         const canvas = globalThis.document.createElement('canvas');
-        canvas.width = Math.ceil(viewport.width);
-        canvas.height = Math.ceil(viewport.height);
-        if (canvas.width * canvas.height > MAX_CANVAS_PIXELS) throw new Error('Thumbnail canvas exceeds safe pixel budget');
+        canvas.width = Math.max(1, Math.ceil(bitmap.width));
+        canvas.height = Math.max(1, Math.ceil(bitmap.height));
         const context = canvas.getContext('2d', { alpha: false });
         if (!context) throw new Error('Canvas is unavailable');
         context.fillStyle = '#fff';
         context.fillRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: context, viewport }).promise;
+        context.drawImage(bitmap, 0, 0);
         const url = canvas.toDataURL('image/jpeg', 0.58);
         canvas.width = 0;
         canvas.height = 0;
         return url;
     } finally {
-        try { page.cleanup(); } catch {}
+        bitmap.close();
     }
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error ?? new Error('Unable to read rendered PDF image'));
+        reader.readAsDataURL(blob);
+    });
+}
+
+/**
+ * PDF metadata and thumbnails now use PDFium. The viewer still uses PDF.js
+ * through openPdfSource until the next migration step replaces its rendering
+ * surface. This gives library thumbnails an immediate independent PDFium path.
+ */
+export async function getPdfInfoFromSource(source: PdfSource) {
+    const bytes = await readPdfSource(source);
+    const renderer = await pdfiumRenderer.open(bytes, 'metadata');
+    try {
+        let thumbnailUrl: string | undefined;
+        try {
+            thumbnailUrl = await renderPdfiumThumbnail(renderer);
+        } catch (err) {
+            console.warn('PDFium thumbnail render failed', err);
+        }
+        return { totalPages: renderer.pageCount, thumbnailUrl };
+    } finally {
+        await renderer.close();
+    }
+}
+
+export async function getPdfInfo(blob: Blob) {
+    return getPdfInfoFromSource({ blob });
 }
