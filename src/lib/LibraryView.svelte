@@ -11,6 +11,8 @@
 	import { isTauri } from './paths';
 	import type { FolderSource, ScoreItem } from './types';
 
+	const THUMBNAIL_VERSION = 2;
+
 	let { onSelectScore, paused = false }: { onSelectScore: (score: ScoreItem) => void; paused?: boolean } = $props();
 	let scores = $state<ScoreItem[]>([]);
 	let folder = $state<FolderSource | undefined>();
@@ -98,7 +100,7 @@
 		if (backfillRunning || paused) return;
 		backfillRunning = true;
 		try {
-			const missing = scores.filter((s) => !s.thumbnailUrl);
+			const missing = scores.filter((s) => !s.thumbnailUrl || s.thumbnailVersion !== THUMBNAIL_VERSION);
 			if (!missing.length) return;
 			// Keep the first pass deliberately small so a large music library never
 			// monopolizes the UI thread. Continue in short batches after yielding.
@@ -108,18 +110,34 @@
 					const source = resolveScoreSource(score, folder);
 					if (!source.url && !source.blob && !source.nativePath) continue;
 					const info = await getPdfInfoFromSource(source);
+					if (!info.thumbnailUrl) throw new Error('Thumbnail generation returned no image');
 					await db.scores.update(score.id, {
 						thumbnailUrl: info.thumbnailUrl,
+						thumbnailVersion: THUMBNAIL_VERSION,
 						totalPages: info.totalPages || score.totalPages || 1
 					});
-					scores = scores.map((item) => item.id === score.id ? { ...item, thumbnailUrl: info.thumbnailUrl, totalPages: info.totalPages || item.totalPages || 1 } : item);
+					scores = scores.map((item) => item.id === score.id ? { ...item, thumbnailUrl: info.thumbnailUrl, thumbnailVersion: THUMBNAIL_VERSION, totalPages: info.totalPages || item.totalPages || 1 } : item);
 				} catch (err) {
 					console.warn('Thumbnail backfill failed', score.title, err);
 				}
 				await yieldToMain();
 			}
-			if (!paused && scores.some((s) => !s.thumbnailUrl)) setTimeout(() => void backfillThumbnails(), 700);
+			if (!paused && scores.some((s) => !s.thumbnailUrl || s.thumbnailVersion !== THUMBNAIL_VERSION)) setTimeout(() => void backfillThumbnails(), 700);
 		} finally { backfillRunning = false; }
+	}
+
+	async function handleThumbnailError(score: ScoreItem, event: Event) {
+		const img = event.currentTarget as HTMLImageElement;
+		console.warn('Thumbnail image failed to load', score.title, {
+			srcPrefix: img.currentSrc.slice(0, 80),
+			srcLength: img.currentSrc.length,
+			naturalWidth: img.naturalWidth,
+			naturalHeight: img.naturalHeight
+		});
+		img.style.display = 'none';
+		img.removeAttribute('src');
+		await db.scores.update(score.id, { thumbnailUrl: undefined, thumbnailVersion: undefined }).catch((err) => console.warn('Could not invalidate broken thumbnail', err));
+		scores = scores.map((item) => item.id === score.id ? { ...item, thumbnailUrl: undefined, thumbnailVersion: undefined } : item);
 	}
 
 	async function toggleFavorite(score: ScoreItem, event: MouseEvent) {
@@ -132,7 +150,6 @@
 	async function saveMetadata() { if (!metadata) return; const tags = newTags.split(',').map((tag) => tag.trim()).filter(Boolean); await db.scores.update(metadata.id, { tags }); scores = scores.map((item) => item.id === metadata!.id ? { ...item, tags } : item); metadata = null; }
 	async function deleteScore(score: ScoreItem, event: MouseEvent) { event.stopPropagation(); if (!confirm(`Remove “${score.title}” from Sonora?`)) return; await db.transaction('rw', db.scores, db.annotations, async () => { await db.scores.delete(score.id); await db.annotations.where('scoreId').equals(score.id).delete(); }); scores = scores.filter((item) => item.id !== score.id); }
 	function initials(name: string) { return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase(); }
-	function hideBrokenImage(event: Event) { const img = event.currentTarget as HTMLImageElement; img.style.display = 'none'; img.removeAttribute('src'); }
 
 	onMount(() => {
 		let disposed = false;
@@ -175,13 +192,13 @@
 		<aside class="sidebar">
 			<nav aria-label="Library filters"><button class:active={filter === 'all' && !composer} onclick={() => { filter = 'all'; composer = null; }}><Grid2X2 size={16} /><span>All scores</span><b>{scores.length}</b></button><button class:active={filter === 'recent'} onclick={() => { filter = 'recent'; composer = null; }}><Clock3 size={16} /><span>Recently opened</span></button><button class:active={filter === 'favorites'} onclick={() => { filter = 'favorites'; composer = null; }}><Star size={16} /><span>Favorites</span></button></nav>
 			{#if folder}<div class="folder-summary"><FolderOpen size={16} /><div><strong>{folder.name}</strong><span>{scores.length} {scores.length === 1 ? 'score' : 'scores'}</span></div></div>{/if}
-			{#if Object.keys(composers).length}<section><h2>Composers</h2>{#each Object.entries(composers).sort((a, b) => a[0].localeCompare(b[0])).slice(0, 16) as [name, count]}{@const portrait = getComposerPortrait(name)}<button class:active={composer === name} onclick={() => { composer = name; filter = 'all'; }}><div class="portrait">{#if portrait}<img src={portrait} alt="" loading="lazy" onerror={hideBrokenImage} />{/if}<span>{initials(name)}</span></div><span>{name}</span><b>{count}</b></button>{/each}</section>{/if}
+			{#if Object.keys(composers).length}<section><h2>Composers</h2>{#each Object.entries(composers).sort((a, b) => a[0].localeCompare(b[0])).slice(0, 16) as [name, count]}{@const portrait = getComposerPortrait(name)}<button class:active={composer === name} onclick={() => { composer = name; filter = 'all'; }}><div class="portrait">{#if portrait}<img src={portrait} alt="" loading="lazy" onerror={(event) => { console.warn('Composer portrait failed to load', name, event); }} />{/if}<span>{initials(name)}</span></div><span>{name}</span><b>{count}</b></button>{/each}</section>{/if}
 		</aside>
 		<main class="main">
 			<div class="toolbar"><div><h1>{currentTitle}</h1><span>{filtered.length} {filtered.length === 1 ? 'score' : 'scores'}</span></div><div class="toolbar-actions"><select class="sort-select" bind:value={sort} aria-label="Sort scores"><option value="recent">Recently used</option><option value="title">Title</option><option value="composer">Composer</option></select><div class="seg"><button class:active={view === 'grid'} onclick={() => (view = 'grid')} aria-label="Grid view"><Grid2X2 size={16} /></button><button class:active={view === 'list'} onclick={() => (view = 'list')} aria-label="List view"><List size={16} /></button></div></div></div>
 			{#if !folder && !scores.length}<div class="empty"><div class="empty-icon"><FolderOpen size={30} /></div><h2>Your score library</h2><p>Choose one folder where Sonora will keep all of your scores.</p><button class="primary" onclick={chooseFolder}><FolderPlus size={17} />Choose score folder</button></div>
 			{:else if filtered.length === 0}<div class="empty"><div class="empty-icon"><Search size={28} /></div><h2>No scores found</h2><p>Try another search or filter, or refresh the library.</p></div>
-			{:else}<div class:score-grid={view === 'grid'} class:score-list={view === 'list'}>{#each filtered as score (score.id)}<div class="card" class:opening={openingId === score.id} role="button" tabindex="0" onclick={() => openScore(score)} onkeydown={(event) => event.key === 'Enter' && openScore(score)}><div class="cover">{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" loading="lazy" decoding="async" onerror={hideBrokenImage} />{:else}<div class="no-cover"><FileText size={24} /><span>{score.totalPages ? `${score.totalPages} pages` : 'Preparing preview'}</span></div>{/if}<button class="favorite" class:marked={score.favorite} onclick={(event) => toggleFavorite(score, event)} aria-label="Favorite"><Star size={15} fill={score.favorite ? 'currentColor' : 'none'} /></button><div class="card-menu"><button onclick={(event) => editMetadata(score, event)} aria-label="Edit score"><MoreHorizontal size={16} /></button><button onclick={(event) => deleteScore(score, event)} aria-label="Remove score"><X size={16} /></button></div></div><div class="info"><h3 title={score.title}>{score.title}</h3><p>{score.composer}</p>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0, 2) as tag}<span>{tag}</span>{/each}</div>{/if}</div></div>{/each}</div>{/if}
+			{:else}<div class:score-grid={view === 'grid'} class:score-list={view === 'list'}>{#each filtered as score (score.id)}<div class="card" class:opening={openingId === score.id} role="button" tabindex="0" onclick={() => openScore(score)} onkeydown={(event) => event.key === 'Enter' && openScore(score)}><div class="cover">{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" loading="eager" decoding="async" onerror={(event) => void handleThumbnailError(score, event)} />{:else}<div class="no-cover"><FileText size={24} /><span>{score.totalPages ? `${score.totalPages} pages` : 'Preparing preview'}</span></div>{/if}<button class="favorite" class:marked={score.favorite} onclick={(event) => toggleFavorite(score, event)} aria-label="Favorite"><Star size={15} fill={score.favorite ? 'currentColor' : 'none'} /></button><div class="card-menu"><button onclick={(event) => editMetadata(score, event)} aria-label="Edit score"><MoreHorizontal size={16} /></button><button onclick={(event) => deleteScore(score, event)} aria-label="Remove score"><X size={16} /></button></div></div><div class="info"><h3 title={score.title}>{score.title}</h3><p>{score.composer}</p>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0, 2) as tag}<span>{tag}</span>{/each}</div>{/if}</div></div>{/each}</div>{/if}
 		</main>
 	</div>
 	{#if metadata}<div class="dialog-backdrop" role="presentation" onclick={(event) => event.currentTarget === event.target && (metadata = null)}><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="metadata-title"><header><div><h2 id="metadata-title">Edit score</h2><p>{metadata.title}</p></div><button class="icon-button" onclick={() => (metadata = null)} aria-label="Close"><X size={18} /></button></header><label>Tags<input bind:value={newTags} placeholder="Concert, piano, practice" /></label><footer><button onclick={() => (metadata = null)}>Cancel</button><button class="primary" onclick={saveMetadata}>Save</button></footer></div></div>{/if}
