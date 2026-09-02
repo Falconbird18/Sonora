@@ -22,6 +22,7 @@
 	let sort = $state<'recent' | 'title' | 'composer'>('recent');
 	let view = $state<'grid' | 'list'>('grid');
 	let metadata = $state<ScoreItem | null>(null);
+	let menuScoreId = $state<string | null>(null);
 	let newTags = $state('');
 	let syncing = $state(false);
 	let notice = $state('');
@@ -32,8 +33,7 @@
 
 	async function refresh() {
 		const [nextScores, nextFolder] = await Promise.all([
-			db.scores.orderBy('addedAt').reverse().toArray(),
-			db.folders.get('library-root')
+			db.scores.orderBy('addedAt').reverse().toArray(), db.folders.get('library-root')
 		]);
 		scores = nextScores;
 		folder = nextFolder;
@@ -75,6 +75,7 @@
 
 	async function openScore(score: ScoreItem) {
 		error = '';
+		menuScoreId = null;
 		openingId = score.id;
 		try {
 			const prepared = prepareScore(score);
@@ -168,6 +169,9 @@
 		};
 		void initialize();
 		const wake = () => void sync();
+		const closeMenus = () => (menuScoreId = null);
+		const onWindowClick = () => closeMenus();
+		const onKeydown = (event: KeyboardEvent) => { if (event.key === 'Escape') closeMenus(); };
 		window.addEventListener('focus', wake);
 		return () => { disposed = true; clearInterval(timer); window.removeEventListener('focus', wake); };
 	});
@@ -236,5 +240,5 @@
 	@keyframes spin { to { transform:rotate(360deg); } }
 	@media (max-width:850px) { .header { grid-template-columns:auto minmax(0,1fr) auto; gap:12px; padding:0 16px; } .folder-button span { display:none; } .body { grid-template-columns:190px minmax(0,1fr); } .main { padding:22px 20px 40px; } }
 	@media (max-width:650px) { .header { height:64px; } .brand strong { display:none; } .body { display:block; } .sidebar { display:none; } .main { padding:18px 14px 32px; } .toolbar { align-items:center; margin-bottom:20px; } .toolbar-actions .sort-select { display:none; } .score-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px 12px; } }
-	@media (prefers-reduced-motion:reduce) { :global(.spinning svg) { animation:none; } }
+	@media (prefers-reduced-motion:reduce) { .card-actions { transition:none; } :global(.spinning svg) { animation:none; } }
 </style>
