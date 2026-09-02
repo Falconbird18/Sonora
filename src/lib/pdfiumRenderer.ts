@@ -9,9 +9,15 @@ import type {
     RenderedPdfPage
 } from './pdfRenderer';
 
-let enginePromise: Promise<PdfEngine> | null = null;
+// Keep the engine singleton alive for the lifetime of the app. PDFium/WASM
+// initialization is expensive, and the same engine can safely serve all scores.
+let enginePromise: Promise<PdfEngine<Blob>> | null = null;
 
-async function getEngine(): Promise<PdfEngine> {
+type PdfTextEngine = PdfEngine<Blob> & {
+    getPageText(document: unknown, pageIndex: number): { toPromise(): Promise<string> };
+};
+
+async function getEngine(): Promise<PdfEngine<Blob>> {
     if (!enginePromise) {
         enginePromise = (async () => {
             const response = await fetch(DEFAULT_PDFIUM_WASM_URL);
@@ -21,7 +27,7 @@ async function getEngine(): Promise<PdfEngine> {
             const wasmBinary = await response.arrayBuffer();
             const pdfiumModule = await init({ wasmBinary });
             const native = new PdfiumNative(pdfiumModule);
-            return new PdfEngine(native, {
+            return new PdfEngine<Blob>(native, {
                 imageConverter: browserImageDataToBlobConverter
             });
         })();
@@ -37,13 +43,25 @@ function renderOptions(options?: PdfRenderOptions) {
     };
 }
 
+/**
+ * Make a real ArrayBuffer copy instead of passing Uint8Array<ArrayBufferLike>.
+ * This matters with newer TypeScript/lib.dom definitions, where a typed-array
+ * buffer may legally be backed by SharedArrayBuffer and therefore is not
+ * assignable to the engine's ArrayBuffer input.
+ */
+function toArrayBuffer(data: Uint8Array): ArrayBuffer {
+    const buffer = new ArrayBuffer(data.byteLength);
+    new Uint8Array(buffer).set(data);
+    return buffer;
+}
+
 export const pdfiumRenderer: PdfRenderer = {
     async open(data: Uint8Array, id = `score-${Date.now()}`): Promise<PdfDocumentRenderer> {
         if (!data.byteLength) throw new Error('PDF data is empty');
 
         const engine = await getEngine();
         const document = await engine
-            .openDocumentBuffer({ id, content: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer })
+            .openDocumentBuffer({ id, content: toArrayBuffer(data) })
             .toPromise();
 
         const pages: PdfPageInfo[] = document.pages.map((page, index) => ({
@@ -75,7 +93,11 @@ export const pdfiumRenderer: PdfRenderer = {
                 if (!document.pages[pageIndex]) {
                     throw new Error(`PDF page ${pageIndex + 1} does not exist`);
                 }
-                return (engine as unknown as { getPageText(doc: unknown, page: number): { toPromise(): Promise<string> } }).getPageText(document, pageIndex).toPromise();
+                // getPageText is present in EmbedPDF's runtime engine, but the
+                // PdfEngine type currently exposed by 2.15.0 does not include
+                // it. Keep the compatibility boundary isolated here.
+                const textEngine = engine as PdfTextEngine;
+                return textEngine.getPageText(document, pageIndex).toPromise();
             },
 
             async close() {
