@@ -80,14 +80,11 @@ function createPage(document: PdfDocumentRenderer, info: PdfPageInfo): PdfPagePr
 		},
 		render({ canvas, canvasContext, viewport }) {
 			let cancelled = false;
-			let objectUrl: string | undefined;
 			const promise = (async () => {
 				const rendered = await document.renderPage(info.index, {
-					width: Math.max(1, Math.ceil(viewport.width)),
-					height: Math.max(1, Math.ceil(viewport.height))
+					scale: viewport.scale
 				});
 				if (cancelled) return;
-				objectUrl = URL.createObjectURL(rendered.blob);
 				try {
 					const image = await createImageBitmap(rendered.blob);
 					if (cancelled) {
@@ -98,18 +95,13 @@ function createPage(document: PdfDocumentRenderer, info: PdfPageInfo): PdfPagePr
 					canvasContext.drawImage(image, 0, 0, viewport.width, viewport.height);
 					image.close();
 				} finally {
-					if (objectUrl) URL.revokeObjectURL(objectUrl);
-					objectUrl = undefined;
+					// The blob is owned by the rendered result and needs no object URL.
 				}
 			})();
 			return {
 				promise,
 				cancel() {
 					cancelled = true;
-					if (objectUrl) {
-						URL.revokeObjectURL(objectUrl);
-						objectUrl = undefined;
-					}
 				}
 			};
 		},
