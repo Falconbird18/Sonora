@@ -1,0 +1,148 @@
+name: Restore and redesign score viewer
+
+on:
+  push:
+    branches: [fix/thumbnail-rendering-and-type-errors]
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/thumbnail-rendering-and-type-errors
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-copy
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Restore full viewer and redesign controls
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('src/lib/ScoreViewerFixed.svelte')
+          s = Path('main-copy/src/lib/ScoreViewerFixed.svelte').read_text()
+
+          # Keep the full viewer implementation from main, while retaining the
+          # PDFium migration already present on this branch through pdfUtils.
+          s = s.replace("import { onMount, tick } from 'svelte';", "import { onMount, tick } from 'svelte';\n\timport { fade, fly } from 'svelte/transition';", 1)
+          s = s.replace("\tlet isFullscreen = $state(false);", "\tlet isFullscreen = $state(false);\n\tlet historyRevision = $state(0);\n\tlet eraserCursor = $state<{ page: number; x: number; y: number; diameter: number } | null>(null);", 1)
+          s = s.replace("\tconst canUndo = $derived((historyIndex[page] ?? 0) > 0);\n\tconst canRedo = $derived((historyIndex[page] ?? 0) < (histories[page]?.length ?? 1) - 1);", "\tconst canUndo = $derived.by(() => { historyRevision; return (historyIndex[page] ?? 0) > 0; });\n\tconst canRedo = $derived.by(() => { historyRevision; return (historyIndex[page] ?? 0) < (histories[page]?.length ?? 1) - 1; });", 1)
+
+          s = s.replace("\t\t\tzoom = typeof saved.zoom === 'number' ? saved.zoom : 1;\n\t\t\tfit = saved.fit === 'width' ? 'width' : 'page';\n\t\t\tannotationsVisible = saved.annotationsVisible !== false;\n\t\t\trecentSymbols = Array.isArray(saved.recentSymbols) ? saved.recentSymbols : [];", "\t\t\tzoom = typeof saved.zoom === 'number' ? saved.zoom : 1;\n\t\t\tfit = saved.fit === 'width' ? 'width' : 'page';\n\t\t\tannotationsVisible = saved.annotationsVisible !== false;\n\t\t\tcolor = typeof saved.color === 'string' ? saved.color : color;\n\t\t\twidth = typeof saved.width === 'number' ? saved.width : width;\n\t\t\ttextSize = typeof saved.textSize === 'number' ? saved.textSize : textSize;\n\t\t\tsymbolSize = typeof saved.symbolSize === 'number' ? saved.symbolSize : symbolSize;\n\t\t\trecentSymbols = Array.isArray(saved.recentSymbols) ? saved.recentSymbols : [];", 1)
+
+          s = s.replace("\tfunction choose(nextTool: Tool) {\n\t\ttool = nextTool;\n\t\tif (nextTool === 'move') textEditor = null;\n\t}", "\tfunction choose(nextTool: Tool) {\n\t\ttool = nextTool;\n\t\tif (nextTool === 'move') textEditor = null;\n\t\tif (nextTool !== 'eraser') eraserCursor = null;\n\t}\n\n\tfunction eraserRadius() {\n\t\treturn Math.max(0.01, width / 700);\n\t}\n\n\tfunction updateEraserCursor(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {\n\t\tif (tool !== 'eraser') {\n\t\t\teraserCursor = null;\n\t\t\treturn;\n\t\t}\n\t\tconst rect = canvas.getBoundingClientRect();\n\t\tconst radius = eraserRadius();\n\t\teraserCursor = {\n\t\t\tpage: number,\n\t\t\tx: event.clientX - rect.left,\n\t\t\ty: event.clientY - rect.top,\n\t\t\tdiameter: radius * 2 * Math.min(rect.width, rect.height)\n\t\t};\n\t}\n\n\tfunction pointerMove(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {\n\t\tupdateEraserCursor(event, number, canvas);\n\t\tmove(event);\n\t}", 1)
+
+          s = s.replace("\t\tif (tool === 'eraser') {\n\t\t\tdrawing = { page: number, canvas, pointerId: event.pointerId };", "\t\tif (tool === 'eraser') {\n\t\t\tupdateEraserCursor(event, number, canvas);\n\t\t\tdrawing = { page: number, canvas, pointerId: event.pointerId };", 1)
+          s = s.replace("\t\tconst radius = Math.max(0.01, width / 700);", "\t\tconst radius = eraserRadius();", 1)
+          s = s.replace("\t\thistoryIndex[number] = nextList.length - 1;\n\t\tscheduleSave(number);", "\t\thistoryIndex[number] = nextList.length - 1;\n\t\thistoryRevision += 1;\n\t\tscheduleSave(number);", 1)
+          s = s.replace("\t\thistoryIndex[page] = index - 1;\n\t\t\tapplySnapshot(page, histories[page][index - 1]);", "\t\t\thistoryIndex[page] = index - 1;\n\t\t\thistoryRevision += 1;\n\t\t\tapplySnapshot(page, histories[page][index - 1]);", 1)
+          s = s.replace("\t\thistoryIndex[page] = index + 1;\n\t\t\tapplySnapshot(page, histories[page][index + 1]);", "\t\t\thistoryIndex[page] = index + 1;\n\t\t\thistoryRevision += 1;\n\t\t\tapplySnapshot(page, histories[page][index + 1]);", 1)
+          s = re.sub(r"\tfunction snapshot\(number: number\): Snapshot \{.*?\n\t\}\n\tfunction ensureHistory", """\tfunction snapshot(number: number): Snapshot {\n\t\tconst rawStrokes = $state.snapshot(strokes[number] || []);\n\t\tconst rawStamps = $state.snapshot(stamps[number] || []);\n\t\tconst rawNotes = $state.snapshot(notes[number] || []);\n\t\treturn { strokes: structuredClone(rawStrokes), stamps: structuredClone(rawStamps), notes: structuredClone(rawNotes) };\n\t}\n\tfunction ensureHistory""", s, count=1, flags=re.S)
+          s = s.replace("JSON.stringify({ bookmarked, dual, zoom, fit, annotationsVisible, recentSymbols, page })", "JSON.stringify({ bookmarked, dual, zoom, fit, annotationsVisible, color, width, textSize, symbolSize, recentSymbols, page })", 1)
+
+          # Compact bottom bar: keep the page scrubber visible, move the rest to settings.
+          old_bottom = re.compile(r"\t\{#if !reading\}\n\t\t<footer class=\"bottombar\">.*?\n\t\{/if\}", re.S)
+          new_bottom = '''\t{#if !reading}\n\t\t<footer class="bottombar">\n\t\t\t<div class="footer-section footer-spacer" aria-hidden="true"></div>\n\t\t\t<input class="page-scrubber" type="range" min="1" max={pdf?.numPages || 1} value={page} aria-label="Scrub pages" oninput={scrubPage} />\n\t\t\t<div class="footer-section footer-actions">\n\t\t\t\t<button class="icon-button" title="Settings" aria-label="Viewer settings" aria-expanded={settingsOpen} onclick={() => (settingsOpen = !settingsOpen)}><Settings2 size={17} /></button>\n\t\t\t</div>\n\t\t</footer>\n\t{/if}'''
+          s, n = old_bottom.subn(new_bottom, s, count=1)
+          if n != 1: raise SystemExit('Could not replace bottom bar')
+
+          # Replace annotation dock with a deliberately lean tool dock. Styling controls
+          # live in settings; the tools and history stay immediately accessible.
+          old_annotation = re.compile(r"\t\{#if !reading && controls\}\n\t\t<aside class=\"annotation-bar\">.*?\n\t\t</aside>\n\t\{/if\}", re.S)
+          new_annotation = '''\t{#if !reading && controls}\n\t\t<aside class="annotation-bar" aria-label="Annotation tools">\n\t\t\t<div class="annotation-tools">\n\t\t\t\t<button class:active={tool === 'move'} class="tool-button" title="Move" aria-label="Move" aria-pressed={tool === 'move'} onclick={() => choose('move')}><MousePointer2 size={18} /><span>Move</span></button>\n\t\t\t\t<button class:active={tool === 'pen'} class="tool-button" title="Pen (P)" aria-label="Pen" aria-pressed={tool === 'pen'} onclick={() => choose('pen')}><PenTool size={18} /><span>Pen</span></button>\n\t\t\t\t<button class:active={tool === 'highlighter'} class="tool-button" title="Highlighter (H)" aria-label="Highlighter" aria-pressed={tool === 'highlighter'} onclick={() => choose('highlighter')}><Highlighter size={18} /><span>Highlight</span></button>\n\t\t\t\t<button class:active={tool === 'line'} class="tool-button" title="Line" aria-label="Line" aria-pressed={tool === 'line'} onclick={() => choose('line')}><Minus size={18} /><span>Line</span></button>\n\t\t\t\t<button class:active={tool === 'arrow'} class="tool-button" title="Arrow" aria-label="Arrow" aria-pressed={tool === 'arrow'} onclick={() => choose('arrow')}><ArrowUpRight size={18} /><span>Arrow</span></button>\n\t\t\t\t<button class:active={tool === 'eraser'} class="tool-button" title="Eraser (E)" aria-label="Eraser" aria-pressed={tool === 'eraser'} onclick={() => choose('eraser')}><Eraser size={18} /><span>Eraser</span></button>\n\t\t\t\t<button class:active={tool === 'symbol'} class="tool-button" title="Symbols (S)" aria-label="Symbols" aria-pressed={tool === 'symbol'} onclick={() => choose('symbol')}><Music2 size={18} /><span>Symbols</span></button>\n\t\t\t\t<button class:active={tool === 'text'} class="tool-button" title="Text (T)" aria-label="Text" aria-pressed={tool === 'text'} onclick={() => choose('text')}><Type size={18} /><span>Text</span></button>\n\t\t\t</div>\n\t\t\t<div class="annotation-divider"></div>\n\t\t\t<div class="history-cluster">\n\t\t\t\t<button class="icon-button history-button" title={canUndo ? 'Undo' : 'Nothing to undo'} aria-label="Undo" disabled={!canUndo} onclick={undo}><Undo2 size={18} /></button>\n\t\t\t\t<button class="icon-button history-button" title={canRedo ? 'Redo' : 'Nothing to redo'} aria-label="Redo" disabled={!canRedo} onclick={redo}><Redo2 size={18} /></button>\n\t\t\t</div>\n\t\t\t<div class="annotation-divider"></div>\n\t\t\t<span class="annotation-current" title="Open Settings to change annotation appearance">{tool === 'highlighter' ? 'Highlight' : tool[0].toUpperCase() + tool.slice(1)}</span>\n\t\t\t<button class="icon-button close-annotations" title="Close annotation tools" aria-label="Close annotation tools" onclick={toggleControls}><X size={18} /></button>\n\t\t</aside>\n\t{/if}'''
+          s, n = old_annotation.subn(new_annotation, s, count=1)
+          if n != 1: raise SystemExit('Could not replace annotation bar')
+
+          # Replace the old settings card with a contextual panel anchored above the bottom-right settings button.
+          old_settings = re.compile(r"\t\{#if settingsOpen && !reading\}\n\t\t<div class=\"settings-card\">.*?\n\t\t</div>\n\t\{/if\}", re.S)
+          new_settings = '''\t{#if settingsOpen && !reading}\n\t\t<div class="settings-scrim" role="presentation" transition:fade={{ duration: 120 }} onclick={(event) => { if (event.currentTarget === event.target) settingsOpen = false; }}></div>\n\t\t<section class="settings-card" role="dialog" aria-label="Viewer settings" transition:fly={{ y: 8, duration: 170 }}>\n\t\t\t<header class="settings-header">\n\t\t\t\t<div><strong>Viewer settings</strong><span>{Math.round(zoom * 100)}% · {fit === 'page' ? 'Fit page' : 'Fit width'}</span></div>\n\t\t\t\t<button class="icon-button" title="Close settings" aria-label="Close settings" onclick={() => (settingsOpen = false)}><X size={16} /></button>\n\t\t\t</header>\n\t\t\t<section class="settings-section">\n\t\t\t\t<div class="settings-section-title">View</div>\n\t\t\t\t<div class="settings-segment">\n\t\t\t\t\t<button class:active={fit === 'page'} onclick={() => setFit('page')}>Fit page</button>\n\t\t\t\t\t<button class:active={fit === 'width'} onclick={() => setFit('width')}>Fit width</button>\n\t\t\t\t</div>\n\t\t\t\t<label class="settings-row range-row"><span>Zoom</span><span class="range-control"><input type="range" min="0.4" max="2.5" step="0.1" value={zoom} oninput={(event) => setZoom(Number((event.currentTarget as HTMLInputElement).value))} /><output>{Math.round(zoom * 100)}%</output></span></label>\n\t\t\t\t<label class="settings-row"><span>Two-page view</span><input type="checkbox" checked={dual} onchange={(event) => { dual = (event.currentTarget as HTMLInputElement).checked; persistPrefs(); void render({ quiet: hasPainted }); }} /></label>\n\t\t\t\t<label class="settings-row"><span>Show annotations</span><input type="checkbox" checked={annotationsVisible} onchange={() => toggleAnnotations()} /></label>\n\t\t\t</section>\n\t\t\t<section class="settings-section">\n\t\t\t\t<div class="settings-section-title">Annotation style</div>\n\t\t\t\t<div class="color-row settings-colors" role="group" aria-label="Annotation color">\n\t\t\t\t\t{#each colors as swatch}\n\t\t\t\t\t\t<button class="swatch" class:selected={color === swatch} style={`--swatch:${swatch}`} title={`Color ${swatch}`} aria-label={`Color ${swatch}`} aria-pressed={color === swatch} onclick={() => { color = swatch; persistPrefs(); }}></button>\n\t\t\t\t\t{/each}\n\t\t\t\t</div>\n\t\t\t\t<label class="settings-row range-row"><span>Pen size</span><span class="range-control"><input type="range" min="1" max="14" value={width} oninput={(event) => { width = Number((event.currentTarget as HTMLInputElement).value); persistPrefs(); }} /><output>{width}</output></span></label>\n\t\t\t\t<label class="settings-row range-row"><span>Text size</span><span class="range-control"><input type="range" min="10" max="36" value={textSize} oninput={(event) => { textSize = Number((event.currentTarget as HTMLInputElement).value); persistPrefs(); }} /><output>{textSize}</output></span></label>\n\t\t\t\t<label class="settings-row range-row"><span>Symbol size</span><span class="range-control"><input type="range" min="18" max="72" value={symbolSize} oninput={(event) => { symbolSize = Number((event.currentTarget as HTMLInputElement).value); persistPrefs(); }} /><output>{symbolSize}</output></span></label>\n\t\t\t</section>\n\t\t\t<section class="settings-section">\n\t\t\t\t<div class="settings-section-title">Display</div>\n\t\t\t\t<button class="settings-action" onclick={() => void toggleFullScreen()}>{#if isFullscreen}<Minimize2 size={15} /><span>Exit fullscreen</span>{:else}<Maximize2 size={15} /><span>Enter fullscreen</span>{/if}</button>\n\t\t\t\t<button class="settings-action" onclick={enterReading}><Eye size={15} /><span>Reading mode</span><kbd>F</kbd></button>\n\t\t\t</section>\n\t\t\t<p class="settings-hint">Arrow keys / Space turn pages · Ctrl-scroll zooms · P/H/E/S/T select annotation tools</p>\n\t\t</section>\n\t{/if}'''
+          s, n = old_settings.subn(new_settings, s, count=1)
+          if n != 1: raise SystemExit('Could not replace settings panel')
+
+          # Pointer handlers + cursor overlays.
+          s = s.replace('onpointermove={move}', 'onpointermove={(event) => pointerMove(event, visiblePages[0], leftInk!)}\n\t\t\t\t\tonpointerleave={() => { if (tool === \'eraser\') eraserCursor = null; }}', 1)
+          s = s.replace('onpointermove={move}', 'onpointermove={(event) => pointerMove(event, visiblePages[1], rightInk!)}\n\t\t\t\t\t\tonpointerleave={() => { if (tool === \'eraser\') eraserCursor = null; }}', 1)
+          left_cursor = '''\t\t\t\t{#if textEditor && textEditor.page === visiblePages[0]}\n\t\t\t\t\t<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>\n\t\t\t\t\t\t<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />\n\t\t\t\t\t\t<button title="Save" onclick={commitText}><Check size={15} /></button>\n\t\t\t\t\t\t<button title="Cancel" onclick={cancelText}><X size={15} /></button>\n\t\t\t\t\t</div>\n\t\t\t\t{/if}'''
+          if left_cursor in s:
+              s = s.replace(left_cursor, left_cursor + '\n\t\t\t\t{#if eraserCursor && eraserCursor.page === visiblePages[0]}<div class="eraser-cursor" style={`left:${eraserCursor.x}px;top:${eraserCursor.y}px;width:${eraserCursor.diameter}px;height:${eraserCursor.diameter}px`}></div>{/if}', 1)
+          right_cursor = '''\t\t\t\t\t{#if textEditor && textEditor.page === visiblePages[1]}\n\t\t\t\t\t\t<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>\n\t\t\t\t\t\t\t<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />\n\t\t\t\t\t\t\t<button title="Save" onclick={commitText}><Check size={15} /></button>\n\t\t\t\t\t\t\t<button title="Cancel" onclick={cancelText}><X size={15} /></button>\n\t\t\t\t\t\t</div>\n\t\t\t\t\t{/if}'''
+          if right_cursor in s:
+              s = s.replace(right_cursor, right_cursor + '\n\t\t\t\t\t{#if eraserCursor && eraserCursor.page === visiblePages[1]}<div class="eraser-cursor" style={`left:${eraserCursor.x}px;top:${eraserCursor.y}px;width:${eraserCursor.diameter}px;height:${eraserCursor.diameter}px`}></div>{/if}', 1)
+
+          # Remove old settings animation rule and append scoped refinements that override
+          # the restored stylesheet without fighting its base layout.
+          refinements = r'''
+\t.settings-scrim { position: absolute; inset: 0; z-index: 48; background: rgba(0,0,0,.16); pointer-events: auto; }
+\t.settings-card { position: absolute; z-index: 55; right: 12px; bottom: 68px; top: auto; width: min(330px, calc(100% - 24px)); max-height: min(72vh, 620px); overflow: auto; padding: 0; border: 1px solid rgba(255,255,255,.11); border-radius: 17px; background: rgba(30,30,27,.96); box-shadow: 0 22px 70px rgba(0,0,0,.48), inset 0 1px 0 rgba(255,255,255,.04); backdrop-filter: blur(22px) saturate(125%); font-size: 11px; }
+\t.settings-header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 14px 11px; border-bottom:1px solid rgba(255,255,255,.08); }
+\t.settings-header div { display:flex; flex-direction:column; gap:3px; min-width:0; }
+\t.settings-header strong { font-size:12px; color:#f4f3ed; }
+\t.settings-header span { color:#787870; font-size:9px; }
+\t.settings-section { padding:11px 14px; border-bottom:1px solid rgba(255,255,255,.065); }
+\t.settings-section:last-of-type { border-bottom:0; }
+\t.settings-section-title { margin-bottom:8px; color:#77776f; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; }
+\t.settings-segment { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin-bottom:8px; padding:3px; border-radius:9px; background:rgba(255,255,255,.045); }
+\t.settings-segment button { min-height:31px; border-radius:7px; color:#929188; font-size:10px; }
+\t.settings-segment button:hover, .settings-segment button.active { background:rgba(255,255,255,.08); color:#fff; }
+\t.settings-row { min-height:34px; display:flex; align-items:center; justify-content:space-between; gap:12px; color:#aaa9a0; }
+\t.settings-row > span:first-child { color:#aaa9a0; }
+\t.settings-row input[type=checkbox] { accent-color:#c4a574; }
+\t.range-row { flex-wrap:wrap; }
+\t.range-control { display:flex; align-items:center; gap:7px; min-width:0; width:min(185px,62%); }
+\t.range-control input { flex:1; min-width:60px; accent-color:#c4a574; }
+\t.range-control output { width:35px; text-align:right; color:#c5c4bc; font-variant-numeric:tabular-nums; font-size:9px; }
+\t.settings-colors { display:flex; align-items:center; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+\t.settings-colors .swatch { width:20px; height:20px; }
+\t.settings-action { width:100%; min-height:35px; display:flex; align-items:center; gap:8px; padding:0 9px; margin-top:4px; border-radius:9px; color:#aaa9a0; text-align:left; }
+\t.settings-action:hover { background:rgba(255,255,255,.07); color:#fff; }
+\t.settings-action kbd { margin-left:auto; padding:2px 5px; border:1px solid rgba(255,255,255,.1); border-radius:5px; color:#76766f; font-size:8px; }
+\t.settings-hint { margin:0; padding:10px 14px 12px; color:#6f6f68; font-size:8px; line-height:1.5; }
+\t.settings-card :is(button,input) { transition: background .14s ease, border-color .14s ease, color .14s ease, transform .14s ease; }
+\t.settings-card .icon-button:hover { transform: none; }
+\t.bottombar { position:absolute; z-index:30; left:12px; right:12px; bottom:10px; top:auto; width:auto; min-height:44px; padding:5px 8px; border:1px solid rgba(255,255,255,.08); border-radius:16px; background:rgba(25,25,22,.78); backdrop-filter:blur(20px); box-shadow:0 12px 32px rgba(0,0,0,.22); display:grid; grid-template-columns:44px minmax(90px,1fr) 44px; align-items:center; gap:8px; }
+\t.footer-spacer, .footer-actions { width:44px; min-height:34px; padding:0; border:0; background:transparent; box-shadow:none; backdrop-filter:none; }
+\t.footer-actions { justify-content:flex-end; }
+\t.page-scrubber { width:100%; min-width:0; max-width:none; accent-color:#c4a574; }
+\t.annotation-bar { bottom:66px; }
+\t.annotation-tools, .history-cluster { display:flex; align-items:center; gap:2px; }
+\t.annotation-bar { padding:6px; border-radius:16px; background:rgba(25,25,22,.88); }
+\t.annotation-divider { width:1px; height:30px; background:rgba(255,255,255,.09); flex:0 0 auto; }
+\t.history-button { width:36px; height:36px; border-radius:10px; }
+\t.annotation-current { max-width:72px; padding:0 4px; color:#74746d; font-size:9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+\t.close-annotations { width:34px; height:34px; }
+\t.eraser-cursor { position:absolute; z-index:25; pointer-events:none; transform:translate(-50%,-50%); border:1.5px solid rgba(194,65,12,.95); border-radius:50%; box-shadow:0 0 0 1px rgba(255,255,255,.8),0 2px 9px rgba(0,0,0,.18); background:rgba(194,65,12,.035); }
+\t@media (max-width: 820px) { .settings-card { right:8px; bottom:62px; width:min(320px,calc(100% - 16px)); } .bottombar { left:8px; right:8px; bottom:7px; grid-template-columns:1fr 44px; } .footer-spacer { display:none; } .annotation-bar { left:8px; right:8px; bottom:60px; transform:none; width:auto; max-width:none; justify-content:flex-start; overflow-x:auto; scrollbar-width:none; } .annotation-bar::-webkit-scrollbar { display:none; } .tool-button span { display:none; } .annotation-current { display:none; } }
+\t@media (max-width: 560px) { .settings-card { bottom:57px; max-height:70vh; } .bottombar { left:6px; right:6px; bottom:6px; padding:4px 6px; } .page-scrubber { height:22px; } .annotation-bar { bottom:55px; padding:5px; } }
+\t@media (prefers-reduced-motion: reduce) { .settings-card, .settings-card :is(button,input), .annotation-bar { transition:none !important; } }
+'''
+          s = s.replace('\n</style>', refinements + '\n</style>', 1)
+
+          # Preserve keyboard-safe behavior when settings is active.
+          s = s.replace("\t\t\telse if (event.key === 'Escape') {\n\t\t\t\tif (settingsOpen || searchOpen || controls || reading) {", "\t\t\telse if (event.key === 'Escape') {\n\t\t\t\tif (settingsOpen || searchOpen || controls || reading) {", 1)
+
+          p.write_text(s)
+          PY
+      - name: Install dependencies and validate
+        run: |
+          npm ci
+          npm run check
+          npm run build
+      - name: Commit and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/restore-score-viewer.yml
+          git add src/lib/ScoreViewerFixed.svelte
+          git commit -m 'Restore score viewer functionality and redesign settings'
+          git push origin fix/thumbnail-rendering-and-type-errors
