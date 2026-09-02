@@ -15,84 +15,46 @@ jobs:
         with:
           ref: feature/scoreviewer-polish
           fetch-depth: 0
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
-      - name: Apply PDFium thumbnail and viewer polish
+      - name: Apply polish
         run: |
           python3 <<'PY'
           from pathlib import Path
           import re
-
-          # Thumbnail reliability: pass the actual requested viewport scale into PDFium.
-          p = Path('src/lib/pdfUtils.ts')
-          s = p.read_text()
-          old = """const rendered = await document.renderPage(info.index, {\n\t\t\t\t\twidth: Math.max(1, Math.ceil(viewport.width)),\n\t\t\t\t\theight: Math.max(1, Math.ceil(viewport.height))\n\t\t\t\t});"""
-          new = """const rendered = await document.renderPage(info.index, {\n\t\t\t\t\tscale: viewport.scale\n\t\t\t\t});"""
-          if old not in s:
-              raise SystemExit('Could not find PDFium render adapter block')
-          p.write_text(s.replace(old, new))
-
-          # Clearer reading-mode icon and cleaner viewer controls.
-          p = Path('src/lib/ScoreViewerFixed.svelte')
-          s = p.read_text()
-          s = s.replace('\t\tBookmarkCheck,\n', '\t\tBookmarkCheck,\n\t\tBookOpen,\n')
-          s = s.replace('<Eye size={18} />', '<BookOpen size={18} />', 1)
-
-          # The page scrubber is redundant with the prominent previous/next controls.
-          s = re.sub(r'\n\t\t\t<input\n\t\t\t\tclass="page-scrubber".*?\n\t\t\t/>', '', s, count=1, flags=re.S)
-
-          # Make the annotation palette feel like a floating editing dock rather than a second toolbar.
-          old_css = """\t.annotation-bar {\n\t\tposition: absolute;\n\t\tz-index: 35;\n\t\tleft: 50%;\n\t\tbottom: 65px;\n\t\ttransform: translateX(-50%);"""
-          new_css = """\t.annotation-bar {\n\t\tposition: absolute;\n\t\tz-index: 35;\n\t\tleft: 50%;\n\t\tbottom: 10px;\n\t\ttransform: translate(-50%, 12px);\n\t\tanimation: annotation-bar-in 0.2s cubic-bezier(.2,.8,.2,1) forwards;"""
-          if old_css not in s:
-              raise SystemExit('Could not find annotation bar CSS')
-          s = s.replace(old_css, new_css)
-
-          # The floating palette should sit just above the editing dock.
-          s = s.replace('\t\tbottom: 119px;\n\t\ttransform: translateX(-50%);\n\t\twidth: min(780px, calc(100% - 24px));',
-                        '\t\tbottom: 68px;\n\t\ttransform: translateX(-50%);\n\t\twidth: min(780px, calc(100% - 24px));', 1)
-
-          # Hide the scrollbar while retaining wheel/trackpad panning at high zoom.
-          old_workspace = """\t.workspace {\n\t\tposition: absolute;\n\t\tinset: 56px 0 55px;\n\t\toverflow: auto;"""
-          new_workspace = """\t.workspace {\n\t\tposition: absolute;\n\t\tinset: 56px 0 55px;\n\t\toverflow: auto;\n\t\tscrollbar-width: none;\n\t\t-ms-overflow-style: none;"""
-          if old_workspace not in s:
-              raise SystemExit('Could not find workspace CSS')
-          s = s.replace(old_workspace, new_workspace)
-          marker = "\t.pages {\n"
-          s = s.replace(marker, "\t.workspace::-webkit-scrollbar { display: none; }\n\n" + marker, 1)
-
-          # Reduce visual density of the lower control strip and make its controls easier to scan.
-          s = s.replace('\t\tmin-height: 55px;\n', '\t\tmin-height: 48px;\n', 1)
-          s = s.replace('\t\tpadding: 9px 14px;\n', '\t\tpadding: 7px 12px;\n', 1)
-
-          # Add a subtle entrance motion for the floating annotation dock.
-          key = "\t@keyframes spin {"
-          animation = """\t@keyframes annotation-bar-in {\n\t\tfrom {\n\t\t\topacity: 0;\n\t\t\ttransform: translate(-50%, 18px) scale(0.98);\n\t\t}\n\t\tto {\n\t\t\topacity: 1;\n\t\t\ttransform: translate(-50%, 0) scale(1);\n\t\t}\n\t}\n"""
-          if key not in s:
-              raise SystemExit('Could not find animation insertion point')
-          s = s.replace(key, animation + key, 1)
-
-          # At smaller widths, let the dock stay compact without introducing a second scrollbar.
-          s = s.replace('\t\t\toverflow: auto;\n\t\t}\n\t\t.tool-button {',
-                        '\t\t\toverflow-x: auto;\n\t\t\tscrollbar-width: none;\n\t\t}\n\t\t.annotation-bar::-webkit-scrollbar { display: none; }\n\t\t.tool-button {', 1)
-
+          p=Path('src/lib/pdfUtils.ts'); s=p.read_text()
+          old="""const rendered = await document.renderPage(info.index, {\n\t\t\t\t\twidth: Math.max(1, Math.ceil(viewport.width)),\n\t\t\t\t\theight: Math.max(1, Math.ceil(viewport.height))\n\t\t\t\t});"""
+          new="""const rendered = await document.renderPage(info.index, {\n\t\t\t\t\tscale: viewport.scale\n\t\t\t\t});"""
+          if old not in s: raise SystemExit('thumbnail adapter block not found')
+          p.write_text(s.replace(old,new))
+          p=Path('src/lib/ScoreViewerFixed.svelte'); s=p.read_text()
+          if '\t\tBookOpen,\n' not in s: s=s.replace('\t\tBookmarkCheck,\n','\t\tBookmarkCheck,\n\t\tBookOpen,\n')
+          s=s.replace('<Eye size={18} />','<BookOpen size={18} />',1)
+          s=re.sub(r'\n\t\t\t<input\n\t\t\t\tclass="page-scrubber".*?\n\t\t\t/>','',s,count=1,flags=re.S)
+          old="""\t.annotation-bar {\n\t\tposition: absolute;\n\t\tz-index: 35;\n\t\tleft: 50%;\n\t\tbottom: 65px;\n\t\ttransform: translateX(-50%);"""
+          new="""\t.annotation-bar {\n\t\tposition: absolute;\n\t\tz-index: 35;\n\t\tleft: 50%;\n\t\tbottom: 10px;\n\t\ttransform: translate(-50%, 12px);\n\t\tanimation: annotation-bar-in 0.2s cubic-bezier(.2,.8,.2,1) forwards;"""
+          if old not in s: raise SystemExit('annotation bar CSS not found')
+          s=s.replace(old,new)
+          s=s.replace('\t\tbottom: 119px;\n\t\ttransform: translateX(-50%);\n\t\twidth: min(780px, calc(100% - 24px));','\t\tbottom: 68px;\n\t\ttransform: translateX(-50%);\n\t\twidth: min(780px, calc(100% - 24px));',1)
+          old="""\t.workspace {\n\t\tposition: absolute;\n\t\tinset: 56px 0 55px;\n\t\toverflow: auto;"""
+          new="""\t.workspace {\n\t\tposition: absolute;\n\t\tinset: 56px 0 55px;\n\t\toverflow: auto;\n\t\tscrollbar-width: none;\n\t\t-ms-overflow-style: none;"""
+          if old not in s: raise SystemExit('workspace CSS not found')
+          s=s.replace(old,new)
+          s=s.replace('\t.pages {','\t.workspace::-webkit-scrollbar { display: none; }\n\n\t.pages {',1)
+          s=s.replace('\t\tmin-height: 55px;\n','\t\tmin-height: 48px;\n',1)
+          s=s.replace('\t\tpadding: 9px 14px;\n','\t\tpadding: 7px 12px;\n',1)
+          key='\t@keyframes spin {'
+          anim="""\t@keyframes annotation-bar-in {\n\t\tfrom { opacity: 0; transform: translate(-50%, 18px) scale(.98); }\n\t\tto { opacity: 1; transform: translate(-50%, 0) scale(1); }\n\t}\n"""
+          s=s.replace(key,anim+key,1)
+          s=s.replace('\t\t\toverflow: auto;\n\t\t}\n\t\t.tool-button {','\t\t\toverflow-x: auto;\n\t\t\tscrollbar-width: none;\n\t\t}\n\t\t.annotation-bar::-webkit-scrollbar { display: none; }\n\t\t.tool-button {',1)
           p.write_text(s)
           PY
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Type and Svelte checks
-        run: npm run check
-
-      - name: Production build
-        run: npm run build
-
-      - name: Commit changes
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - name: Commit
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
