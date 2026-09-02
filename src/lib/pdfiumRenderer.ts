@@ -1,4 +1,4 @@
-import { init, DEFAULT_PDFIUM_WASM_URL } from '@embedpdf/pdfium';
+import { init } from '@embedpdf/pdfium';
 import { PdfiumNative, PdfEngine } from '@embedpdf/engines/pdfium';
 import { browserImageDataToBlobConverter } from '@embedpdf/engines/converters';
 import type {
@@ -20,9 +20,13 @@ type PdfTextEngine = PdfEngine<Blob> & {
 async function getEngine(): Promise<PdfEngine<Blob>> {
     if (!enginePromise) {
         enginePromise = (async () => {
-            const response = await fetch(DEFAULT_PDFIUM_WASM_URL);
+            // The WASM is copied into Vite's public output during every build.
+            // Using a relative URL is important for packaged Tauri/WebView2
+            // builds: there is no assumption that the app is hosted at '/'.
+            const wasmUrl = new URL('../../public/pdfium.wasm', import.meta.url);
+            const response = await fetch(wasmUrl);
             if (!response.ok) {
-                throw new Error(`Could not load PDFium WebAssembly (${response.status})`);
+                throw new Error(`Could not load bundled PDFium WebAssembly (${response.status})`);
             }
             const wasmBinary = await response.arrayBuffer();
             const pdfiumModule = await init({ wasmBinary });
@@ -43,12 +47,6 @@ function renderOptions(options?: PdfRenderOptions) {
     };
 }
 
-/**
- * Make a real ArrayBuffer copy instead of passing Uint8Array<ArrayBufferLike>.
- * This matters with newer TypeScript/lib.dom definitions, where a typed-array
- * buffer may legally be backed by SharedArrayBuffer and therefore is not
- * assignable to the engine's ArrayBuffer input.
- */
 function toArrayBuffer(data: Uint8Array): ArrayBuffer {
     const buffer = new ArrayBuffer(data.byteLength);
     new Uint8Array(buffer).set(data);
@@ -93,9 +91,6 @@ export const pdfiumRenderer: PdfRenderer = {
                 if (!document.pages[pageIndex]) {
                     throw new Error(`PDF page ${pageIndex + 1} does not exist`);
                 }
-                // getPageText is present in EmbedPDF's runtime engine, but the
-                // PdfEngine type currently exposed by 2.15.0 does not include
-                // it. Keep the compatibility boundary isolated here.
                 const textEngine = engine as PdfTextEngine;
                 return textEngine.getPageText(document, pageIndex).toPromise();
             },
