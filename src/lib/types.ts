@@ -7,6 +7,7 @@ export interface ScoreItem {
 	/** Asset-protocol or blob URL for zero-copy open on desktop. */
 	pdfUrl?: string;
 	thumbnailUrl?: string;
+	thumbnailVersion?: number;
 	totalPages: number;
 	addedAt: number;
 	lastOpenedAt?: number;
