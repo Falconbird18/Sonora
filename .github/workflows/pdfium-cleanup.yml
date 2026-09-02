@@ -1,0 +1,74 @@
+name: PDFium Cleanup
+
+on:
+  push:
+    branches:
+      - feature/pdfium-renderer-migration
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: "!contains(github.event.head_commit.message, '[pdfium-cleanup]')"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore viewer and remove PDF.js references
+        run: |
+          git checkout 9ce090f539bbbc8dbe413136c279423750dcc1d5 -- src/lib/ScoreViewerFixed.svelte
+          python3 - <<'PY'
+          from pathlib import Path
+
+          viewer = Path('src/lib/ScoreViewerFixed.svelte')
+          text = viewer.read_text()
+          text = text.replace("\timport * as pdfjsLib from 'pdfjs-dist';\n", '')
+          text = text.replace("\timport pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';\n\n\tif (!pdfjsLib.GlobalWorkerOptions.workerSrc) {\n\t\tpdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;\n\t}\n\n", '')
+          text = text.replace("\timport { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';\n", "\timport { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';\n\timport type { PdfDocumentProxy, PdfPageProxy, PdfRenderTask } from './pdfUtils';\n")
+          text = text.replace('pdfjsLib.PDFDocumentProxy', 'PdfDocumentProxy')
+          text = text.replace('pdfjsLib.RenderTask[]', 'PdfRenderTask[]')
+          text = text.replace('pdfjsLib.PDFPageProxy', 'PdfPageProxy')
+          viewer.write_text(text)
+
+          app = Path('src/App.svelte')
+          text = app.read_text()
+          text = text.replace("\timport * as pdfjsLib from 'pdfjs-dist';\n", '')
+          text = text.replace("\timport pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';\n", '')
+          text = text.replace("\n\t// Configure PDF.js once for the whole app (thumbnails + viewer).\n\tpdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;\n", '')
+          app.write_text(text)
+
+          import json
+          package_path = Path('package.json')
+          package_json = json.loads(package_path.read_text())
+          package_json['dependencies'].pop('pdfjs-dist', None)
+          package_path.write_text(json.dumps(package_json, indent=2) + '\n')
+          PY
+
+      - name: Remove PDF.js compatibility shim
+        run: rm -f src/lib/compat.ts
+
+      - name: Regenerate lockfile
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --package-lock-only
+
+      - name: Commit cleanup
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json src/App.svelte src/lib/ScoreViewerFixed.svelte src/lib/pdfUtils.ts src/lib/compat.ts .github/workflows/pdfium-cleanup.yml
+          git commit -m 'Finish PDFium migration [pdfium-cleanup]'
+          git push
+
+      - name: Remove temporary workflow
+        if: success()
+        run: |
+          git rm .github/workflows/pdfium-cleanup.yml
+          git commit -m 'Remove temporary PDFium cleanup workflow [pdfium-cleanup]'
+          git push
