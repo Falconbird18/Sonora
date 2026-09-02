@@ -11,11 +11,6 @@ import type {
 
 let enginePromise: Promise<PdfEngine> | null = null;
 
-/**
- * Lazily initialized, process-wide PDFium engine.
- * The WASM binary is fetched only once and the engine is reused by all score
- * views and thumbnail requests.
- */
 async function getEngine(): Promise<PdfEngine> {
     if (!enginePromise) {
         enginePromise = (async () => {
@@ -23,24 +18,23 @@ async function getEngine(): Promise<PdfEngine> {
             if (!response.ok) {
                 throw new Error(`Could not load PDFium WebAssembly (${response.status})`);
             }
-
             const wasmBinary = await response.arrayBuffer();
             const pdfiumModule = await init({ wasmBinary });
             const native = new PdfiumNative(pdfiumModule);
-
             return new PdfEngine(native, {
                 imageConverter: browserImageDataToBlobConverter
             });
         })();
     }
-
     return enginePromise;
 }
 
 function renderOptions(options?: PdfRenderOptions) {
-    // Keep this adapter intentionally narrow. PDFium's high-level render API
-    // accepts a scale directly, which maps naturally to Sonora's viewer scale.
-    return { scale: Math.max(0.01, options?.scale ?? 1) };
+    return {
+        scaleFactor: Math.max(0.01, options?.scale ?? 1),
+        dpr: 1,
+        imageType: 'image/png' as const
+    };
 }
 
 export const pdfiumRenderer: PdfRenderer = {
@@ -54,8 +48,8 @@ export const pdfiumRenderer: PdfRenderer = {
 
         const pages: PdfPageInfo[] = document.pages.map((page, index) => ({
             index,
-            width: page.width,
-            height: page.height
+            width: page.size.width,
+            height: page.size.height
         }));
 
         return {
@@ -72,8 +66,8 @@ export const pdfiumRenderer: PdfRenderer = {
 
                 return {
                     blob,
-                    width: page.width,
-                    height: page.height
+                    width: page.size.width,
+                    height: page.size.height
                 };
             },
 
@@ -91,7 +85,6 @@ export const pdfiumRenderer: PdfRenderer = {
     }
 };
 
-/** Pre-initialize PDFium so the first score render does not pay WASM startup cost. */
 export async function warmPdfium() {
     await getEngine();
 }
