@@ -1,5 +1,5 @@
 import { db } from './db';
-import type { AnnotationRecord, Stroke, SymbolStamp, TextNote } from './types';
+import type { AnnotationRecord } from './types';
 
 type AnnotationState = Pick<AnnotationRecord, 'strokes' | 'stamps' | 'notes'>;
 
@@ -49,12 +49,4 @@ export function saveAnnotation(
 
 export async function flushAnnotationSaves() {
 	while (pending.size) await Promise.allSettled([...pending]);
-}
-
-export function annotationState(record: AnnotationRecord): AnnotationState {
-	return {
-		strokes: record.strokes || [],
-		stamps: record.stamps || [],
-		notes: record.notes || []
-	};
 }
