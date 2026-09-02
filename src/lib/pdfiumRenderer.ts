@@ -9,8 +9,7 @@ import type {
     RenderedPdfPage
 } from './pdfRenderer';
 
-// Keep the engine singleton alive for the lifetime of the app. PDFium/WASM
-// initialization is expensive, and the same engine can safely serve all scores.
+const bundledPdfiumWasm = new URL('./pdfium.wasm', import.meta.url);
 let enginePromise: Promise<PdfEngine<Blob>> | null = null;
 
 type PdfTextEngine = PdfEngine<Blob> & {
@@ -20,11 +19,7 @@ type PdfTextEngine = PdfEngine<Blob> & {
 async function getEngine(): Promise<PdfEngine<Blob>> {
     if (!enginePromise) {
         enginePromise = (async () => {
-            // The WASM is copied into Vite's public output during every build.
-            // Using a relative URL is important for packaged Tauri/WebView2
-            // builds: there is no assumption that the app is hosted at '/'.
-            const wasmUrl = new URL('../../public/pdfium.wasm', import.meta.url);
-            const response = await fetch(wasmUrl);
+            const response = await fetch(bundledPdfiumWasm);
             if (!response.ok) {
                 throw new Error(`Could not load bundled PDFium WebAssembly (${response.status})`);
             }
@@ -71,30 +66,17 @@ export const pdfiumRenderer: PdfRenderer = {
         return {
             pageCount: pages.length,
             pages,
-
             async renderPage(pageIndex, options): Promise<RenderedPdfPage> {
                 const page = document.pages[pageIndex];
                 if (!page) throw new Error(`PDF page ${pageIndex + 1} does not exist`);
-
-                const blob = await engine
-                    .renderPage(document, page, renderOptions(options))
-                    .toPromise();
-
-                return {
-                    blob,
-                    width: page.size.width,
-                    height: page.size.height
-                };
+                const blob = await engine.renderPage(document, page, renderOptions(options)).toPromise();
+                return { blob, width: page.size.width, height: page.size.height };
             },
-
             async getPageText(pageIndex) {
-                if (!document.pages[pageIndex]) {
-                    throw new Error(`PDF page ${pageIndex + 1} does not exist`);
-                }
+                if (!document.pages[pageIndex]) throw new Error(`PDF page ${pageIndex + 1} does not exist`);
                 const textEngine = engine as PdfTextEngine;
                 return textEngine.getPageText(document, pageIndex).toPromise();
             },
-
             async close() {
                 await engine.closeDocument(document).toPromise();
             }
