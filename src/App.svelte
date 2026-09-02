@@ -1,5 +1,5 @@
 <script lang="ts">
-	import LibraryView from './lib/LibraryView.svelte';
+	import LibraryView from './lib/LibraryViewRedesign.svelte';
 	import ScoreViewer from './lib/ScoreViewer.svelte';
 	import type { ScoreItem } from './lib/types';
 
