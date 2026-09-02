@@ -3,7 +3,10 @@ name: Windows Desktop Build
 on:
   push:
     branches:
-      - perf/zero-copy-complete
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
