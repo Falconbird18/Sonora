@@ -1,0 +1,100 @@
+/* ScoreViewer polish: preserve the existing interaction model while reducing visual chrome. */
+
+.workspace {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.workspace::-webkit-scrollbar {
+  display: none;
+}
+
+/* The page arrows are the primary way to turn pages; the scrubber adds clutter. */
+.page-scrubber {
+  display: none !important;
+}
+
+/* Give the annotation dock a lower, floating position with a small entrance motion. */
+.annotation-bar {
+  bottom: 10px !important;
+  transform: translate(-50%, 12px) !important;
+  animation: sonora-annotation-in 220ms cubic-bezier(.2, .8, .2, 1) forwards;
+}
+
+.annotation-toggle {
+  bottom: 12px !important;
+  transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.annotation-toggle:hover {
+  transform: translateY(-2px);
+}
+
+/* The symbol palette follows the lower editing dock instead of floating unusually high. */
+.symbol-palette {
+  bottom: 68px !important;
+}
+
+/* Make the lower strip quieter and give the score more vertical room. */
+.bottombar {
+  min-height: 48px !important;
+  padding: 6px 12px !important;
+}
+
+/* Replace the second eye glyph (reading mode) with a clear text affordance. */
+.topbar-right > .icon-button:last-child {
+  width: auto;
+  min-width: 52px;
+  padding: 0 9px;
+  gap: 5px;
+}
+
+.topbar-right > .icon-button:last-child svg {
+  display: none;
+}
+
+.topbar-right > .icon-button:last-child::after {
+  content: 'Read';
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+/* Keep the compact annotation dock usable without a visible scrollbar on narrow screens. */
+@media (max-width: 900px) {
+  .annotation-bar {
+    left: 10px !important;
+    right: 10px !important;
+    transform: translateY(12px) !important;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .annotation-bar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .annotation-bar {
+    animation: none;
+    transform: translate(-50%, 0) !important;
+  }
+
+  @media (max-width: 900px) {
+    .annotation-bar {
+      transform: translateY(0) !important;
+    }
+  }
+}
+
+@keyframes sonora-annotation-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 18px) scale(.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
