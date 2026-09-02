@@ -317,7 +317,7 @@
 		<div class="search"><Search size={17} /><input bind:value={search} placeholder="Search your scores" aria-label="Search scores" />{#if search}<button onclick={(event) => { event.stopPropagation(); search = ''; }} aria-label="Clear search"><X size={15} /></button>{/if}</div>
 		<div class="header-actions">
 			<button class="folder-button" onclick={chooseFolder}><FolderPlus size={17} /><span>{folder ? 'Change folder' : 'Choose folder'}</span></button>
-			<button class="icon-button" class:spinning={syncing} onclick={sync} aria-label="Refresh library" title="Refresh library"><RefreshCw size={18} /></button>
+			<button class="icon-button" onclick={sync} aria-label="Refresh library" title="Refresh library"><RefreshCw size={18} class:spinning={syncing} /></button>
 		</div>
 	</header>
 
@@ -355,7 +355,7 @@
 							<div class="list-cover">{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" />{:else}<FileText size={22} />{/if}</div>
 							<div class="list-info"><strong title={score.title}>{score.title}</strong><span>{score.composer}</span>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0, 3) as tag}<span>{tag}</span>{/each}{#if score.tags.length > 3}<small>+{score.tags.length - 3}</small>{/if}</div>{/if}</div>
 							<div class="list-meta"><span>{score.totalPages || 1} {score.totalPages === 1 ? 'page' : 'pages'}</span>{#if score.lastOpenedAt}<span>Recent</span>{/if}</div>
-							<div class="list-actions" onclick={(event) => event.stopPropagation()}>
+							<div class="list-actions">
 								<button class="action-button favorite" class:marked={score.favorite} onclick={(event) => toggleFavorite(score, event)} aria-label={score.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={score.favorite} title={score.favorite ? 'Remove from favorites' : 'Add to favorites'}><Star size={16} fill={score.favorite ? 'currentColor' : 'none'} /></button>
 								{#if !score.favorite}<div class="menu-wrap"><button class="action-button" class:active={menuScoreId === score.id} onclick={(event) => toggleMenu(score, event)} aria-label="More actions" aria-expanded={menuScoreId === score.id}><MoreHorizontal size={17} /></button>{#if menuScoreId === score.id}<div class="score-menu" role="menu"><button role="menuitem" onclick={(event) => editMetadata(score, event)}><Tag size={15} />Edit tags</button><button class="danger" role="menuitem" onclick={(event) => deleteScore(score, event)}><Trash2 size={15} />Remove from library</button></div>{/if}</div>{/if}
 							</div>
@@ -370,7 +370,7 @@
 								<div class="cover">{#if score.thumbnailUrl}<img src={score.thumbnailUrl} alt="" loading="eager" decoding="async" />{:else}<div class="no-cover"><FileText size={25} /><span>{score.totalPages ? `${score.totalPages} pages` : 'Preparing preview'}</span></div>{/if}</div>
 								<div class="info"><h3 title={score.title}>{score.title}</h3><p>{score.composer}</p>{#if score.tags?.length}<div class="tags">{#each score.tags.slice(0, 2) as tag}<span>{tag}</span>{/each}{#if score.tags.length > 2}<small>+{score.tags.length - 2}</small>{/if}</div>{/if}</div>
 							</button>
-							<div class="card-actions" onclick={(event) => event.stopPropagation()}>
+							<div class="card-actions">
 								<button class="action-button favorite" class:marked={score.favorite} onclick={(event) => toggleFavorite(score, event)} aria-label={score.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={score.favorite} title={score.favorite ? 'Remove from favorites' : 'Add to favorites'}><Star size={16} fill={score.favorite ? 'currentColor' : 'none'} /></button>
 								{#if !score.favorite}<div class="menu-wrap"><button class="action-button" class:active={menuScoreId === score.id} onclick={(event) => toggleMenu(score, event)} aria-label="More actions" aria-expanded={menuScoreId === score.id} title="More actions"><MoreHorizontal size={17} /></button>{#if menuScoreId === score.id}<div class="score-menu" role="menu"><button role="menuitem" onclick={(event) => editMetadata(score, event)}><Tag size={15} />Edit tags</button><button class="danger" role="menuitem" onclick={(event) => deleteScore(score, event)}><Trash2 size={15} />Remove from library</button></div>{/if}</div>{/if}
 							</div>
@@ -383,7 +383,7 @@
 
 	{#if metadata}
 		<div class="dialog-backdrop" role="presentation" onclick={(event) => { if (event.currentTarget === event.target) metadata = null; }}>
-			<section class="tag-dialog" role="dialog" aria-modal="true" aria-labelledby="tag-dialog-title" onclick={(event) => event.stopPropagation()}>
+			<section class="tag-dialog" role="dialog" aria-modal="true" aria-labelledby="tag-dialog-title">
 				<header><div><h2 id="tag-dialog-title">Edit tags</h2><p>{metadata.title}</p></div><button class="close-button" onclick={() => (metadata = null)} aria-label="Close"><X size={18} /></button></header>
 				<div class="tag-editor">
 					<label for="tag-input">Tags</label>
@@ -417,7 +417,7 @@
 	.folder-button:hover, .primary:hover { background:#f0f0e8; }
 	.icon-button, .close-button { display:grid; place-items:center; width:38px; height:38px; border:1px solid #30302b; border-radius:10px; background:#1b1b18; color:#a2a29a; cursor:pointer; }
 	.icon-button:hover, .close-button:hover { background:#24241f; color:#eee; }
-	.spinning svg { animation:spin .8s linear infinite; }
+	.spinning { animation:spin .8s linear infinite; }
 	.notice { margin:10px auto 0; display:flex; align-items:center; gap:7px; padding:8px 11px; border:1px solid #34342e; border-radius:9px; background:#1c1c18; color:#bdbdb5; font-size:12px; }
 	.notice.error { border-color:#593b32; color:#e5b7a8; }
 	.notice button { margin-left:8px; border:0; background:transparent; color:inherit; cursor:pointer; }
@@ -535,5 +535,5 @@
 		.list-actions .action-button { width:28px; height:28px; }
 		.list-info .tags { display:none; }
 	}
-	@media (prefers-reduced-motion:reduce) { .card-actions, .cover img { transition:none; } :global(.spinning svg) { animation:none; } }
+	@media (prefers-reduced-motion:reduce) { .card-actions, .cover img { transition:none; } .spinning { animation:none; } }
 </style>
