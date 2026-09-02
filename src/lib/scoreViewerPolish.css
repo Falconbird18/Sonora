@@ -9,12 +9,10 @@
   display: none;
 }
 
-/* The page arrows are the primary way to turn pages; the scrubber adds clutter. */
 .page-scrubber {
   display: none !important;
 }
 
-/* Give the annotation dock a lower, floating position with a small entrance motion. */
 .annotation-bar {
   bottom: 10px !important;
   transform: translate(-50%, 12px) !important;
@@ -30,18 +28,16 @@
   transform: translateY(-2px);
 }
 
-/* The symbol palette follows the lower editing dock instead of floating unusually high. */
 .symbol-palette {
   bottom: 68px !important;
 }
 
-/* Make the lower strip quieter and give the score more vertical room. */
 .bottombar {
   min-height: 48px !important;
   padding: 6px 12px !important;
 }
 
-/* Replace the second eye glyph (reading mode) with a clear text affordance. */
+/* Reading mode is deliberately labeled rather than represented by another eye glyph. */
 .topbar-right > .icon-button:last-child {
   width: auto;
   min-width: 52px;
@@ -60,7 +56,6 @@
   letter-spacing: .01em;
 }
 
-/* Keep the compact annotation dock usable without a visible scrollbar on narrow screens. */
 @media (max-width: 900px) {
   .annotation-bar {
     left: 10px !important;
@@ -80,11 +75,11 @@
     animation: none;
     transform: translate(-50%, 0) !important;
   }
+}
 
-  @media (max-width: 900px) {
-    .annotation-bar {
-      transform: translateY(0) !important;
-    }
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .annotation-bar {
+    transform: translateY(0) !important;
   }
 }
 
