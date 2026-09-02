@@ -1,6 +1,6 @@
 <script lang="ts">
 	import LibraryView from './lib/LibraryView.svelte';
-	import ScoreViewer from './lib/ScoreViewerFixed.svelte';
+	import ScoreViewer from './lib/ScoreViewer.svelte';
 	import type { ScoreItem } from './lib/types';
 
 	let activeScore = $state<ScoreItem | null>(null);
