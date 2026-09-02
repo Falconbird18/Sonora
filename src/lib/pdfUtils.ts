@@ -173,6 +173,23 @@ export async function closePdf(opened: OpenedPdf | null | undefined) {
 	} catch {}
 }
 
+async function blobToDataUrl(blob: Blob): Promise<string> {
+	if (!blob || blob.size === 0) throw new Error('PDFium returned an empty thumbnail');
+	if (!blob.type.startsWith('image/')) throw new Error(`PDFium returned a non-image thumbnail (${blob.type || 'unknown type'})`);
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onerror = () => reject(reader.error || new Error('Could not read rendered thumbnail'));
+		reader.onload = () => {
+			if (typeof reader.result !== 'string' || !reader.result.startsWith('data:image/')) {
+				reject(new Error('Rendered thumbnail could not be converted to a data URL'));
+				return;
+			}
+			resolve(reader.result);
+		};
+		reader.readAsDataURL(blob);
+	});
+}
+
 async function renderThumbnail(document: PdfDocumentProxy) {
 	const page = await document.getPage(1);
 	try {
@@ -180,21 +197,8 @@ async function renderThumbnail(document: PdfDocumentProxy) {
 		const area = Math.max(1, base.width * base.height);
 		let scale = 160 / Math.max(1, base.width);
 		scale = Math.max(0.04, Math.min(scale, Math.sqrt(MAX_CANVAS_PIXELS / area), 0.35));
-		const viewport = page.getViewport({ scale });
-		const canvas = globalThis.document.createElement('canvas');
-		canvas.width = Math.ceil(viewport.width);
-		canvas.height = Math.ceil(viewport.height);
-		if (canvas.width * canvas.height > MAX_CANVAS_PIXELS) throw new Error('Thumbnail canvas exceeds safe pixel budget');
-		const context = canvas.getContext('2d', { alpha: false });
-		if (!context) throw new Error('Canvas is unavailable');
-		context.fillStyle = '#fff';
-		context.fillRect(0, 0, canvas.width, canvas.height);
-		const task = page.render({ canvas, canvasContext: context, viewport });
-		await task.promise;
-		const url = canvas.toDataURL('image/jpeg', 0.58);
-		canvas.width = 0;
-		canvas.height = 0;
-		return url;
+		const rendered = await document.renderPage(0, { scale });
+		return await blobToDataUrl(rendered.blob);
 	} finally {
 		page.cleanup();
 	}
@@ -204,12 +208,7 @@ export async function getPdfInfoFromSource(source: PdfSource) {
 	const opened = await openPdfSource(source);
 	try {
 		const totalPages = opened.document.numPages;
-		let thumbnailUrl: string | undefined;
-		try {
-			thumbnailUrl = await renderThumbnail(opened.document);
-		} catch (error) {
-			console.warn('Thumbnail render failed', error);
-		}
+		const thumbnailUrl = await renderThumbnail(opened.document);
 		return { totalPages, thumbnailUrl };
 	} finally {
 		await closePdf(opened);
