@@ -3,6 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 declare module 'pdfjs-dist/types/src/display/api.js' {
 	interface PDFDocumentProxy {
 		destroy(): Promise<void>;
+		cleanup(): Promise<void>;
 	}
 }
 
@@ -25,10 +26,18 @@ declare global {
 	}
 }
 
-/** PDF.js 6 removed the proxy destroy convenience method; cleanup is its replacement. */
-const pdfDocumentPrototype = (pdfjsLib as typeof pdfjsLib & {
-	PDFDocumentProxy?: { prototype: { destroy?: () => Promise<void>; cleanup?: () => Promise<void> } };
-}).PDFDocumentProxy?.prototype;
+/**
+ * PDF.js 5/6 removed PDFDocumentProxy.destroy(). Map it to cleanup() and
+ * NEVER call loadingTask.destroy() — that tears down the shared worker and
+ * blanks the library when you leave a score.
+ */
+const pdfDocumentPrototype = (
+	pdfjsLib as typeof pdfjsLib & {
+		PDFDocumentProxy?: {
+			prototype: { destroy?: () => Promise<void>; cleanup?: () => Promise<void> };
+		};
+	}
+).PDFDocumentProxy?.prototype;
 
 if (pdfDocumentPrototype && !pdfDocumentPrototype.destroy && pdfDocumentPrototype.cleanup) {
 	pdfDocumentPrototype.destroy = async function () {
@@ -38,7 +47,9 @@ if (pdfDocumentPrototype && !pdfDocumentPrototype.destroy && pdfDocumentPrototyp
 
 export async function destroyPdfDocument(document: pdfjsLib.PDFDocumentProxy | null | undefined) {
 	if (!document) return;
-	await document.cleanup();
+	try {
+		await document.cleanup();
+	} catch {}
 }
 
 export {};

@@ -9,6 +9,32 @@
 	pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 	let activeScore = $state<ScoreItem | null>(null);
+	let crash = $state('');
+
+	function closeScore() {
+		const finish = () => {
+			activeScore = null;
+			crash = '';
+		};
+		if (typeof document !== 'undefined' && document.fullscreenElement) {
+			void document.exitFullscreen().then(finish).catch(finish);
+			return;
+		}
+		finish();
+	}
+
+	function onWindowError(event: ErrorEvent) {
+		console.error('Sonora error', event.error || event.message);
+	}
+
+	function onUnhandled(event: PromiseRejectionEvent) {
+		console.error('Sonora unhandled rejection', event.reason);
+		const message = event.reason instanceof Error ? event.reason.message : String(event.reason || '');
+		if (activeScore && /pdf|canvas|worker/i.test(message)) {
+			crash = 'The score renderer hit a snag. Returning to your library.';
+			closeScore();
+		}
+	}
 </script>
 
 <svelte:head>
@@ -19,15 +45,20 @@
 	<meta name="theme-color" content="#11110f" />
 </svelte:head>
 
+<svelte:window onerror={onWindowError} onunhandledrejection={onUnhandled} />
+
 <main class="app-shell">
 	<!-- Keep the library mounted so scores never disappear when returning from the viewer. -->
-	<div class="layer" class:hidden={!!activeScore}>
-		<LibraryView onSelectScore={(score) => (activeScore = score)} />
+	<div class="layer" class:hidden={!!activeScore} aria-hidden={!!activeScore}>
+		<LibraryView paused={!!activeScore} onSelectScore={(score) => (activeScore = score)} />
 	</div>
 	{#if activeScore}
 		<div class="layer viewer-layer">
-			<ScoreViewer score={activeScore} onClose={() => (activeScore = null)} />
+			<ScoreViewer score={activeScore} onClose={closeScore} />
 		</div>
+	{/if}
+	{#if crash}
+		<div class="crash">{crash}</div>
 	{/if}
 </main>
 
@@ -88,6 +119,18 @@
 	.viewer-layer {
 		z-index: 10;
 		animation: app-enter 0.18s ease-out;
+		background: #11110f;
+	}
+	.crash {
+		position: absolute;
+		z-index: 40;
+		left: 50%;
+		top: 18px;
+		transform: translateX(-50%);
+		padding: 8px 12px;
+		border-radius: 8px;
+		background: #3f2a12;
+		font-size: 0.82rem;
 	}
 	@media (pointer: coarse) {
 		:global(button) {

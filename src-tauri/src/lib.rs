@@ -28,9 +28,7 @@ fn collect_pdfs(root: &Path, current: &Path, files: &mut Vec<NativeScoreFile>) -
         if metadata.is_dir() {
             collect_pdfs(root, &path, files)?;
         } else if metadata.is_file() && name.to_lowercase().ends_with(".pdf") {
-            let relative = path
-                .strip_prefix(root)
-                .map_err(|error| error.to_string())?;
+            let relative = path.strip_prefix(root).map_err(|error| error.to_string())?;
             let modified_at = metadata
                 .modified()
                 .ok()
@@ -70,14 +68,18 @@ fn list_score_files(path: String) -> Result<Vec<NativeScoreFile>, String> {
     Ok(files)
 }
 
+/// Read a PDF as raw bytes. Used when the asset protocol cannot feed PDF.js
+/// (missing range support, encoding issues on Windows paths, etc.).
+#[tauri::command]
+fn read_score_file(path: String) -> Result<Vec<u8>, String> {
+    fs::read(&path).map_err(|error| error.to_string())
+}
+
 /// Read a file as base64. Prefer convertFileSrc / asset protocol for viewing;
 /// this is only for rare cases (download fallback) where bytes are required in JS.
 #[tauri::command]
 fn read_score_file_base64(path: String) -> Result<String, String> {
-    use std::io::Read;
-    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let buf = fs::read(&path).map_err(|e| e.to_string())?;
     Ok(data_encoding_base64(&buf))
 }
 
@@ -118,6 +120,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             pick_score_folder,
             list_score_files,
+            read_score_file,
             read_score_file_base64,
             read_text_file
         ])
