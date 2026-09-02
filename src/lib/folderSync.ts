@@ -86,7 +86,10 @@ export async function chooseAndAddFolder() {
 		if (!path) throw new DOMException('Folder selection cancelled', 'AbortError');
 		folder = { id: ROOT_FOLDER_ID, name: path.split(/[\\/]/).filter(Boolean).pop() || 'Score Library', nativePath: path, addedAt: existing?.addedAt || Date.now(), lastSyncedAt: existing?.lastSyncedAt, autoSync: true };
 	} else {
-		const pickerWindow = window as DirectoryPickerWindow;
+		// The API is feature-detected above; the explicit unknown hop tells
+		// TypeScript this is an intentional extension of Window rather than an
+		// unsafe structural assertion.
+		const pickerWindow = window as unknown as DirectoryPickerWindow;
 		const handle = await pickerWindow.showDirectoryPicker({ mode: 'read' });
 		if (!(await verifyBrowserPermission(handle))) throw new Error('Sonora was not granted access to the score folder.');
 		folder = { id: ROOT_FOLDER_ID, name: handle.name, handle, addedAt: existing?.addedAt || Date.now(), lastSyncedAt: existing?.lastSyncedAt, autoSync: true };
