@@ -18,8 +18,9 @@
 		finish();
 	}
 
-	function onWindowError(event: ErrorEvent) {
-		console.error('Sonora error', event.error || event.message);
+	function onWindowError(event: Event) {
+		const error = event instanceof ErrorEvent ? event.error || event.message : event;
+		console.error('Sonora error', error);
 	}
 
 	function onUnhandled(event: PromiseRejectionEvent) {
