@@ -51,9 +51,13 @@ void import('./App.svelte')
   .then(({ default: App }) => {
     setStatus('Mounting Sonora interface…', 'Stage 4/4: App.svelte imported successfully.')
     try {
-      // Svelte's mount is intentionally loaded only after App.svelte resolves.
       return import('svelte').then(({ mount }) => {
+        // The static HTML contains a startup fallback. Svelte mounts into the
+        // target rather than treating arbitrary existing children as a template,
+        // so remove that fallback before handing control to Svelte.
+        target.replaceChildren()
         mount(App, { target })
+        console.info('Sonora: Svelte app mounted')
       })
     } catch (reason) {
       showStartupError(reason)
