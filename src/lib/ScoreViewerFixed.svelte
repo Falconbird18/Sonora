@@ -101,7 +101,7 @@
 		stroke?: Stroke;
 		raf?: number;
 	} | null = null;
-	let hasPainted = false;
+	let hasPainted = $state(false);
 	let closed = false;
 	let isFullscreen = $state(false);
 
