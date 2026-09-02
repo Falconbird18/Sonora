@@ -9,16 +9,25 @@ const METADATA_CONCURRENCY = 2;
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
 type NativeScoreFile = { path: string; relative_path: string; name: string; size: number; modified_at: number };
+type BrowserDirectoryHandle = FileSystemDirectoryHandle & {
+	queryPermission(options: { mode: 'read' }): Promise<PermissionState>;
+	requestPermission(options: { mode: 'read' }): Promise<PermissionState>;
+};
+type DirectoryPickerWindow = Window & {
+	showDirectoryPicker(options: { mode: 'read' }): Promise<FileSystemDirectoryHandle>;
+};
 
 export function supportsDirectoryAccess() {
 	return isTauri() || (typeof window !== 'undefined' && 'showDirectoryPicker' in window);
 }
+
 async function verifyBrowserPermission(handle: FileSystemDirectoryHandle) {
-	const fsHandle = handle as FileSystemDirectoryHandle & { queryPermission(options: { mode: 'read' }): Promise<PermissionState>; requestPermission(options: { mode: 'read' }): Promise<PermissionState> };
+	const fsHandle = handle as BrowserDirectoryHandle;
 	const state = await fsHandle.queryPermission({ mode: 'read' });
 	if (state === 'granted') return true;
 	return (await fsHandle.requestPermission({ mode: 'read' })) === 'granted';
 }
+
 export async function verifyFolderPermission(folder: FolderSource) {
 	if (folder.nativePath) {
 		try { await invoke<NativeScoreFile[]>('list_score_files', { path: folder.nativePath }); return true; }
@@ -26,6 +35,7 @@ export async function verifyFolderPermission(folder: FolderSource) {
 	}
 	return folder.handle ? verifyBrowserPermission(folder.handle) : false;
 }
+
 async function collectBrowserPdfs(handle: FileSystemDirectoryHandle, prefix = ''): Promise<Array<{ file: File; path: string }>> {
 	const result: Array<{ file: File; path: string }> = [];
 	const directories: Array<{ handle: FileSystemDirectoryHandle; path: string }> = [];
@@ -39,6 +49,7 @@ async function collectBrowserPdfs(handle: FileSystemDirectoryHandle, prefix = ''
 	for (const directory of directories) result.push(...(await collectBrowserPdfs(directory.handle, directory.path)));
 	return result;
 }
+
 async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
 	const results = new Array<R>(items.length);
 	let cursor = 0;
@@ -75,8 +86,11 @@ export async function chooseAndAddFolder() {
 		if (!path) throw new DOMException('Folder selection cancelled', 'AbortError');
 		folder = { id: ROOT_FOLDER_ID, name: path.split(/[\\/]/).filter(Boolean).pop() || 'Score Library', nativePath: path, addedAt: existing?.addedAt || Date.now(), lastSyncedAt: existing?.lastSyncedAt, autoSync: true };
 	} else {
-		const showDirectoryPicker = (window as typeof window & { showDirectoryPicker(options: { mode: 'read' }): Promise<FileSystemDirectoryHandle> }).showDirectoryPicker;
-		const handle = await showDirectoryPicker.call(window, { mode: 'read' });
+		// The API is feature-detected above; the explicit unknown hop tells
+		// TypeScript this is an intentional extension of Window rather than an
+		// unsafe structural assertion.
+		const pickerWindow = window as unknown as DirectoryPickerWindow;
+		const handle = await pickerWindow.showDirectoryPicker({ mode: 'read' });
 		if (!(await verifyBrowserPermission(handle))) throw new Error('Sonora was not granted access to the score folder.');
 		folder = { id: ROOT_FOLDER_ID, name: handle.name, handle, addedAt: existing?.addedAt || Date.now(), lastSyncedAt: existing?.lastSyncedAt, autoSync: true };
 	}

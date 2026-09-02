@@ -1,0 +1,355 @@
+name: Annotation UX polish
+
+on:
+  push:
+    branches: [fix/thumbnail-rendering-and-type-errors]
+
+permissions:
+  contents: write
+
+jobs:
+  polish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/thumbnail-rendering-and-type-errors
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply annotation UX improvements
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          types = Path('src/lib/types.ts')
+          s = types.read_text()
+          s = s.replace('\tthumbnailUrl?: string;\n', '\tthumbnailUrl?: string;\n\tthumbnailVersion?: number;\n', 1)
+          types.write_text(s)
+
+          p = Path('src/lib/ScoreViewerFixed.svelte')
+          s = p.read_text()
+
+          s = s.replace('\tlet isFullscreen = $state(false);\n', '\tlet isFullscreen = $state(false);\n\tlet historyRevision = $state(0);\n\tlet eraserCursor = $state<{ page: number; x: number; y: number; diameter: number } | null>(null);\n', 1)
+
+          s = s.replace(
+              "\tconst canUndo = $derived((historyIndex[page] ?? 0) > 0);\n\tconst canRedo = $derived((historyIndex[page] ?? 0) < (histories[page]?.length ?? 1) - 1);",
+              "\tconst canUndo = $derived.by(() => { historyRevision; return (historyIndex[page] ?? 0) > 0; });\n\tconst canRedo = $derived.by(() => { historyRevision; return (historyIndex[page] ?? 0) < (histories[page]?.length ?? 1) - 1; });",
+              1
+          )
+
+          s = s.replace(
+              "\tfunction choose(nextTool: Tool) {\n\t\ttool = nextTool;\n\t\tif (nextTool === 'move') textEditor = null;\n\t}",
+              "\tfunction choose(nextTool: Tool) {\n\t\ttool = nextTool;\n\t\tif (nextTool === 'move') textEditor = null;\n\t\tif (nextTool !== 'eraser') eraserCursor = null;\n\t}\n\n\tfunction eraserRadius() {\n\t\treturn Math.max(0.01, width / 700);\n\t}\n\n\tfunction updateEraserCursor(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {\n\t\tif (tool !== 'eraser') {\n\t\t\teraserCursor = null;\n\t\t\treturn;\n\t\t}\n\t\tconst rect = canvas.getBoundingClientRect();\n\t\tconst radius = eraserRadius();\n\t\teraserCursor = {\n\t\t\tpage: number,\n\t\t\tx: event.clientX - rect.left,\n\t\t\ty: event.clientY - rect.top,\n\t\t\tdiameter: radius * 2 * Math.min(rect.width, rect.height)\n\t\t};\n\t}\n\n\tfunction pointerMove(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {\n\t\tupdateEraserCursor(event, number, canvas);\n\t\tmove(event);\n\t}",
+              1
+          )
+
+          s = s.replace(
+              "\t\tif (tool === 'eraser') {\n\t\t\tdrawing = { page: number, canvas, pointerId: event.pointerId };",
+              "\t\tif (tool === 'eraser') {\n\t\t\tupdateEraserCursor(event, number, canvas);\n\t\t\tdrawing = { page: number, canvas, pointerId: event.pointerId };",
+              1
+          )
+
+          s = s.replace(
+              "\t\tconst radius = Math.max(0.01, width / 700);",
+              "\t\tconst radius = eraserRadius();",
+              1
+          )
+
+          s = s.replace(
+              "\t\thistories[number] = nextList;\n\t\thistoryIndex[number] = nextList.length - 1;\n\t\tscheduleSave(number);",
+              "\t\thistories[number] = nextList;\n\t\thistoryIndex[number] = nextList.length - 1;\n\t\thistoryRevision += 1;\n\t\tscheduleSave(number);",
+              1
+          )
+          s = s.replace(
+              "\t\thistoryIndex[page] = index - 1;\n\t\t\tapplySnapshot(page, histories[page][index - 1]);",
+              "\t\thistoryIndex[page] = index - 1;\n\t\t\thistoryRevision += 1;\n\t\t\tapplySnapshot(page, histories[page][index - 1]);",
+              1
+          )
+          s = s.replace(
+              "\t\thistoryIndex[page] = index + 1;\n\t\t\tapplySnapshot(page, histories[page][index + 1]);",
+              "\t\thistoryIndex[page] = index + 1;\n\t\t\thistoryRevision += 1;\n\t\t\tapplySnapshot(page, histories[page][index + 1]);",
+              1
+          )
+
+          old_canvas = '''\t\t\t\t\tonpointermove={move}\n\t\t\t\t\tonpointerup={end}\n\t\t\t\t\tonpointercancel={end}></canvas>'''
+          new_canvas = '''\t\t\t\t\tonpointermove={(event) => pointerMove(event, visiblePages[0], leftInk!)}\n\t\t\t\t\tonpointerleave={() => { if (tool === 'eraser') eraserCursor = null; }}\n\t\t\t\t\tonpointerup={end}\n\t\t\t\t\tonpointercancel={end}></canvas>'''
+          s = s.replace(old_canvas, new_canvas, 1)
+          old_canvas_right = '''\t\t\t\t\t\tonpointermove={move}\n\t\t\t\t\t\tonpointerup={end}\n\t\t\t\t\t\tonpointercancel={end}></canvas>'''
+          new_canvas_right = '''\t\t\t\t\t\tonpointermove={(event) => pointerMove(event, visiblePages[1], rightInk!)}\n\t\t\t\t\t\tonpointerleave={() => { if (tool === 'eraser') eraserCursor = null; }}\n\t\t\t\t\t\tonpointerup={end}\n\t\t\t\t\t\tonpointercancel={end}></canvas>'''
+          s = s.replace(old_canvas_right, new_canvas_right, 1)
+
+          old_cursor_left = '''\t\t\t\t{#if textEditor && textEditor.page === visiblePages[0]}\n\t\t\t\t\t<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>\n\t\t\t\t\t\t<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />\n\t\t\t\t\t\t<button title="Save" onclick={commitText}><Check size={15} /></button>\n\t\t\t\t\t\t<button title="Cancel" onclick={cancelText}><X size={15} /></button>\n\t\t\t\t\t</div>\n\t\t\t\t{/if}'''
+          new_cursor_left = old_cursor_left + '''\n\t\t\t\t{#if eraserCursor && eraserCursor.page === visiblePages[0]}\n\t\t\t\t\t<div class="eraser-cursor" style={`left:${eraserCursor.x}px;top:${eraserCursor.y}px;width:${eraserCursor.diameter}px;height:${eraserCursor.diameter}px`}></div>\n\t\t\t\t{/if}'''
+          s = s.replace(old_cursor_left, new_cursor_left, 1)
+
+          old_cursor_right = '''\t\t\t\t\t{#if textEditor && textEditor.page === visiblePages[1]}\n\t\t\t\t\t\t<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>\n\t\t\t\t\t\t\t<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />\n\t\t\t\t\t\t\t<button title="Save" onclick={commitText}><Check size={15} /></button>\n\t\t\t\t\t\t\t<button title="Cancel" onclick={cancelText}><X size={15} /></button>\n\t\t\t\t\t\t</div>\n\t\t\t\t\t{/if}'''
+          new_cursor_right = old_cursor_right + '''\n\t\t\t\t\t{#if eraserCursor && eraserCursor.page === visiblePages[1]}\n\t\t\t\t\t\t<div class="eraser-cursor" style={`left:${eraserCursor.x}px;top:${eraserCursor.y}px;width:${eraserCursor.diameter}px;height:${eraserCursor.diameter}px`}></div>\n\t\t\t\t\t{/if}'''
+          s = s.replace(old_cursor_right, new_cursor_right, 1)
+
+          annotation = r'''\t\t<aside class="annotation-bar" aria-label="Annotation tools">
+\t\t\t<div class="annotation-tools">
+\t\t\t\t<button class:active={tool === 'move'} class="tool-button" title="Move" aria-label="Move" aria-pressed={tool === 'move'} onclick={() => choose('move')}><MousePointer2 size={18} /><span>Move</span></button>
+\t\t\t\t<button class:active={tool === 'pen'} class="tool-button" title="Pen (P)" aria-label="Pen" aria-pressed={tool === 'pen'} onclick={() => choose('pen')}><PenTool size={18} /><span>Pen</span></button>
+\t\t\t\t<button class:active={tool === 'highlighter'} class="tool-button" title="Highlighter (H)" aria-label="Highlighter" aria-pressed={tool === 'highlighter'} onclick={() => choose('highlighter')}><Highlighter size={18} /><span>Highlight</span></button>
+\t\t\t\t<button class:active={tool === 'line'} class="tool-button" title="Line" aria-label="Line" aria-pressed={tool === 'line'} onclick={() => choose('line')}><Minus size={18} /><span>Line</span></button>
+\t\t\t\t<button class:active={tool === 'arrow'} class="tool-button" title="Arrow" aria-label="Arrow" aria-pressed={tool === 'arrow'} onclick={() => choose('arrow')}><ArrowUpRight size={18} /><span>Arrow</span></button>
+\t\t\t\t<button class:active={tool === 'eraser'} class="tool-button" title="Eraser (E)" aria-label="Eraser" aria-pressed={tool === 'eraser'} onclick={() => choose('eraser')}><Eraser size={18} /><span>Eraser</span></button>
+\t\t\t\t<button class:active={tool === 'symbol'} class="tool-button" title="Symbols (S)" aria-label="Symbols" aria-pressed={tool === 'symbol'} onclick={() => choose('symbol')}><Music2 size={18} /><span>Symbols</span></button>
+\t\t\t\t<button class:active={tool === 'text'} class="tool-button" title="Text (T)" aria-label="Text" aria-pressed={tool === 'text'} onclick={() => choose('text')}><Type size={18} /><span>Text</span></button>
+\t\t\t</div>
+\t\t\t<div class="annotation-divider"></div>
+\t\t\t<div class="annotation-options">
+\t\t\t\t<div class="history-cluster">
+\t\t\t\t\t<button class="icon-button history-button" title={canUndo ? 'Undo' : 'Nothing to undo'} aria-label="Undo" disabled={!canUndo} onclick={undo}><Undo2 size={18} /></button>
+\t\t\t\t\t<button class="icon-button history-button" title={canRedo ? 'Redo' : 'Nothing to redo'} aria-label="Redo" disabled={!canRedo} onclick={redo}><Redo2 size={18} /></button>
+\t\t\t\t</div>
+\t\t\t\t<div class="option-divider"></div>
+\t\t\t\t<div class="color-row" role="group" aria-label="Annotation color">
+\t\t\t\t\t{#each colors as swatch}
+\t\t\t\t\t\t<button class="swatch" class:selected={color === swatch} style={`--swatch:${swatch}`} title={`Color ${swatch}`} aria-label={`Color ${swatch}`} aria-pressed={color === swatch} onclick={() => (color = swatch)}></button>
+\t\t\t\t\t{/each}
+\t\t\t\t</div>
+\t\t\t\t<label class="stroke-size" title="Stroke size">
+\t\t\t\t\t<span>Size</span>
+\t\t\t\t\t<input type="range" min="1" max="14" bind:value={width} aria-label="Stroke size" />
+\t\t\t\t\t<output>{width}</output>
+\t\t\t\t</label>
+\t\t\t</div>
+\t\t\t<div class="annotation-bar-end">
+\t\t\t\t<span class="active-tool-label">{tool === 'highlighter' ? 'Highlight' : tool[0].toUpperCase() + tool.slice(1)}</span>
+\t\t\t\t<button class="icon-button close-annotations" title="Close annotation tools" aria-label="Close annotation tools" onclick={toggleControls}><X size={18} /></button>
+\t\t\t</div>
+\t\t</aside>'''
+          s = re.sub(r'\t\t<aside class="annotation-bar">.*?\n\t\t</aside>', annotation, s, count=1, flags=re.S)
+
+          css = r'''
+
+	/* Annotation dock polish */
+	.bottombar {
+		position: absolute;
+		z-index: 30;
+		left: 12px;
+		right: 12px;
+		bottom: 10px;
+		top: auto;
+		width: auto;
+		min-height: 44px;
+		padding: 5px 8px;
+		border: 1px solid rgba(255,255,255,.08);
+		border-radius: 16px;
+		background: rgba(25,25,22,.78);
+		backdrop-filter: blur(20px);
+		box-shadow: 0 12px 32px rgba(0,0,0,.22);
+	}
+	.annotation-toggle {
+		left: 14px;
+		bottom: 70px;
+		width: 44px;
+		height: 44px;
+		border-radius: 14px;
+		background: rgba(25,25,22,.86);
+		backdrop-filter: blur(18px);
+		transition: transform .16s ease, background .16s ease, border-color .16s ease;
+	}
+	.annotation-toggle:hover {
+		transform: translateY(-2px);
+		background: rgba(39,39,34,.94);
+		border-color: rgba(255,255,255,.16);
+	}
+	.annotation-bar {
+		position: absolute;
+		z-index: 40;
+		left: 50%;
+		bottom: 68px;
+		transform: translateX(-50%);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 7px;
+		width: max-content;
+		max-width: calc(100% - 28px);
+		padding: 7px;
+		border: 1px solid rgba(255,255,255,.11);
+		border-radius: 18px;
+		background: rgba(25,25,22,.86);
+		box-shadow: 0 18px 48px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.04);
+		backdrop-filter: blur(22px) saturate(120%);
+		animation: annotation-dock-in 160ms cubic-bezier(.2,.8,.2,1);
+	}
+	.annotation-tools,
+	.annotation-options,
+	.annotation-bar-end,
+	.history-cluster,
+	.color-row {
+		display: flex;
+		align-items: center;
+	}
+	.annotation-tools { gap: 2px; }
+	.annotation-options { gap: 7px; }
+	.annotation-bar-end { gap: 6px; padding-left: 2px; }
+	.annotation-divider,
+	.option-divider {
+		flex: 0 0 auto;
+		width: 1px;
+		height: 34px;
+		background: rgba(255,255,255,.09);
+	}
+	.option-divider { height: 26px; }
+	.tool-button {
+		position: relative;
+		min-width: 54px;
+		height: 48px;
+		padding: 6px 7px;
+		border: 1px solid transparent;
+		border-radius: 12px;
+		gap: 3px;
+		font-size: 9px;
+		color: #9e9d96;
+		transition: background .14s ease, color .14s ease, transform .14s ease, border-color .14s ease;
+	}
+	.tool-button svg { transition: transform .14s ease; }
+	.tool-button:hover {
+		background: rgba(255,255,255,.07);
+		color: #f2f1eb;
+	}
+	.tool-button:hover svg { transform: translateY(-1px); }
+	.tool-button.active {
+		background: rgba(255,255,255,.10);
+		border-color: rgba(255,255,255,.08);
+		color: #fff;
+		box-shadow: inset 0 -2px 0 #c4a574;
+	}
+	.history-cluster { gap: 3px; }
+	.history-button { width: 38px; height: 38px; border-radius: 10px; }
+	.icon-button:focus-visible,
+	.tool-button:focus-visible,
+	.swatch:focus-visible,
+	.text-button:focus-visible {
+		outline: 2px solid rgba(196,165,116,.9);
+		outline-offset: 2px;
+	}
+	.color-row { gap: 4px; }
+	.swatch {
+		width: 20px;
+		height: 20px;
+		border-width: 2px;
+		transition: transform .12s ease, box-shadow .12s ease;
+	}
+	.swatch:hover { transform: scale(1.12); }
+	.swatch.selected {
+		border-color: #fff;
+		box-shadow: 0 0 0 1px #111, 0 0 0 3px rgba(255,255,255,.11);
+	}
+	.stroke-size {
+		display: grid;
+		grid-template-columns: auto 78px auto;
+		align-items: center;
+		gap: 6px;
+		padding: 0 3px;
+		color: #85857d;
+		font-size: 9px;
+		white-space: nowrap;
+	}
+	.stroke-size input { width: 78px; accent-color: #c4a574; }
+	.stroke-size output {
+		min-width: 18px;
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+		color: #bdbcb4;
+	}
+	.active-tool-label {
+		max-width: 76px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: #77776f;
+		font-size: 9px;
+		padding: 0 2px;
+	}
+	.close-annotations { width: 34px; height: 34px; }
+	.eraser-cursor {
+		position: absolute;
+		z-index: 25;
+		pointer-events: none;
+		transform: translate(-50%, -50%);
+		border: 1.5px solid rgba(194,65,12,.95);
+		border-radius: 50%;
+		box-shadow: 0 0 0 1px rgba(255,255,255,.8), 0 2px 9px rgba(0,0,0,.18);
+		background: rgba(194,65,12,.035);
+	}
+	@keyframes annotation-dock-in {
+		from { opacity: 0; transform: translate(-50%, 8px) scale(.98); }
+		to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+	}
+
+	@media (max-width: 1050px) {
+		.tool-button { min-width: 48px; }
+		.stroke-size { grid-template-columns: auto 62px auto; }
+		.stroke-size input { width: 62px; }
+		.active-tool-label { display: none; }
+	}
+	@media (max-width: 820px) {
+		.annotation-bar {
+			left: 8px;
+			right: 8px;
+			bottom: 64px;
+			transform: none;
+			width: auto;
+			max-width: none;
+			justify-content: flex-start;
+			overflow-x: auto;
+			scrollbar-width: none;
+		}
+		.annotation-bar::-webkit-scrollbar { display: none; }
+		.annotation-tools,
+		.annotation-options,
+		.annotation-bar-end { flex: 0 0 auto; }
+		.tool-button {
+			min-width: 48px;
+			height: 44px;
+		}
+		.tool-button span { display: none; }
+		.annotation-divider { height: 28px; }
+		.stroke-size span,
+		.stroke-size output { display: none; }
+		.stroke-size { grid-template-columns: 62px; padding: 0 2px; }
+		.stroke-size input { width: 62px; }
+	}
+	@media (max-width: 560px) {
+		.bottombar { left: 7px; right: 7px; bottom: 7px; padding: 4px 5px; border-radius: 14px; }
+		.annotation-bar { bottom: 58px; border-radius: 16px; padding: 5px; }
+		.annotation-options { gap: 4px; }
+		.color-row { gap: 3px; }
+		.swatch { width: 18px; height: 18px; }
+		.history-button { width: 36px; height: 36px; }
+		.close-annotations { width: 32px; height: 32px; }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.annotation-bar,
+		.annotation-toggle,
+		.tool-button,
+		.tool-button svg,
+		.swatch { animation: none; transition: none; }
+	}
+'''
+          s = s.replace('\n</style>', css + '\n</style>', 1)
+          p.write_text(s)
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Check and build
+        run: |
+          npm run check
+          npm run build
+      - name: Commit changes and remove one-time workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/annotation-polish-once.yml
+          git add src/lib/ScoreViewerFixed.svelte src/lib/types.ts
+          git commit -m 'Polish annotation tools and responsive controls'
+          git push origin fix/thumbnail-rendering-and-type-errors
