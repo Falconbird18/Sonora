@@ -19,11 +19,14 @@ if (process.platform === 'linux') {
   }
 }
 
-const command = process.platform === 'win32' ? 'tauri.cmd' : 'tauri';
+const isWindows = process.platform === 'win32';
+const command = isWindows ? 'tauri.cmd' : 'tauri';
 const result = spawnSync(command, args, {
   env,
   stdio: 'inherit',
-  shell: false
+  // Windows .cmd files are shell scripts rather than directly executable
+  // binaries. Node rejects spawning them with shell=false (EINVAL).
+  shell: isWindows
 });
 
 if (result.error) {
