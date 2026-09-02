@@ -1,10 +1,46 @@
 <script lang="ts">
-	import LibraryView from './lib/LibraryViewRedesign.svelte';
-	import ScoreViewer from './lib/ScoreViewer.svelte';
 	import type { ScoreItem } from './lib/types';
 
 	let activeScore = $state<ScoreItem | null>(null);
 	let crash = $state('');
+	let libraryView = $state<any>(null);
+	let libraryError = $state('');
+	let scoreViewer = $state<any>(null);
+	let scoreViewerError = $state('');
+
+	async function loadLibraryView() {
+		if (libraryView || libraryError) return;
+		try {
+			console.info('Sonora: loading LibraryViewRedesign.svelte');
+			const module = await Promise.race([
+				import('./lib/LibraryViewRedesign.svelte'),
+				new Promise<never>((_, reject) =>
+					setTimeout(
+						() => reject(new Error('Timed out after 10 seconds while loading LibraryViewRedesign.svelte')),
+					10_000
+					)
+				)
+			]);
+			libraryView = module.default;
+			console.info('Sonora: LibraryViewRedesign.svelte loaded');
+		} catch (reason) {
+			console.error('Sonora library failed to load', reason);
+			libraryError = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+		}
+	}
+
+	async function loadScoreViewer() {
+		if (scoreViewer || scoreViewerError) return;
+		try {
+			const module = await import('./lib/ScoreViewer.svelte');
+			scoreViewer = module.default;
+		} catch (reason) {
+			console.error('Sonora score viewer failed to load', reason);
+			scoreViewerError = reason instanceof Error ? reason.message : String(reason);
+		}
+	}
+
+	loadLibraryView();
 
 	function closeScore() {
 		const finish = () => {
@@ -32,6 +68,13 @@
 			closeScore();
 		}
 	}
+
+	function openScore(score: ScoreItem) {
+		activeScore = score;
+		crash = '';
+		scoreViewerError = '';
+		void loadScoreViewer();
+	}
 </script>
 
 <svelte:head>
@@ -42,12 +85,34 @@
 <svelte:window onerror={onWindowError} onunhandledrejection={onUnhandled} />
 
 <main class="app-shell">
-	<div class="layer" class:hidden={!!activeScore} inert={!!activeScore}>
-		<LibraryView paused={!!activeScore} onSelectScore={(score) => (activeScore = score)} />
-	</div>
+	{#if libraryView}
+		{@const LibraryView = libraryView}
+		<div class="layer" class:hidden={!!activeScore} inert={!!activeScore}>
+			<svelte:component this={LibraryView} paused={!!activeScore} onSelectScore={openScore} />
+		</div>
+	{:else if libraryError}
+		<div class="startup-error">
+			<strong>Sonora could not load the library.</strong>
+			<p>{libraryError}</p>
+			<button onclick={() => location.reload()}>Reload</button>
+		</div>
+	{:else}
+		<div class="startup-loading"><span></span><strong>Starting Sonora…</strong></div>
+	{/if}
+
 	{#if activeScore}
 		<div class="layer viewer-layer">
-			<ScoreViewer score={activeScore} onClose={closeScore} />
+			{#if scoreViewer}
+				<svelte:component this={scoreViewer} score={activeScore} onClose={closeScore} />
+			{:else if scoreViewerError}
+				<div class="viewer-error">
+					<strong>Sonora could not load the score viewer.</strong>
+					<p>{scoreViewerError}</p>
+					<button onclick={closeScore}>Return to library</button>
+				</div>
+			{:else}
+				<div class="viewer-loading"><span></span><strong>Preparing score viewer…</strong></div>
+			{/if}
 		</div>
 	{/if}
 	{#if crash}
@@ -66,9 +131,13 @@
 	.app-shell { isolation: isolate; position: relative; width: 100%; height: 100%; min-height: 100dvh; background: #11110f; color: #f5f5f4; overflow: hidden; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
 	.layer { position: absolute; inset: 0; width: 100%; height: 100%; }
 	.layer.hidden { visibility: hidden; pointer-events: none; }
-	.viewer-layer { z-index: 10; animation: app-enter .18s ease-out; background: #11110f; }
+	.startup-loading, .startup-error, .viewer-loading, .viewer-error { width: min(680px, calc(100% - 48px)); margin: auto; display: grid; place-items: center; align-content: center; gap: 12px; height: 100%; text-align: center; color: #f5f5f4; }
+	.startup-error p, .viewer-error p { max-width: 620px; margin: 0; color: #cfcfcb; overflow-wrap: anywhere; }
+	.startup-error button, .viewer-error button { border: 1px solid #3a3a35; border-radius: 10px; padding: 9px 14px; background: #24241f; color: inherit; cursor: pointer; }
+	.startup-loading span, .viewer-loading span { width: 20px; height: 20px; border: 2px solid #44443e; border-top-color: #f5f5f4; border-radius: 50%; animation: spin .75s linear infinite; }
+	.viewer-layer { z-index: 10; background: #11110f; }
 	.crash { position: absolute; z-index: 40; left: 50%; top: 18px; transform: translateX(-50%); padding: 8px 12px; border-radius: 8px; background: #3f2a12; font-size: .82rem; }
 	@media(pointer:coarse) { :global(button) { min-width: 40px; min-height: 40px; } :global(input), :global(select) { min-height: 40px; } }
-	@media(prefers-reduced-motion:reduce) { .viewer-layer { animation: none; } }
-	@keyframes app-enter { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+	@media(prefers-reduced-motion:reduce) { .startup-loading span, .viewer-loading span { animation: none; } }
+	@keyframes spin { to { transform: rotate(360deg); } }
 </style>

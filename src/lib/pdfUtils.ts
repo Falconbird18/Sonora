@@ -1,5 +1,4 @@
 import { isTauri } from './paths';
-import { pdfiumRenderer } from './pdfiumRenderer';
 import type { PdfDocumentRenderer, PdfPageInfo } from './pdfRenderer';
 
 export const MAX_CANVAS_PIXELS = 12_000_000;
@@ -11,6 +10,12 @@ export type PdfPageProxy = { pageNumber: number; getViewport(options: { scale: n
 export type PdfDocumentProxy = { numPages: number; getPage(pageNumber: number): Promise<PdfPageProxy>; renderPage(pageIndex: number, options?: { scale?: number }): Promise<RenderedPdfPage>; cleanup(): Promise<void> };
 type RenderedPdfPage = { blob: Blob; width: number; height: number };
 export type OpenedPdf = { document: PdfDocumentProxy };
+
+let rendererPromise: Promise<typeof import('./pdfiumRenderer')> | null = null;
+async function getPdfiumRenderer() {
+	if (!rendererPromise) rendererPromise = import('./pdfiumRenderer');
+	return rendererPromise;
+}
 
 function blobFilename(blob: Blob) { return typeof File !== 'undefined' && blob instanceof File && blob.name ? blob.name : 'score.pdf'; }
 async function readNativePdf(path: string): Promise<Uint8Array> { const { invoke } = await import('@tauri-apps/api/core'); const bytes = await invoke<number[] | Uint8Array>('read_score_file', { path }); return bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes); }
@@ -27,6 +32,7 @@ function createPage(document: PdfDocumentRenderer, info: PdfPageInfo): PdfPagePr
 
 export async function openPdfBytes(bytes: Uint8Array, id = 'score.pdf'): Promise<OpenedPdf> {
  if (!bytes.byteLength) throw new Error('PDF data is empty');
+ const { pdfiumRenderer } = await getPdfiumRenderer();
  const document = await pdfiumRenderer.open(bytes, id);
  const pages = document.pages;
  const proxy: PdfDocumentProxy = { numPages: pages.length,

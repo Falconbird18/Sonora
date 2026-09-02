@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { db } from './db';
+	import { loadAnnotations, saveAnnotation, flushAnnotationSaves, requestPersistentStorage } from './annotationStore';
 	import type { ScoreItem, Stroke, Point, SymbolStamp, TextNote } from './types';
 	import { MUSIC_SYMBOLS, MUSIC_SYMBOL_CATEGORIES } from './musicSymbols';
 	import { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';
@@ -99,6 +99,17 @@
 	let closed = false;
 	let isFullscreen = $state(false);
 
+	async function flushPendingAnnotations() {
+		const pages = [...saveTimers.keys()];
+		for (const number of pages) {
+			const timer = saveTimers.get(number);
+			if (timer) clearTimeout(timer);
+			saveTimers.delete(number);
+			await saveAnnotations(number);
+		}
+		await flushAnnotationSaves();
+	}
+
 	const prefs = $derived(`sonora-viewer-${score.id}`);
 	const colors = ['#c2410c', '#2563eb', '#15803d', '#a16207', '#7e22ce', '#111827', '#ffffff'];
 	const visiblePages = $derived(
@@ -133,6 +144,7 @@
 				pageInput = String(saved.page);
 			}
 		} catch {}
+		requestPersistentStorage();
 		void load();
 		const key = (event: KeyboardEvent) => {
 			if (textEditor) {
@@ -196,7 +208,7 @@
 			clearTimeout(resizeTimer);
 			clearTimeout(prefetchTimer);
 			cancelRender();
-			for (const timer of saveTimers.values()) clearTimeout(timer);
+			void flushPendingAnnotations();
 			releaseCanvases();
 			if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
 			void destroyDocument();
@@ -231,7 +243,7 @@
 				page = 1;
 				pageInput = '1';
 			}
-			const records = await db.annotations.where('scoreId').equals(score.id).toArray();
+			const records = await loadAnnotations(score.id);
 			for (const record of records) {
 				strokes[record.pageNum] = record.strokes || [];
 				stamps[record.pageNum] = record.stamps || [];
@@ -279,6 +291,7 @@
 	}
 
 	async function leave() {
+		await flushPendingAnnotations();
 		closed = true;
 		if (document.fullscreenElement) {
 			try {
@@ -688,13 +701,13 @@
 	function scheduleSave(number: number) {
 		const old = saveTimers.get(number);
 		if (old) clearTimeout(old);
-		saveTimers.set(number, setTimeout(() => void saveAnnotations(number), 250));
+		saveTimers.set(number, setTimeout(() => {
+			saveTimers.delete(number);
+			void saveAnnotations(number).catch((error) => console.error('Annotation save failed', error));
+		}, 150));
 	}
 	async function saveAnnotations(number: number) {
-		await db.annotations.put({
-			id: `${score.id}:${number}`,
-			scoreId: score.id,
-			pageNum: number,
+		await saveAnnotation(score.id, number, {
 			strokes: $state.snapshot(strokes[number] || []),
 			stamps: $state.snapshot(stamps[number] || []),
 			notes: $state.snapshot(notes[number] || [])
