@@ -2,36 +2,48 @@ import { init } from '@embedpdf/pdfium';
 import { PdfiumNative, PdfEngine } from '@embedpdf/engines/pdfium';
 import { browserImageDataToBlobConverter } from '@embedpdf/engines/converters';
 import type {
-    PdfDocumentRenderer,
-    PdfPageInfo,
-    PdfRenderOptions,
-    PdfRenderer,
-    RenderedPdfPage
+	PdfDocumentRenderer,
+	PdfPageInfo,
+	PdfRenderOptions,
+	PdfRenderer,
+	RenderedPdfPage
 } from './pdfRenderer';
 
-const bundledPdfiumWasm = new URL('./pdfium.wasm', import.meta.url);
+// Served from public/pdfium/pdfium.wasm
+const PDFIUM_WASM_URL = '/pdfium/pdfium.wasm';
+
 let enginePromise: Promise<PdfEngine<Blob>> | null = null;
 
 type PdfTextEngine = PdfEngine<Blob> & {
-    getPageText(document: unknown, pageIndex: number): { toPromise(): Promise<string> };
+	getPageText(document: unknown, pageIndex: number): { toPromise(): Promise<string> };
 };
 
 async function getEngine(): Promise<PdfEngine<Blob>> {
-    if (!enginePromise) {
-        enginePromise = (async () => {
-            const response = await fetch(bundledPdfiumWasm);
-            if (!response.ok) {
-                throw new Error(`Could not load bundled PDFium WebAssembly (${response.status})`);
-            }
-            const wasmBinary = await response.arrayBuffer();
-            const pdfiumModule = await init({ wasmBinary });
-            const native = new PdfiumNative(pdfiumModule);
-            return new PdfEngine<Blob>(native, {
-                imageConverter: browserImageDataToBlobConverter
-            });
-        })();
-    }
-    return enginePromise;
+	if (!enginePromise) {
+		enginePromise = (async () => {
+			const response = await fetch(PDFIUM_WASM_URL);
+			if (!response.ok) {
+				throw new Error(`Could not load PDFium WASM (${response.status}) from ${PDFIUM_WASM_URL}`);
+			}
+
+			const wasmBinary = await response.arrayBuffer();
+
+			// Guard: SPA fallback returns HTML instead of WASM
+			const magic = new Uint8Array(wasmBinary, 0, 4);
+			if (magic[0] !== 0x00 || magic[1] !== 0x61 || magic[2] !== 0x73 || magic[3] !== 0x6d) {
+				throw new Error(
+					`PDFium URL returned non-WASM data (got HTML/404). Check that ${PDFIUM_WASM_URL} exists.`
+				);
+			}
+
+			const pdfiumModule = await init({ wasmBinary });
+			const native = new PdfiumNative(pdfiumModule);
+			return new PdfEngine<Blob>(native, {
+				imageConverter: browserImageDataToBlobConverter
+			});
+		})();
+	}
+	return enginePromise;
 }
 
 function renderOptions(options?: PdfRenderOptions) {
