@@ -28,7 +28,7 @@
       <main id="startup-fallback">
         <section>
           <h1>Starting Sonora…</h1>
-          <p>If this screen stays up, the JavaScript bundle did not finish loading. DevTools should open automatically on desktop builds.</p>
+          <p>Loading your sheet music library.</p>
         </section>
       </main>
     </div>
@@ -57,9 +57,10 @@
         });
         window.addEventListener('unhandledrejection', (event) => showError(event.reason));
 
-        // Kill any leftover PWA service worker from older builds. A stale SW under
-        // tauri.localhost was serving index.html (text/html) for JS modules.
-        if ('serviceWorker' in navigator) {
+        // Desktop WebViews must not keep a PWA service worker. Stale workers
+        // under tauri.localhost can serve HTML for JS modules and white-screen.
+        const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+        if (isTauri && 'serviceWorker' in navigator) {
           navigator.serviceWorker.getRegistrations().then((regs) => {
             for (const reg of regs) reg.unregister();
           }).catch(() => {});

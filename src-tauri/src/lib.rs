@@ -4,7 +4,6 @@ use std::{
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
 };
-use tauri::Manager;
 
 #[derive(Debug, Serialize)]
 struct NativeScoreFile {
@@ -118,15 +117,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
-        .setup(|app| {
-            // Always open DevTools on the main window so blank/white-screen
-            // failures on Windows release builds are diagnosable without relying
-            // on right-click or keyboard shortcuts that WebView2 may ignore.
-            if let Some(window) = app.get_webview_window("main") {
-                window.open_devtools();
-            }
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             pick_score_folder,
             list_score_files,

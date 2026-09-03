@@ -1,27 +1,39 @@
-/* Sonora desktop builds must not use a service worker.
- * Older builds may still have one registered under tauri.localhost;
- * this file unregisters itself and clears caches so asset loads work again.
- */
+/* Browser/PWA shell cache only. Desktop (Tauri) must not register this worker. */
+const CACHE = 'sonora-shell-v2';
+const APP_SHELL = ['./', './index.html', './favicon.svg', './manifest.webmanifest'];
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil(
+    caches.open(CACHE).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    (async () => {
-      const keys = await caches.keys();
-      await Promise.all(keys.map((key) => caches.delete(key)));
-      const regs = await self.registration.unregister();
-      const clients = await self.clients.matchAll({ type: 'window' });
-      for (const client of clients) {
-        client.navigate(client.url);
-      }
-      return regs;
-    })()
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))
+    ).then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (event) => {
-  // Never intercept — always hit the network / Tauri custom protocol.
-  return;
+  if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  // Never treat hashed build assets as navigations; always network-first for those.
+  if (url.pathname.includes('/assets/')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+  event.respondWith(
+    caches.match(event.request).then((cached) => {
+      if (cached) return cached;
+      return fetch(event.request).then((response) => {
+        if (!response.ok) return response;
+        const copy = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+        return response;
+      });
+    })
+  );
 });

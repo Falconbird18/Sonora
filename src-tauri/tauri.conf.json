@@ -21,8 +21,7 @@
         "resizable": true,
         "fullscreen": false,
         "center": true,
-        "focus": true,
-        "devtools": true
+        "focus": true
       }
     ],
     "security": {

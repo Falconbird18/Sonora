@@ -7,16 +7,13 @@ const tauriPlatform = process.env.TAURI_ENV_PLATFORM;
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-	// Do NOT set base: './' for packaged Tauri apps.
-	// Relative asset URLs can resolve incorrectly under the tauri.localhost
-	// custom protocol, so the WebView receives index.html (text/html) for JS
-	// modules and fails with a strict MIME-type error. Default base '/' emits
-	// absolute /assets/... paths that match how Tauri serves frontendDist.
+	// Default base '/' so packaged Tauri serves /assets/... correctly under
+	// the tauri.localhost custom protocol.
 	plugins: [svelte()],
 	clearScreen: false,
 	resolve: {
 		alias: {
-			// Prevent Vite from externalizing Node's crypto (breaks @embedpdf in WebView).
+			// Map Node crypto (pulled in by @embedpdf) to a Web Crypto shim.
 			crypto: path.resolve(rootDir, 'src/lib/crypto-shim.ts')
 		}
 	},
