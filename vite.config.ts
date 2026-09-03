@@ -4,6 +4,10 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 const tauriPlatform = process.env.TAURI_ENV_PLATFORM;
 
 export default defineConfig({
+	// Relative asset paths are required for the packaged Tauri WebView.
+	// Absolute `/assets/...` URLs resolve incorrectly under the custom
+	// protocol and produce a blank/white window in production builds.
+	base: './',
 	plugins: [svelte()],
 	clearScreen: false,
 	build: {
