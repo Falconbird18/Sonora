@@ -1,1 +1,3 @@
-SEE_FILE
+<script lang="ts">
+// temporary stub - will be replaced
+</script>
