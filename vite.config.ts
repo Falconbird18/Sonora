@@ -7,13 +7,10 @@ const tauriPlatform = process.env.TAURI_ENV_PLATFORM;
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-	// Default base '/' so packaged Tauri serves /assets/... correctly under
-	// the tauri.localhost custom protocol.
 	plugins: [svelte()],
 	clearScreen: false,
 	resolve: {
 		alias: {
-			// Map Node crypto (pulled in by @embedpdf) to a Web Crypto shim.
 			crypto: path.resolve(rootDir, 'src/lib/crypto-shim.ts')
 		}
 	},

@@ -12,7 +12,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "pretauri:build": "tauri icon ./src-tauri/icons/app-icon.svg",
-    "tauri:build": "node ./scripts/tauri-build.mjs"
+    "tauri:build": "node ./scripts/tauri-build.mjs",
+    "postinstall": "mkdir -p public/pdfium && cp node_modules/@embedpdf/pdfium/dist/pdfium.wasm public/pdfium/"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.2.0",

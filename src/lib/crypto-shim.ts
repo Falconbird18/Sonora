@@ -25,7 +25,7 @@ export function randomUUID(): string {
 }
 
 export function getRandomValues<T extends ArrayBufferView>(array: T): T {
-	return webCrypto.getRandomValues(array);
+  return webCrypto.getRandomValues(array as T & ArrayBufferView<ArrayBuffer>);
 }
 
 export const subtle = webCrypto.subtle;
