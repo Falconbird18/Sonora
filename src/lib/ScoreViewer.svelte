@@ -4,6 +4,10 @@
 	import type { ScoreItem, Stroke, Point, SymbolStamp, TextNote } from './types';
 	import { MUSIC_SYMBOLS, MUSIC_SYMBOL_CATEGORIES } from './musicSymbols';
 	import { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';
+	import {
+		acquireScreenWakeLock,
+		releaseScreenWakeLock
+	} from './wakeLock';
 	import type { PdfDocumentProxy, PdfPageProxy, PdfRenderTask } from './pdfUtils';
 	import {
 		ArrowLeft,
@@ -53,6 +57,8 @@
 	let fit = $state<Fit>('page');
 	let dual = $state(false);
 	let autoLayout = $state(true);
+	let keepAwake = $state(true);
+	let wakeLockActive = $state(false);
 	let zoomTimer: ReturnType<typeof setTimeout> | undefined;
 	let pageTransition = $state(false);
 	let loading = $state(false);
@@ -133,11 +139,27 @@
 	const canUndo = $derived((historyIndex[page] ?? 0) > 0);
 	const canRedo = $derived((historyIndex[page] ?? 0) < (histories[page]?.length ?? 1) - 1);
 
+
+	async function requestWakeLock() {
+		if (!keepAwake || closed) {
+			wakeLockActive = false;
+			return;
+		}
+		const ok = await acquireScreenWakeLock();
+		wakeLockActive = ok;
+	}
+
+	async function releaseWakeLock() {
+		await releaseScreenWakeLock();
+		wakeLockActive = false;
+	}
+
 	onMount(() => {
 		try {
 			const saved = JSON.parse(localStorage.getItem(prefs) || '{}');
 			bookmarked = !!saved.bookmarked;
 			autoLayout = saved.autoLayout !== false;
+			keepAwake = saved.keepAwake !== false;
 			if (typeof saved.dual === 'boolean' && !autoLayout) {
 				dual = saved.dual;
 			} else {
@@ -154,6 +176,12 @@
 		} catch {}
 		requestPersistentStorage();
 		void load();
+		void requestWakeLock();
+		const onVisibility = () => {
+			if (document.visibilityState === 'visible') void requestWakeLock();
+			else void releaseWakeLock();
+		};
+		document.addEventListener('visibilitychange', onVisibility);
 		const key = (event: KeyboardEvent) => {
 			if (textEditor) {
 				if (event.key === 'Escape') {
@@ -212,11 +240,13 @@
 			closed = true;
 			window.removeEventListener('keydown', key);
 			document.removeEventListener('fullscreenchange', onFullscreen);
+			document.removeEventListener('visibilitychange', onVisibility);
 			observer.disconnect();
 			clearTimeout(resizeTimer);
 			clearTimeout(prefetchTimer);
 			clearTimeout(zoomTimer);
 			cancelRender();
+			void releaseWakeLock();
 			void flushPendingAnnotations();
 			releaseCanvases();
 			if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
@@ -300,6 +330,7 @@
 	}
 
 	async function leave() {
+		await releaseWakeLock();
 		await flushPendingAnnotations();
 		closed = true;
 		if (document.fullscreenElement) {
@@ -741,7 +772,7 @@
 	function persistPrefs() {
 		localStorage.setItem(
 			prefs,
-			JSON.stringify({ bookmarked, dual, autoLayout, zoom, fit, annotationsVisible, recentSymbols, page })
+			JSON.stringify({ bookmarked, dual, autoLayout, keepAwake, zoom, fit, annotationsVisible, recentSymbols, page })
 		);
 	}
 	function setZoom(value: number) {
@@ -1096,6 +1127,21 @@
 						onchange={() => {
 							persistPrefs();
 							void render({ quiet: hasPainted });
+						}}
+					/>
+				</label>
+				<label class="settings-row">
+					<span>
+						<span class="label-title">Keep screen on</span>
+						<span class="label-desc">{wakeLockActive ? 'Screen will stay awake while viewing' : 'Prevents the display from sleeping while a score is open'}</span>
+					</span>
+					<input
+						type="checkbox"
+						bind:checked={keepAwake}
+						onchange={() => {
+							persistPrefs();
+							if (keepAwake) void requestWakeLock();
+							else void releaseWakeLock();
 						}}
 					/>
 				</label>
