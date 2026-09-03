@@ -14,7 +14,6 @@
       {
         "label": "main",
         "title": "Sonora",
-        "url": "index.html",
         "width": 1280,
         "height": 820,
         "minWidth": 760,
@@ -22,8 +21,7 @@
         "resizable": true,
         "fullscreen": false,
         "center": true,
-        "focus": true,
-        "devtools": true
+        "focus": true
       }
     ],
     "security": {

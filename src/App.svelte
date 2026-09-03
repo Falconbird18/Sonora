@@ -1,31 +1,26 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import type { ScoreItem } from './lib/types';
+	import type { Component } from 'svelte';
 
 	let activeScore = $state<ScoreItem | null>(null);
 	let crash = $state('');
-	let libraryView = $state<any>(null);
-	let libraryError = $state('');
-	let scoreViewer = $state<any>(null);
+	let libraryView = $state<Component<any> | null>(null);
+	let libraryViewError = $state('');
+	let scoreViewer = $state<Component<any> | null>(null);
 	let scoreViewerError = $state('');
 
+	onMount(() => {
+		void loadLibraryView();
+	});
+
 	async function loadLibraryView() {
-		if (libraryView || libraryError) return;
 		try {
-			console.info('Sonora: loading LibraryViewRedesign.svelte');
-			const module = await Promise.race([
-				import('./lib/LibraryViewRedesign.svelte'),
-				new Promise<never>((_, reject) =>
-					setTimeout(
-						() => reject(new Error('Timed out after 10 seconds while loading LibraryViewRedesign.svelte')),
-					10_000
-					)
-				)
-			]);
+			const module = await import('./lib/LibraryViewRedesign.svelte');
 			libraryView = module.default;
-			console.info('Sonora: LibraryViewRedesign.svelte loaded');
 		} catch (reason) {
 			console.error('Sonora library failed to load', reason);
-			libraryError = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+			libraryViewError = reason instanceof Error ? reason.message : String(reason);
 		}
 	}
 
@@ -39,8 +34,6 @@
 			scoreViewerError = reason instanceof Error ? reason.message : String(reason);
 		}
 	}
-
-	loadLibraryView();
 
 	function closeScore() {
 		const finish = () => {
@@ -85,25 +78,25 @@
 <svelte:window onerror={onWindowError} onunhandledrejection={onUnhandled} />
 
 <main class="app-shell">
-	{#if libraryView}
-		{@const LibraryView = libraryView}
-		<div class="layer" class:hidden={!!activeScore} inert={!!activeScore}>
-			<svelte:component this={LibraryView} paused={!!activeScore} onSelectScore={openScore} />
-		</div>
-	{:else if libraryError}
-		<div class="startup-error">
-			<strong>Sonora could not load the library.</strong>
-			<p>{libraryError}</p>
-			<button onclick={() => location.reload()}>Reload</button>
-		</div>
-	{:else}
-		<div class="startup-loading"><span></span><strong>Starting Sonora…</strong></div>
-	{/if}
+	<div class="layer" class:hidden={!!activeScore} inert={!!activeScore}>
+		{#if libraryView}
+			{@const Library = libraryView}
+			<Library paused={!!activeScore} onSelectScore={openScore} />
+		{:else if libraryViewError}
+			<div class="startup-error">
+				<strong>Sonora could not load the library.</strong>
+				<p>{libraryViewError}</p>
+			</div>
+		{:else}
+			<div class="startup-loading"><span></span><strong>Starting Sonora…</strong></div>
+		{/if}
+	</div>
 
 	{#if activeScore}
 		<div class="layer viewer-layer">
 			{#if scoreViewer}
-				<svelte:component this={scoreViewer} score={activeScore} onClose={closeScore} />
+				{@const Viewer = scoreViewer}
+				<Viewer score={activeScore} onClose={closeScore} />
 			{:else if scoreViewerError}
 				<div class="viewer-error">
 					<strong>Sonora could not load the score viewer.</strong>
@@ -131,13 +124,18 @@
 	.app-shell { isolation: isolate; position: relative; width: 100%; height: 100%; min-height: 100dvh; background: #11110f; color: #f5f5f4; overflow: hidden; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
 	.layer { position: absolute; inset: 0; width: 100%; height: 100%; }
 	.layer.hidden { visibility: hidden; pointer-events: none; }
-	.startup-loading, .startup-error, .viewer-loading, .viewer-error { width: min(680px, calc(100% - 48px)); margin: auto; display: grid; place-items: center; align-content: center; gap: 12px; height: 100%; text-align: center; color: #f5f5f4; }
-	.startup-error p, .viewer-error p { max-width: 620px; margin: 0; color: #cfcfcb; overflow-wrap: anywhere; }
-	.startup-error button, .viewer-error button { border: 1px solid #3a3a35; border-radius: 10px; padding: 9px 14px; background: #24241f; color: inherit; cursor: pointer; }
-	.startup-loading span, .viewer-loading span { width: 20px; height: 20px; border: 2px solid #44443e; border-top-color: #f5f5f4; border-radius: 50%; animation: spin .75s linear infinite; }
+	.startup-loading, .startup-error { width: min(680px, calc(100% - 48px)); margin: auto; display: grid; place-items: center; align-content: center; gap: 12px; height: 100%; text-align: center; color: #f5f5f4; }
+	.startup-loading span { width: 20px; height: 20px; border: 2px solid #44443e; border-top-color: #f5f5f4; border-radius: 50%; animation: spin .75s linear infinite; }
+	.startup-error p { max-width: 620px; margin: 0; color: #cfcfcb; overflow-wrap: anywhere; }
+	.startup-error strong { font-size: 1.05rem; }
 	.viewer-layer { z-index: 10; background: #11110f; }
+	.viewer-error { width: min(680px, calc(100% - 48px)); margin: auto; display: grid; place-items: center; align-content: center; gap: 12px; height: 100%; text-align: center; color: #f5f5f4; }
+	.viewer-error p { max-width: 620px; margin: 0; color: #cfcfcb; overflow-wrap: anywhere; }
+	.viewer-error button { border: 1px solid #3a3a35; border-radius: 10px; padding: 9px 14px; background: #24241f; color: inherit; cursor: pointer; }
+	.viewer-loading { width: 100%; height: 100%; display: grid; place-items: center; align-content: center; gap: 12px; color: #f5f5f4; }
+	.viewer-loading span { width: 20px; height: 20px; border: 2px solid #44443e; border-top-color: #f5f5f4; border-radius: 50%; animation: spin .75s linear infinite; }
 	.crash { position: absolute; z-index: 40; left: 50%; top: 18px; transform: translateX(-50%); padding: 8px 12px; border-radius: 8px; background: #3f2a12; font-size: .82rem; }
 	@media(pointer:coarse) { :global(button) { min-width: 40px; min-height: 40px; } :global(input), :global(select) { min-height: 40px; } }
-	@media(prefers-reduced-motion:reduce) { .startup-loading span, .viewer-loading span { animation: none; } }
+	@media(prefers-reduced-motion:reduce) { .viewer-loading span, .startup-loading span { animation: none; } }
 	@keyframes spin { to { transform: rotate(360deg); } }
 </style>
