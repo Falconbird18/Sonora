@@ -35,8 +35,8 @@
 		ZoomOut,
 		Pencil,
 		Check,
-		Move,
-		Grid2X2
+		Scan,
+		StretchHorizontal
 	} from '@lucide/svelte';
 	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
 
@@ -52,6 +52,9 @@
 	let zoom = $state(1);
 	let fit = $state<Fit>('page');
 	let dual = $state(false);
+	let autoLayout = $state(true);
+	let zoomTimer: ReturnType<typeof setTimeout> | undefined;
+	let pageTransition = $state(false);
 	let loading = $state(false);
 	let loadingText = $state('Opening score…');
 	let error = $state('');
@@ -134,7 +137,12 @@
 		try {
 			const saved = JSON.parse(localStorage.getItem(prefs) || '{}');
 			bookmarked = !!saved.bookmarked;
-			dual = typeof saved.dual === 'boolean' ? saved.dual : window.innerWidth >= 800;
+			autoLayout = saved.autoLayout !== false;
+			if (typeof saved.dual === 'boolean' && !autoLayout) {
+				dual = saved.dual;
+			} else {
+				dual = window.matchMedia('(orientation: landscape)').matches && window.innerWidth >= 720;
+			}
 			zoom = typeof saved.zoom === 'number' ? saved.zoom : 1;
 			fit = saved.fit === 'width' ? 'width' : 'page';
 			annotationsVisible = saved.annotationsVisible !== false;
@@ -197,7 +205,7 @@
 		document.addEventListener('fullscreenchange', onFullscreen);
 		const observer = new ResizeObserver(() => {
 			clearTimeout(resizeTimer);
-			resizeTimer = setTimeout(() => void render({ quiet: true }), 180);
+			resizeTimer = setTimeout(() => void render({ quiet: true }), 100);
 		});
 		if (host) observer.observe(host);
 		return () => {
@@ -207,6 +215,7 @@
 			observer.disconnect();
 			clearTimeout(resizeTimer);
 			clearTimeout(prefetchTimer);
+			clearTimeout(zoomTimer);
 			cancelRender();
 			void flushPendingAnnotations();
 			releaseCanvases();
@@ -321,7 +330,17 @@
 		}
 		error = '';
 		try {
-			if (host.clientWidth < 800) dual = false;
+			if (autoLayout) {
+				const landscape = window.matchMedia('(orientation: landscape)').matches;
+				const wideEnough = host.clientWidth >= 720;
+				const nextDual = landscape && wideEnough;
+				if (nextDual !== dual) {
+					dual = nextDual;
+					persistPrefs();
+				}
+			} else if (host.clientWidth < 720) {
+				dual = false;
+			}
 			for (let index = 0; index < visiblePages.length; index++) {
 				await renderPage(visiblePages[index], index, current);
 				if (current !== generation) return;
@@ -402,7 +421,12 @@
 		clearTimeout(prefetchTimer);
 		prefetchTimer = setTimeout(() => {
 			if (!pdf || closed) return;
-			const upcoming = [page + (dual ? 2 : 1), Math.max(1, page - 1)];
+			const upcoming = [
+				page + (dual ? 2 : 1),
+				page + (dual ? 4 : 2),
+				Math.max(1, page - 1),
+				Math.max(1, page - (dual ? 2 : 1))
+			];
 			for (const number of upcoming) {
 				if (number >= 1 && number <= pdf.numPages) void pdf.getPage(number).catch(() => {});
 			}
@@ -717,13 +741,15 @@
 	function persistPrefs() {
 		localStorage.setItem(
 			prefs,
-			JSON.stringify({ bookmarked, dual, zoom, fit, annotationsVisible, recentSymbols, page })
+			JSON.stringify({ bookmarked, dual, autoLayout, zoom, fit, annotationsVisible, recentSymbols, page })
 		);
 	}
 	function setZoom(value: number) {
 		zoom = Math.max(0.4, Math.min(2.5, Number(value.toFixed(2))));
 		persistPrefs();
-		void render({ quiet: hasPainted });
+		clearTimeout(zoomTimer);
+		// Debounce expensive re-render so continuous zoom (wheel / buttons) feels responsive
+		zoomTimer = setTimeout(() => void render({ quiet: hasPainted }), 90);
 	}
 	function setFit(value: Fit) {
 		fit = value;
@@ -733,18 +759,24 @@
 	}
 	function next() {
 		if (!pdf) return;
+		pageTransition = true;
 		page = Math.min(pdf.numPages, dual ? Math.min(pdf.numPages, page + 2) : page + 1);
 		pageInput = String(page);
 		ensureHistory(page);
 		persistPrefs();
-		void render({ quiet: hasPainted });
+		void render({ quiet: hasPainted }).finally(() => {
+			requestAnimationFrame(() => { pageTransition = false; });
+		});
 	}
 	function previous() {
+		pageTransition = true;
 		page = Math.max(1, dual ? page - 2 : page - 1);
 		pageInput = String(page);
 		ensureHistory(page);
 		persistPrefs();
-		void render({ quiet: hasPainted });
+		void render({ quiet: hasPainted }).finally(() => {
+			requestAnimationFrame(() => { pageTransition = false; });
+		});
 	}
 	function goToPage() {
 		const value = Math.max(1, Math.min(pdf?.numPages || 1, Number.parseInt(pageInput, 10) || 1));
@@ -867,8 +899,8 @@
 	{#if !reading}
 		<footer class="bottombar">
 			<div class="footer-section">
-				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Grid2X2 size={16} /></button>
-				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><Move size={17} /></button>
+				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Scan size={16} /></button>
+				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><StretchHorizontal size={17} /></button>
 				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.1)}><ZoomOut size={17} /></button>
 				<span>{Math.round(zoom * 100)}%</span>
 				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.1)}><ZoomIn size={17} /></button>
@@ -878,6 +910,7 @@
 					class:active={dual}
 					class="text-button"
 					onclick={() => {
+						autoLayout = false;
 						dual = !dual;
 						persistPrefs();
 						void render({ quiet: hasPainted });
@@ -900,7 +933,7 @@
 		</div>{/if}
 
 	<main class="workspace" onwheel={onWheel}>
-		<div class="pages" class:dual>
+		<div class="pages" class:dual class:transitioning={pageTransition}>
 			<div class="page-shell">
 				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
 				<canvas
@@ -1024,13 +1057,80 @@
 
 
 	{#if settingsOpen && !reading}
-		<div class="settings-card">
-			<strong>Viewer settings</strong>
-			<label><span>Two-page view</span><input type="checkbox" bind:checked={dual} onchange={() => { persistPrefs(); void render({ quiet: hasPainted }); }} /></label>
-			<label><span>Show annotations</span><input type="checkbox" bind:checked={annotationsVisible} onchange={toggleAnnotations} /></label>
-			<label><span>Text size</span><input type="range" min="10" max="36" bind:value={textSize} /></label>
-			<p class="hint">F reading mode · arrows / space page turn · Esc back · Ctrl-scroll zoom</p>
-			<button class="text-button" onclick={() => { settingsOpen = false; persistPrefs(); }}>Done</button>
+		<div class="settings-backdrop" role="presentation" onclick={() => { settingsOpen = false; persistPrefs(); }}></div>
+		<div class="settings-card" role="dialog" aria-label="Viewer settings">
+			<header class="settings-header">
+				<strong>Viewer settings</strong>
+				<button class="icon-button" title="Close settings" onclick={() => { settingsOpen = false; persistPrefs(); }}><X size={17} /></button>
+			</header>
+
+			<section class="settings-section">
+				<h3>Layout</h3>
+				<label class="settings-row">
+					<span>
+						<span class="label-title">Auto layout</span>
+						<span class="label-desc">Two pages in landscape, one page in portrait</span>
+					</span>
+					<input
+						type="checkbox"
+						bind:checked={autoLayout}
+						onchange={() => {
+							if (autoLayout) {
+								const landscape = window.matchMedia('(orientation: landscape)').matches;
+								dual = landscape && (host?.clientWidth ?? window.innerWidth) >= 720;
+							}
+							persistPrefs();
+							void render({ quiet: hasPainted });
+						}}
+					/>
+				</label>
+				<label class="settings-row" class:disabled={autoLayout}>
+					<span>
+						<span class="label-title">Two-page view</span>
+						<span class="label-desc">{autoLayout ? 'Controlled by orientation' : 'Show two pages side by side'}</span>
+					</span>
+					<input
+						type="checkbox"
+						bind:checked={dual}
+						disabled={autoLayout}
+						onchange={() => {
+							persistPrefs();
+							void render({ quiet: hasPainted });
+						}}
+					/>
+				</label>
+			</section>
+
+			<section class="settings-section">
+				<h3>Annotations</h3>
+				<label class="settings-row">
+					<span>
+						<span class="label-title">Show annotations</span>
+						<span class="label-desc">Pens, highlights, symbols, and text</span>
+					</span>
+					<input type="checkbox" bind:checked={annotationsVisible} onchange={toggleAnnotations} />
+				</label>
+				<label class="settings-row">
+					<span class="label-title">Text size</span>
+					<input type="range" min="10" max="36" bind:value={textSize} />
+					<span class="range-value">{textSize}px</span>
+				</label>
+			</section>
+
+			<section class="settings-section">
+				<h3>Shortcuts</h3>
+				<ul class="shortcut-list">
+					<li><kbd>F</kbd> Reading mode</li>
+					<li><kbd>←</kbd> <kbd>→</kbd> / <kbd>Space</kbd> Page turn</li>
+					<li><kbd>Ctrl</kbd> + scroll Zoom</li>
+					<li><kbd>Esc</kbd> Back / close</li>
+					<li><kbd>P</kbd> Pen · <kbd>H</kbd> Highlight · <kbd>E</kbd> Eraser</li>
+				</ul>
+			</section>
+
+			<footer class="settings-footer">
+				<button class="text-button primary" onclick={() => { settingsOpen = false; persistPrefs(); }}>Done</button>
+			</footer>
 		</div>
 	{/if}
 </div>
@@ -1180,8 +1280,12 @@
 		-ms-overflow-style: none;
 		display: flex;
 		justify-content: center;
+		align-items: flex-start;
 		padding: 28px;
 		background: radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%);
+		scroll-behavior: smooth;
+		overscroll-behavior: contain;
+		-webkit-overflow-scrolling: touch;
 	}
 	.workspace::-webkit-scrollbar { display: none; }
 
@@ -1196,22 +1300,47 @@
 	.pages.dual {
 		gap: 0;
 	}
+	.pages.transitioning .page-shell {
+		opacity: 0.55;
+		transition: opacity 120ms ease;
+	}
 	.pages.dual .page-shell { box-shadow: 0 18px 55px rgba(0,0,0,.42); }
+	/* Realistic inner-page gutter gradients (book-like) */
 	.pages.dual .page-shell::after {
 		content: '';
 		position: absolute;
 		top: 0; bottom: 0;
-		width: 12px;
+		width: 28px;
 		pointer-events: none;
-		background: linear-gradient(90deg, rgba(0,0,0,.12), rgba(0,0,0,0));
+		z-index: 2;
 	}
-	.pages.dual .page-shell:first-child::after { right: 0; }
-	.pages.dual .page-shell:last-child::after { left: 0; transform: scaleX(-1); }
+	.pages.dual .page-shell:first-child::after {
+		right: 0;
+		background: linear-gradient(
+			to right,
+			rgba(0, 0, 0, 0) 0%,
+			rgba(0, 0, 0, 0.04) 35%,
+			rgba(0, 0, 0, 0.14) 70%,
+			rgba(0, 0, 0, 0.28) 100%
+		);
+	}
+	.pages.dual .page-shell:last-child::after {
+		left: 0;
+		background: linear-gradient(
+			to left,
+			rgba(0, 0, 0, 0) 0%,
+			rgba(0, 0, 0, 0.04) 35%,
+			rgba(0, 0, 0, 0.14) 70%,
+			rgba(0, 0, 0, 0.28) 100%
+		);
+	}
 	.page-shell {
 		position: relative;
 		flex: 0 0 auto;
 		background: #fff;
 		box-shadow: 0 18px 55px rgba(0, 0, 0, 0.42);
+		will-change: opacity, transform;
+		transition: opacity 140ms ease;
 	}
 	.pdf-canvas,
 	.ink-canvas {
@@ -1583,27 +1712,140 @@
 		font-size: 9px;
 		white-space: nowrap;
 	}
+	.settings-backdrop {
+		position: absolute;
+		inset: 0;
+		z-index: 54;
+		background: rgba(0, 0, 0, 0.35);
+		backdrop-filter: blur(2px);
+		animation: settings-in 160ms cubic-bezier(.2,.8,.2,1);
+	}
 	.settings-card {
 		position: absolute;
 		z-index: 55;
-		top: 50px;
+		top: 56px;
 		right: 12px;
-		width: 250px;
+		width: min(320px, calc(100vw - 24px));
+		max-height: calc(100% - 80px);
+		overflow: auto;
 		display: flex;
 		flex-direction: column;
-		gap: 11px;
-		padding: 15px;
+		gap: 0;
+		padding: 0;
 		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 14px;
-		background: #22221e;
-		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+		border-radius: 16px;
+		background: #1c1c19;
+		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+		font-size: 12px;
+		animation: settings-in 180ms cubic-bezier(.2,.8,.2,1);
+	}
+	.settings-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 14px 14px 10px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	}
+	.settings-header strong {
+		font-size: 13px;
+		font-weight: 600;
+		letter-spacing: 0.01em;
+	}
+	.settings-section {
+		padding: 12px 14px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+	}
+	.settings-section h3 {
+		margin: 0 0 10px;
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: #8a8a82;
+	}
+	.settings-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		margin-bottom: 10px;
+		color: #d4d4cc;
+	}
+	.settings-row:last-child {
+		margin-bottom: 0;
+	}
+	.settings-row.disabled {
+		opacity: 0.45;
+		pointer-events: none;
+	}
+	.settings-row .label-title {
+		display: block;
+		font-size: 12px;
+		font-weight: 500;
+		color: #f0f0ea;
+	}
+	.settings-row .label-desc {
+		display: block;
+		margin-top: 2px;
+		font-size: 10px;
+		line-height: 1.35;
+		color: #8a8a82;
+	}
+	.settings-row input[type='checkbox'] {
+		width: 18px;
+		height: 18px;
+		accent-color: #c2410c;
+		flex-shrink: 0;
+	}
+	.settings-row input[type='range'] {
+		flex: 1;
+		min-width: 0;
+		accent-color: #c2410c;
+	}
+	.settings-row .range-value {
+		min-width: 34px;
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+		color: #aaa9a0;
 		font-size: 11px;
 	}
-	.settings-card label {
+	.shortcut-list {
+		margin: 0;
+		padding: 0;
+		list-style: none;
 		display: flex;
-		justify-content: space-between;
-		align-items: center;
+		flex-direction: column;
+		gap: 6px;
 		color: #aaa9a0;
+		font-size: 11px;
+	}
+	.shortcut-list kbd {
+		display: inline-block;
+		min-width: 1.4em;
+		padding: 1px 5px;
+		border-radius: 4px;
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		background: rgba(255, 255, 255, 0.06);
+		font-size: 10px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		color: #e8e8e0;
+		text-align: center;
+	}
+	.settings-footer {
+		padding: 12px 14px 14px;
+		display: flex;
+		justify-content: flex-end;
+	}
+	.settings-footer .text-button.primary {
+		background: #c2410c;
+		color: #fff;
+		border: none;
+		padding: 8px 16px;
+		border-radius: 8px;
+		font-weight: 600;
+	}
+	.settings-footer .text-button.primary:hover {
+		background: #d97706;
 	}
 	.hint {
 		margin: 0;
