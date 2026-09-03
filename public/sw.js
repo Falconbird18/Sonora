@@ -1,21 +1,27 @@
-const CACHE = 'sonora-shell-v1';
-const APP_SHELL = ['/', '/index.html', '/favicon.svg', '/manifest.webmanifest'];
-
+/* Sonora desktop builds must not use a service worker.
+ * Older builds may still have one registered under tauri.localhost;
+ * this file unregisters itself and clears caches so asset loads work again.
+ */
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+      const regs = await self.registration.unregister();
+      const clients = await self.clients.matchAll({ type: 'window' });
+      for (const client of clients) {
+        client.navigate(client.url);
+      }
+      return regs;
+    })()
+  );
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET' || new URL(event.request.url).origin !== self.location.origin) return;
-  event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
-      const copy = response.clone();
-      caches.open(CACHE).then((cache) => cache.put(event.request, copy));
-      return response;
-    }).catch(() => caches.match('/index.html')))
-  );
+  // Never intercept — always hit the network / Tauri custom protocol.
+  return;
 });

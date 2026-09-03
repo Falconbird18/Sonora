@@ -56,6 +56,17 @@
           if (event instanceof ErrorEvent) showError(event.error || event.message);
         });
         window.addEventListener('unhandledrejection', (event) => showError(event.reason));
+
+        // Kill any leftover PWA service worker from older builds. A stale SW under
+        // tauri.localhost was serving index.html (text/html) for JS modules.
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then((regs) => {
+            for (const reg of regs) reg.unregister();
+          }).catch(() => {});
+          if (window.caches && caches.keys) {
+            caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).catch(() => {});
+          }
+        }
       })();
     </script>
     <script type="module" src="./src/main.ts"></script>
