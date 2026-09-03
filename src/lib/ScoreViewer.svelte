@@ -1,3 +1,2023 @@
 <script lang="ts">
-// temporary stub - will be replaced
+	import { onMount, tick } from 'svelte';
+	import { loadAnnotations, saveAnnotation, flushAnnotationSaves, requestPersistentStorage } from './annotationStore';
+	import type { ScoreItem, Stroke, Point, SymbolStamp, TextNote } from './types';
+	import { MUSIC_SYMBOLS, MUSIC_SYMBOL_CATEGORIES } from './musicSymbols';
+	import { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';
+	import {
+		acquireScreenWakeLock,
+		releaseScreenWakeLock
+	} from './wakeLock';
+	import type { PdfDocumentProxy, PdfPageProxy, PdfRenderTask } from './pdfUtils';
+	import {
+		ArrowLeft,
+		ArrowUpRight,
+		Bookmark,
+		BookmarkCheck,
+		ChevronLeft,
+		ChevronRight,
+		Columns2,
+		Download,
+		Eraser,
+		Eye,
+		EyeOff,
+		Highlighter,
+		Maximize2,
+		Minimize2,
+		Minus,
+		MousePointer2,
+		Music2,
+		PenTool,
+		Printer,
+		Redo2,
+		Search,
+		Settings2,
+		Type,
+		Undo2,
+		X,
+		ZoomIn,
+		ZoomOut,
+		Pencil,
+		Check,
+		Scan,
+		StretchHorizontal
+	} from '@lucide/svelte';
+	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
+
+	type Tool = 'move' | 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';
+	type Fit = 'page' | 'width';
+	type Snapshot = { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] };
+	type TextEditor = { page: number; x: number; y: number; text: string; id?: string };
+
+	let pdf = $state<PdfDocumentProxy | null>(null);
+	let openedPdf: Awaited<ReturnType<typeof openPdfSource>> | null = null;
+	let page = $state(1);
+	let pageInput = $state('1');
+	let zoom = $state(1);
+	let fit = $state<Fit>('page');
+	let dual = $state(false);
+	let autoLayout = $state(true);
+	let keepAwake = $state(true);
+	let wakeLockActive = $state(false);
+	let zoomTimer: ReturnType<typeof setTimeout> | undefined;
+	let pageTransition = $state(false);
+	let loading = $state(false);
+	let loadingText = $state('Opening score…');
+	let error = $state('');
+	let controls = $state(false);
+	let reading = $state(false);
+	let searchOpen = $state(false);
+	let searchText = $state('');
+	let searchStatus = $state('');
+	let settingsOpen = $state(false);
+	let bookmarked = $state(false);
+	let annotationsVisible = $state(true);
+	let tool = $state<Tool>('move');
+	let color = $state('#c2410c');
+	let width = $state(3);
+	let selectedSymbol = $state(MUSIC_SYMBOLS[0]);
+	let symbolCategory = $state<(typeof MUSIC_SYMBOL_CATEGORIES)[number]>('Clefs');
+	let symbolSearch = $state('');
+	let symbolSize = $state(34);
+	let recentSymbols = $state<string[]>([]);
+	let textSize = $state(18);
+	let textEditor = $state<TextEditor | null>(null);
+	let strokes = $state<Record<number, Stroke[]>>({});
+	let stamps = $state<Record<number, SymbolStamp[]>>({});
+	let notes = $state<Record<number, TextNote[]>>({});
+	let histories = $state<Record<number, Snapshot[]>>({});
+	let historyIndex = $state<Record<number, number>>({});
+	let host = $state<HTMLElement | null>(null);
+	let leftPdf = $state<HTMLCanvasElement | null>(null);
+	let rightPdf = $state<HTMLCanvasElement | null>(null);
+	let leftInk = $state<HTMLCanvasElement | null>(null);
+	let rightInk = $state<HTMLCanvasElement | null>(null);
+	let generation = 0;
+	let tasks: PdfRenderTask[] = [];
+	let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+	let prefetchTimer: ReturnType<typeof setTimeout> | undefined;
+	let saveTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	let drawing: {
+		page: number;
+		canvas: HTMLCanvasElement;
+		pointerId: number;
+		stroke?: Stroke;
+		raf?: number;
+	} | null = null;
+	let hasPainted = $state(false);
+	let closed = false;
+	let isFullscreen = $state(false);
+
+	async function flushPendingAnnotations() {
+		const pages = [...saveTimers.keys()];
+		for (const number of pages) {
+			const timer = saveTimers.get(number);
+			if (timer) clearTimeout(timer);
+			saveTimers.delete(number);
+			await saveAnnotations(number);
+		}
+		await flushAnnotationSaves();
+	}
+
+	const prefs = $derived(`sonora-viewer-${score.id}`);
+	const colors = ['#c2410c', '#2563eb', '#15803d', '#a16207', '#7e22ce', '#111827', '#ffffff'];
+	const visiblePages = $derived(
+		pdf ? (dual ? [page, Math.min(pdf.numPages, page + 1)] : [page]) : [page]
+	);
+	const filteredSymbols = $derived(
+		MUSIC_SYMBOLS.filter(
+			(s) =>
+				s.category === symbolCategory &&
+				(!symbolSearch.trim() || s.name.toLowerCase().includes(symbolSearch.toLowerCase()))
+		)
+	);
+	const recentSymbolObjects = $derived(
+		recentSymbols
+			.map((id) => MUSIC_SYMBOLS.find((s) => s.id === id))
+			.filter((s): s is (typeof MUSIC_SYMBOLS)[number] => !!s)
+	);
+	const canUndo = $derived((historyIndex[page] ?? 0) > 0);
+	const canRedo = $derived((historyIndex[page] ?? 0) < (histories[page]?.length ?? 1) - 1);
+
+
+	async function requestWakeLock() {
+		if (!keepAwake || closed) {
+			wakeLockActive = false;
+			return;
+		}
+		const ok = await acquireScreenWakeLock();
+		wakeLockActive = ok;
+	}
+
+	async function releaseWakeLock() {
+		await releaseScreenWakeLock();
+		wakeLockActive = false;
+	}
+
+	onMount(() => {
+		try {
+			const saved = JSON.parse(localStorage.getItem(prefs) || '{}');
+			bookmarked = !!saved.bookmarked;
+			autoLayout = saved.autoLayout !== false;
+			keepAwake = saved.keepAwake !== false;
+			if (typeof saved.dual === 'boolean' && !autoLayout) {
+				dual = saved.dual;
+			} else {
+				dual = window.matchMedia('(orientation: landscape)').matches && window.innerWidth >= 720;
+			}
+			zoom = typeof saved.zoom === 'number' ? saved.zoom : 1;
+			fit = saved.fit === 'width' ? 'width' : 'page';
+			annotationsVisible = saved.annotationsVisible !== false;
+			recentSymbols = Array.isArray(saved.recentSymbols) ? saved.recentSymbols : [];
+			if (typeof saved.page === 'number' && saved.page > 0) {
+				page = saved.page;
+				pageInput = String(saved.page);
+			}
+		} catch {}
+		requestPersistentStorage();
+		void load();
+		void requestWakeLock();
+		const onVisibility = () => {
+			if (document.visibilityState === 'visible') void requestWakeLock();
+			else void releaseWakeLock();
+		};
+		document.addEventListener('visibilitychange', onVisibility);
+		const key = (event: KeyboardEvent) => {
+			if (textEditor) {
+				if (event.key === 'Escape') {
+					event.preventDefault();
+					cancelText();
+				}
+				return;
+			}
+			if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
+				return;
+			if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') {
+				event.preventDefault();
+				next();
+			} else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
+				event.preventDefault();
+				previous();
+			} else if (event.key === '+' || event.key === '=') setZoom(zoom + 0.1);
+			else if (event.key === '-') setZoom(zoom - 0.1);
+			else if (event.key.toLowerCase() === 'f') {
+				event.preventDefault();
+				reading ? exitReading() : enterReading();
+			} else if (event.key.toLowerCase() === 'p') choose('pen');
+			else if (event.key.toLowerCase() === 'h') choose('highlighter');
+			else if (event.key.toLowerCase() === 'e') choose('eraser');
+			else if (event.key.toLowerCase() === 's') choose('symbol');
+			else if (event.key.toLowerCase() === 't') choose('text');
+			else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+				event.preventDefault();
+				undo();
+			} else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+				event.preventDefault();
+				redo();
+			} else if (event.key === 'Escape') {
+				if (settingsOpen || searchOpen || controls || reading) {
+					settingsOpen = false;
+					searchOpen = false;
+					controls = false;
+					if (reading) exitReading();
+					choose('move');
+				} else {
+					void leave();
+				}
+			}
+		};
+		const onFullscreen = () => {
+			isFullscreen = !!document.fullscreenElement;
+		};
+		window.addEventListener('keydown', key);
+		document.addEventListener('fullscreenchange', onFullscreen);
+		const observer = new ResizeObserver(() => {
+			clearTimeout(resizeTimer);
+			resizeTimer = setTimeout(() => void render({ quiet: true }), 100);
+		});
+		if (host) observer.observe(host);
+		return () => {
+			closed = true;
+			window.removeEventListener('keydown', key);
+			document.removeEventListener('fullscreenchange', onFullscreen);
+			document.removeEventListener('visibilitychange', onVisibility);
+			observer.disconnect();
+			clearTimeout(resizeTimer);
+			clearTimeout(prefetchTimer);
+			clearTimeout(zoomTimer);
+			cancelRender();
+			void releaseWakeLock();
+			void flushPendingAnnotations();
+			releaseCanvases();
+			if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+			void destroyDocument();
+		};
+	});
+
+	async function load() {
+		loading = true;
+		error = '';
+		hasPainted = false;
+		loadingText = 'Opening score…';
+		try {
+			await destroyDocument();
+			const hasUrl = !!(score.pdfUrl && score.pdfUrl.length > 0);
+			const hasBlob = !!(score.pdfBlob && score.pdfBlob.size > 0);
+			const hasPath = !!(score.nativePath && score.nativePath.length > 0);
+			if (!hasUrl && !hasBlob && !hasPath) {
+				throw new Error('PDF data is missing. Try refreshing the library and open again.');
+			}
+			const opened = await openPdfSource({
+				url: score.pdfUrl,
+				blob: score.pdfBlob,
+				nativePath: score.nativePath
+			});
+			if (closed) {
+				await closePdf(opened);
+				return;
+			}
+			pdf = opened.document;
+			openedPdf = opened;
+			if (page > pdf.numPages) {
+				page = 1;
+				pageInput = '1';
+			}
+			const records = await loadAnnotations(score.id);
+			for (const record of records) {
+				strokes[record.pageNum] = record.strokes || [];
+				stamps[record.pageNum] = record.stamps || [];
+				notes[record.pageNum] = record.notes || [];
+				histories[record.pageNum] = [
+					{
+						strokes: structuredClone(record.strokes || []),
+						stamps: structuredClone(record.stamps || []),
+						notes: structuredClone(record.notes || [])
+					}
+				];
+				historyIndex[record.pageNum] = 0;
+			}
+			await tick();
+			ensureHistory(page);
+			await render();
+		} catch (reason) {
+			console.error('PDF load failed', reason);
+			error =
+				reason instanceof Error && reason.message.includes('missing')
+					? reason.message
+					: 'This PDF could not be opened by the renderer. Try refreshing the library.';
+		} finally {
+			if (!closed) loading = false;
+		}
+	}
+
+	async function destroyDocument() {
+		cancelRender();
+		const opened = openedPdf;
+		openedPdf = null;
+		pdf = null;
+		if (opened) await closePdf(opened);
+	}
+
+	function releaseCanvases() {
+		for (const canvas of [leftPdf, rightPdf, leftInk, rightInk]) {
+			if (!canvas) continue;
+			try {
+				canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+			} catch {}
+			canvas.width = 0;
+			canvas.height = 0;
+		}
+	}
+
+	async function leave() {
+		await releaseWakeLock();
+		await flushPendingAnnotations();
+		closed = true;
+		if (document.fullscreenElement) {
+			try {
+				await document.exitFullscreen();
+			} catch {}
+		}
+		releaseCanvases();
+		onClose();
+	}
+
+	function cancelRender() {
+		for (const task of tasks) {
+			try {
+				task.cancel();
+			} catch {}
+		}
+		tasks = [];
+	}
+
+	async function render(opts?: { quiet?: boolean }) {
+		if (!pdf || !host || closed) return;
+		cancelRender();
+		const current = ++generation;
+		if (!opts?.quiet || !hasPainted) {
+			loading = true;
+			loadingText = dual ? 'Rendering pages…' : 'Rendering page…';
+		}
+		error = '';
+		try {
+			if (autoLayout) {
+				const landscape = window.matchMedia('(orientation: landscape)').matches;
+				const wideEnough = host.clientWidth >= 720;
+				const nextDual = landscape && wideEnough;
+				if (nextDual !== dual) {
+					dual = nextDual;
+					persistPrefs();
+				}
+			} else if (host.clientWidth < 720) {
+				dual = false;
+			}
+			for (let index = 0; index < visiblePages.length; index++) {
+				await renderPage(visiblePages[index], index, current);
+				if (current !== generation) return;
+			}
+			if (current === generation) hasPainted = true;
+		} catch (reason) {
+			if (
+				!(reason instanceof Error && reason.name === 'RenderingCancelledException') &&
+				current === generation
+			) {
+				console.error('PDF render failed', reason);
+				error = 'This page could not be rendered at the current size. Try Fit Page or reduce zoom.';
+			}
+		} finally {
+			if (current === generation) loading = false;
+		}
+	}
+
+	async function renderPage(number: number, index: number, current: number) {
+		if (!pdf || !host) return;
+		const pdfPage = await pdf.getPage(number);
+		if (current !== generation) return;
+		const base = pdfPage.getViewport({ scale: 1 });
+		const availableWidth = Math.max(
+			280,
+			dual ? (host.clientWidth - 92) / 2 : host.clientWidth - 58
+		);
+		const availableHeight = Math.max(280, host.clientHeight - 72);
+		const desired =
+			(fit === 'width'
+				? availableWidth / base.width
+				: Math.min(availableWidth / base.width, availableHeight / base.height)) * zoom;
+		const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+		const area = Math.max(1, base.width * base.height);
+		const safeScale = Math.sqrt(MAX_CANVAS_PIXELS / (area * dpr * dpr));
+		const scale = Math.max(0.18, Math.min(2.4, desired, safeScale));
+		await paintPage(pdfPage, number, index, scale, dpr, current);
+	}
+
+	async function paintPage(
+		pdfPage: PdfPageProxy,
+		number: number,
+		index: number,
+		scale: number,
+		dpr: number,
+		current: number
+	) {
+		const viewport = pdfPage.getViewport({ scale });
+		const widthPx = Math.ceil(viewport.width);
+		const heightPx = Math.ceil(viewport.height);
+		const canvasW = Math.ceil(widthPx * dpr);
+		const canvasH = Math.ceil(heightPx * dpr);
+		if (canvasW * canvasH > MAX_CANVAS_PIXELS) throw new Error('Canvas exceeds safe pixel budget');
+		const pdfCanvas = index === 0 ? leftPdf : rightPdf;
+		const inkCanvas = index === 0 ? leftInk : rightInk;
+		if (!pdfCanvas || !inkCanvas) return;
+		for (const canvas of [pdfCanvas, inkCanvas]) {
+			canvas.width = canvasW;
+			canvas.height = canvasH;
+			canvas.style.width = `${widthPx}px`;
+			canvas.style.height = `${heightPx}px`;
+		}
+		const context = pdfCanvas.getContext('2d', { alpha: false });
+		if (!context) throw new Error('2D context unavailable');
+		context.setTransform(dpr, 0, 0, dpr, 0, 0);
+		context.fillStyle = '#fff';
+		context.fillRect(0, 0, widthPx, heightPx);
+		const task = pdfPage.render({ canvas: pdfCanvas, canvasContext: context, viewport });
+		tasks.push(task);
+		await task.promise;
+		if (current === generation) {
+			redraw(number, inkCanvas);
+			schedulePrefetch();
+		}
+	}
+
+	function schedulePrefetch() {
+		clearTimeout(prefetchTimer);
+		prefetchTimer = setTimeout(() => {
+			if (!pdf || closed) return;
+			const upcoming = [
+				page + (dual ? 2 : 1),
+				page + (dual ? 4 : 2),
+				Math.max(1, page - 1),
+				Math.max(1, page - (dual ? 2 : 1))
+			];
+			for (const number of upcoming) {
+				if (number >= 1 && number <= pdf.numPages) void pdf.getPage(number).catch(() => {});
+			}
+		}, 60);
+	}
+
+	function position(event: PointerEvent, canvas: HTMLCanvasElement): Point {
+		const rect = canvas.getBoundingClientRect();
+		return {
+			x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+			y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+			pressure: event.pressure || 0.5
+		};
+	}
+	function pointToCanvas(point: Point, canvas: HTMLCanvasElement) {
+		const rect = canvas.getBoundingClientRect();
+		return { x: point.x * rect.width, y: point.y * rect.height };
+	}
+	function choose(nextTool: Tool) {
+		tool = nextTool;
+		if (nextTool === 'move') textEditor = null;
+	}
+
+	function begin(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {
+		if (tool === 'move' || reading || textEditor) return;
+		event.preventDefault();
+		canvas.setPointerCapture(event.pointerId);
+		const point = position(event, canvas);
+		if (tool === 'symbol') {
+			stamps[number] = [
+				...(stamps[number] || []),
+				{
+					id: crypto.randomUUID(),
+					symbol: selectedSymbol.glyph,
+					label: selectedSymbol.name,
+					x: point.x,
+					y: point.y,
+					fontSize: symbolSize,
+					color
+				}
+			];
+			recentSymbols = [selectedSymbol.id, ...recentSymbols.filter((id) => id !== selectedSymbol.id)].slice(
+				0,
+				10
+			);
+			persistPrefs();
+			checkpoint(number);
+			redraw(number, canvas);
+			return;
+		}
+		if (tool === 'text') {
+			openTextEditor(number, point);
+			return;
+		}
+		if (tool === 'eraser') {
+			drawing = { page: number, canvas, pointerId: event.pointerId };
+			erase(point, number, canvas, false);
+			return;
+		}
+		const stroke: Stroke = {
+			id: crypto.randomUUID(),
+			tool: tool === 'highlighter' ? 'highlighter' : 'pen',
+			kind: tool === 'line' ? 'line' : tool === 'arrow' ? 'arrow' : 'freehand',
+			color,
+			width,
+			points: [point]
+		};
+		ensureHistory(number);
+		strokes[number] = [...(strokes[number] || []), stroke];
+		drawing = { page: number, canvas, pointerId: event.pointerId, stroke };
+		redraw(number, canvas);
+	}
+
+	function openTextEditor(number: number, point: Point) {
+		const existing = (notes[number] || []).find(
+			(note) => Math.hypot(note.x - point.x, note.y - point.y) < 0.035
+		);
+		textEditor = {
+			page: number,
+			x: point.x,
+			y: point.y,
+			text: existing?.text || '',
+			id: existing?.id
+		};
+		void tick().then(() =>
+			document.querySelector<HTMLInputElement>('[data-score-text-input]')?.focus()
+		);
+	}
+	function commitText() {
+		if (!textEditor) return;
+		const editor = textEditor;
+		const text = editor.text.trim();
+		if (text) {
+			if (editor.id)
+				notes[editor.page] = (notes[editor.page] || []).map((note) =>
+					note.id === editor.id ? { ...note, text, fontSize: textSize, color } : note
+				);
+			else
+				notes[editor.page] = [
+					...(notes[editor.page] || []),
+					{ id: crypto.randomUUID(), text, x: editor.x, y: editor.y, fontSize: textSize, color }
+				];
+			checkpoint(editor.page);
+		}
+		textEditor = null;
+		const canvas = editor.page === visiblePages[0] ? leftInk : rightInk;
+		redraw(editor.page, canvas);
+	}
+	function cancelText() {
+		textEditor = null;
+	}
+
+	function move(event: PointerEvent) {
+		if (!drawing) return;
+		for (const pointEvent of event.getCoalescedEvents?.() || [event]) {
+			if (drawing.stroke) {
+				const stroke = (strokes[drawing.page] || []).find((item) => item.id === drawing?.stroke?.id);
+				if (stroke) {
+					const point = position(pointEvent, drawing.canvas);
+					stroke.points =
+						stroke.kind === 'line' || stroke.kind === 'arrow'
+							? [stroke.points[0], point]
+							: [...stroke.points, point];
+				}
+			} else erase(position(pointEvent, drawing.canvas), drawing.page, drawing.canvas, false);
+		}
+		if (!drawing.raf)
+			drawing.raf = requestAnimationFrame(() => {
+				if (drawing) redraw(drawing.page, drawing.canvas);
+				if (drawing) drawing.raf = undefined;
+			});
+	}
+	function end() {
+		if (!drawing) return;
+		const active = drawing;
+		if (active.raf) cancelAnimationFrame(active.raf);
+		drawing = null;
+		try {
+			active.canvas.releasePointerCapture(active.pointerId);
+		} catch {}
+		redraw(active.page, active.canvas);
+		checkpoint(active.page);
+	}
+	function erase(point: Point, number: number, canvas: HTMLCanvasElement | null, save = true) {
+		const radius = Math.max(0.01, width / 700);
+		let changed = false;
+		const before = strokes[number] || [];
+		const after = before.filter(
+			(stroke) =>
+				!stroke.points.some(
+					(candidate) => Math.hypot(candidate.x - point.x, candidate.y - point.y) < radius
+				)
+		);
+		if (after.length !== before.length) {
+			strokes[number] = after;
+			changed = true;
+		}
+		const nextStamps = (stamps[number] || []).filter(
+			(stamp) => Math.hypot(stamp.x - point.x, stamp.y - point.y) > radius * 1.6
+		);
+		if (nextStamps.length !== (stamps[number] || []).length) {
+			stamps[number] = nextStamps;
+			changed = true;
+		}
+		const nextNotes = (notes[number] || []).filter(
+			(note) => Math.hypot(note.x - point.x, note.y - point.y) > radius * 1.8
+		);
+		if (nextNotes.length !== (notes[number] || []).length) {
+			notes[number] = nextNotes;
+			changed = true;
+		}
+		if (changed) {
+			if (canvas) redraw(number, canvas);
+			if (save) checkpoint(number);
+		}
+	}
+
+	function redraw(number: number, canvas: HTMLCanvasElement | null) {
+		if (!canvas) return;
+		const context = canvas.getContext('2d')!;
+		const rect = canvas.getBoundingClientRect();
+		const scale = canvas.width / Math.max(1, rect.width);
+		context.setTransform(scale, 0, 0, scale, 0, 0);
+		context.clearRect(0, 0, rect.width, rect.height);
+		if (!annotationsVisible) return;
+		for (const stroke of strokes[number] || []) drawStroke(context, stroke, canvas);
+		context.save();
+		context.textAlign = 'center';
+		context.textBaseline = 'middle';
+		for (const stamp of stamps[number] || []) {
+			const p = pointToCanvas({ x: stamp.x, y: stamp.y }, canvas);
+			context.font = `${stamp.fontSize}px Leland, serif`;
+			context.fillStyle = stamp.color;
+			context.fillText(stamp.symbol, p.x, p.y);
+		}
+		context.restore();
+		for (const note of notes[number] || []) {
+			const p = pointToCanvas({ x: note.x, y: note.y }, canvas);
+			context.save();
+			context.font = `600 ${note.fontSize}px system-ui,sans-serif`;
+			context.fillStyle = note.color;
+			context.textBaseline = 'top';
+			context.shadowColor = 'rgba(255,255,255,.85)';
+			context.shadowBlur = 3;
+			context.fillText(note.text, p.x, p.y);
+			context.restore();
+		}
+	}
+	function drawStroke(context: CanvasRenderingContext2D, stroke: Stroke, canvas: HTMLCanvasElement) {
+		if (!stroke.points.length) return;
+		const points = stroke.points.map((p) => pointToCanvas(p, canvas));
+		context.save();
+		context.strokeStyle = stroke.color;
+		context.fillStyle = stroke.color;
+		context.lineWidth = stroke.width;
+		context.lineCap = 'round';
+		context.lineJoin = 'round';
+		if (stroke.tool === 'highlighter') context.globalAlpha = 0.28;
+		if (stroke.kind === 'line' || stroke.kind === 'arrow') {
+			const a = points[0];
+			const b = points[points.length - 1];
+			context.beginPath();
+			context.moveTo(a.x, a.y);
+			context.lineTo(b.x, b.y);
+			context.stroke();
+			if (stroke.kind === 'arrow') {
+				const angle = Math.atan2(b.y - a.y, b.x - a.x);
+				const size = Math.max(8, stroke.width * 3);
+				context.beginPath();
+				context.moveTo(b.x, b.y);
+				context.lineTo(
+					b.x - size * Math.cos(angle - Math.PI / 6),
+					b.y - size * Math.sin(angle - Math.PI / 6)
+				);
+				context.lineTo(
+					b.x - size * Math.cos(angle + Math.PI / 6),
+					b.y - size * Math.sin(angle + Math.PI / 6)
+				);
+				context.closePath();
+				context.fill();
+			}
+		} else {
+			context.beginPath();
+			context.moveTo(points[0].x, points[0].y);
+			for (let i = 1; i < points.length; i++) context.lineTo(points[i].x, points[i].y);
+			context.stroke();
+		}
+		context.restore();
+	}
+
+	function snapshot(number: number): Snapshot {
+		return {
+			strokes: structuredClone(strokes[number] || []),
+			stamps: structuredClone(stamps[number] || []),
+			notes: structuredClone(notes[number] || [])
+		};
+	}
+	function ensureHistory(number: number) {
+		if (!histories[number]) {
+			histories[number] = [snapshot(number)];
+			historyIndex[number] = 0;
+		}
+	}
+	function checkpoint(number: number) {
+		ensureHistory(number);
+		const list = histories[number];
+		const index = historyIndex[number] ?? list.length - 1;
+		const nextList = [...list.slice(0, index + 1), snapshot(number)].slice(-80);
+		histories[number] = nextList;
+		historyIndex[number] = nextList.length - 1;
+		scheduleSave(number);
+	}
+	function applySnapshot(number: number, state: Snapshot) {
+		strokes[number] = structuredClone(state.strokes);
+		stamps[number] = structuredClone(state.stamps);
+		notes[number] = structuredClone(state.notes);
+		redraw(number, number === visiblePages[0] ? leftInk : rightInk);
+		scheduleSave(number);
+	}
+	function undo() {
+		ensureHistory(page);
+		const index = historyIndex[page] ?? 0;
+		if (index > 0) {
+			historyIndex[page] = index - 1;
+			applySnapshot(page, histories[page][index - 1]);
+		}
+	}
+	function redo() {
+		ensureHistory(page);
+		const index = historyIndex[page] ?? 0;
+		if (index < histories[page].length - 1) {
+			historyIndex[page] = index + 1;
+			applySnapshot(page, histories[page][index + 1]);
+		}
+	}
+	function scheduleSave(number: number) {
+		const old = saveTimers.get(number);
+		if (old) clearTimeout(old);
+		saveTimers.set(number, setTimeout(() => {
+			saveTimers.delete(number);
+			void saveAnnotations(number).catch((error) => console.error('Annotation save failed', error));
+		}, 150));
+	}
+	async function saveAnnotations(number: number) {
+		await saveAnnotation(score.id, number, {
+			strokes: $state.snapshot(strokes[number] || []),
+			stamps: $state.snapshot(stamps[number] || []),
+			notes: $state.snapshot(notes[number] || [])
+		});
+	}
+
+	function persistPrefs() {
+		localStorage.setItem(
+			prefs,
+			JSON.stringify({ bookmarked, dual, autoLayout, keepAwake, zoom, fit, annotationsVisible, recentSymbols, page })
+		);
+	}
+	function setZoom(value: number) {
+		zoom = Math.max(0.4, Math.min(2.5, Number(value.toFixed(2))));
+		persistPrefs();
+		clearTimeout(zoomTimer);
+		// Debounce expensive re-render so continuous zoom (wheel / buttons) feels responsive
+		zoomTimer = setTimeout(() => void render({ quiet: hasPainted }), 90);
+	}
+	function setFit(value: Fit) {
+		fit = value;
+		zoom = 1;
+		persistPrefs();
+		void render({ quiet: hasPainted });
+	}
+	function next() {
+		if (!pdf) return;
+		pageTransition = true;
+		page = Math.min(pdf.numPages, dual ? Math.min(pdf.numPages, page + 2) : page + 1);
+		pageInput = String(page);
+		ensureHistory(page);
+		persistPrefs();
+		void render({ quiet: hasPainted }).finally(() => {
+			requestAnimationFrame(() => { pageTransition = false; });
+		});
+	}
+	function previous() {
+		pageTransition = true;
+		page = Math.max(1, dual ? page - 2 : page - 1);
+		pageInput = String(page);
+		ensureHistory(page);
+		persistPrefs();
+		void render({ quiet: hasPainted }).finally(() => {
+			requestAnimationFrame(() => { pageTransition = false; });
+		});
+	}
+	function goToPage() {
+		const value = Math.max(1, Math.min(pdf?.numPages || 1, Number.parseInt(pageInput, 10) || 1));
+		page = dual && value % 2 === 0 ? value - 1 : value;
+		pageInput = String(page);
+		ensureHistory(page);
+		persistPrefs();
+		void render({ quiet: hasPainted });
+	}
+	function toggleBookmark() {
+		bookmarked = !bookmarked;
+		persistPrefs();
+	}
+	function toggleAnnotations() {
+		annotationsVisible = !annotationsVisible;
+		persistPrefs();
+		for (const number of visiblePages)
+			redraw(number, number === visiblePages[0] ? leftInk : rightInk);
+	}
+	function toggleControls() {
+		controls = !controls;
+		if (!controls) {
+			settingsOpen = false;
+			choose('move');
+		}
+	}
+	function enterReading() {
+		reading = true;
+		controls = false;
+		settingsOpen = false;
+		searchOpen = false;
+		choose('move');
+	}
+	function exitReading() {
+		reading = false;
+	}
+	function onWheel(event: WheelEvent) {
+		if (!(event.ctrlKey || event.metaKey)) return;
+		event.preventDefault();
+		setZoom(zoom + (event.deltaY > 0 ? -0.1 : 0.1));
+	}
+	async function searchPdf() {
+		if (!pdf || !searchText.trim()) return;
+		searchStatus = 'Searching…';
+		const needle = searchText.trim().toLowerCase();
+		for (let number = 1; number <= pdf.numPages; number++) {
+			try {
+				const p = await pdf.getPage(number);
+				const content = await p.getTextContent();
+				const text = content.items
+					.map((item) => ('str' in item ? item.str : ''))
+					.join(' ')
+					.toLowerCase();
+				if (text.includes(needle)) {
+					page = number;
+					pageInput = String(number);
+					searchStatus = `Found on page ${number}`;
+					persistPrefs();
+					void render({ quiet: hasPainted });
+					return;
+				}
+			} catch {}
+		}
+		searchStatus = 'Not found';
+	}
+	function downloadScore() {
+		const href = score.pdfUrl || (score.pdfBlob ? URL.createObjectURL(score.pdfBlob) : '');
+		if (!href) return;
+		const link = document.createElement('a');
+		link.href = href;
+		link.download = `${score.title}.pdf`;
+		link.target = '_blank';
+		link.rel = 'noopener';
+		link.click();
+		if (score.pdfBlob && !score.pdfUrl) setTimeout(() => URL.revokeObjectURL(href), 1000);
+	}
+	function printScore() {
+		window.print();
+	}
+	async function toggleFullScreen() {
+		if (!document.fullscreenElement) await host?.requestFullscreen();
+		else await document.exitFullscreen();
+	}
 </script>
+
+<svelte:head><title>{score.title} — Sonora</title></svelte:head>
+
+<div class="viewer" bind:this={host} class:reading>
+	{#if !reading}
+		<header class="topbar">
+			<div class="topbar-left">
+				<button class="icon-button" title="Back to library" aria-label="Back to library" onclick={() => void leave()}
+					><ArrowLeft size={19} /></button>
+				<div class="score-title">
+					<strong>{score.title}</strong><span>{score.composer}</span>
+				</div>
+			</div>
+			<div class="page-controls">
+				<button class="icon-button" title="Previous page" aria-label="Previous page" onclick={previous} disabled={page <= 1}
+					><ChevronLeft size={19} /></button>
+				<input aria-label="Page number" bind:value={pageInput} onkeydown={(e) => e.key === 'Enter' && goToPage()} onblur={goToPage} />
+				<span>/ {pdf?.numPages ?? score.totalPages}</span>
+				<button class="icon-button" title="Next page" aria-label="Next page" onclick={next} disabled={!pdf || page >= pdf.numPages}
+					><ChevronRight size={19} /></button>
+			</div>
+			<div class="topbar-right">
+				<button class="icon-button" class:active={bookmarked} title={bookmarked ? 'Remove bookmark' : 'Bookmark score'} onclick={toggleBookmark}
+					>{#if bookmarked}<BookmarkCheck size={18} />{:else}<Bookmark size={18} />{/if}</button>
+				<button class="icon-button" title="Search score" onclick={() => (searchOpen = !searchOpen)}><Search size={18} /></button>
+				<button class="icon-button" title="Print" onclick={printScore}><Printer size={18} /></button>
+				<button class="icon-button" title="Download PDF" onclick={downloadScore}><Download size={18} /></button>
+				<button class="icon-button" title="Reading mode (F)" onclick={enterReading}><Eye size={18} /></button>
+			</div>
+		</header>
+	{:else}
+		<button class="reading-exit" title="Exit reading mode" aria-label="Exit reading mode" onclick={exitReading}
+			><Minimize2 size={17} /><span>Exit reading</span></button>
+	{/if}
+
+	{#if !reading}
+		<footer class="bottombar">
+			<div class="footer-section">
+				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Scan size={16} /></button>
+				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><StretchHorizontal size={17} /></button>
+				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.1)}><ZoomOut size={17} /></button>
+				<span>{Math.round(zoom * 100)}%</span>
+				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.1)}><ZoomIn size={17} /></button>
+			</div>
+			<div class="footer-section">
+				<button
+					class:active={dual}
+					class="text-button"
+					onclick={() => {
+						autoLayout = false;
+						dual = !dual;
+						persistPrefs();
+						void render({ quiet: hasPainted });
+					}}><Columns2 size={15} />{dual ? 'Single page' : 'Two pages'}</button>
+				<button class="icon-button" title="Show/hide annotations" onclick={toggleAnnotations}
+					>{#if annotationsVisible}<Eye size={17} />{:else}<EyeOff size={17} />{/if}</button>
+				<button class="icon-button" title="Fullscreen" onclick={toggleFullScreen}
+					>{#if isFullscreen}<Minimize2 size={17} />{:else}<Maximize2 size={17} />{/if}</button>
+				<button class="icon-button" title="Settings" onclick={() => (settingsOpen = !settingsOpen)}><Settings2 size={17} /></button>
+			</div>
+		</footer>
+	{/if}
+
+
+	{#if searchOpen && !reading}<div class="search-panel">
+			<Search size={17} /><input bind:value={searchText} placeholder="Find text in this score…" onkeydown={(e) => e.key === 'Enter' && searchPdf()} />
+			<button class="text-button" onclick={searchPdf}>Find</button>
+			<span>{searchStatus}</span>
+			<button class="icon-button" aria-label="Close search" onclick={() => (searchOpen = false)}><X size={17} /></button>
+		</div>{/if}
+
+	<main class="workspace" onwheel={onWheel}>
+		<div class="pages" class:dual class:transitioning={pageTransition}>
+			<div class="page-shell">
+				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
+				<canvas
+					class="ink-canvas"
+					class:interactive={tool !== 'move' && !reading}
+					bind:this={leftInk}
+					onpointerdown={(event) => begin(event, visiblePages[0], leftInk!)}
+					onpointermove={move}
+					onpointerup={end}
+					onpointercancel={end}></canvas>
+				{#if textEditor && textEditor.page === visiblePages[0]}
+					<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>
+						<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />
+						<button title="Save" onclick={commitText}><Check size={15} /></button>
+						<button title="Cancel" onclick={cancelText}><X size={15} /></button>
+					</div>
+				{/if}
+			</div>
+			{#if dual && visiblePages.length > 1}
+				<div class="page-shell">
+					<canvas class="pdf-canvas" bind:this={rightPdf}></canvas>
+					<canvas
+						class="ink-canvas"
+						class:interactive={tool !== 'move' && !reading}
+						bind:this={rightInk}
+						onpointerdown={(event) => begin(event, visiblePages[1], rightInk!)}
+						onpointermove={move}
+						onpointerup={end}
+						onpointercancel={end}></canvas>
+					{#if textEditor && textEditor.page === visiblePages[1]}
+						<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>
+							<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />
+							<button title="Save" onclick={commitText}><Check size={15} /></button>
+							<button title="Cancel" onclick={cancelText}><X size={15} /></button>
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</div>
+		{#if loading && !hasPainted}
+			<div class="loading"><span></span><span>{loadingText}</span></div>
+		{/if}
+		{#if loading && hasPainted}
+			<div class="loading subtle"><span></span></div>
+		{/if}
+		{#if error}
+			<div class="error">
+				<strong>Unable to display this score</strong><span>{error}</span>
+				<button onclick={() => void load()}>Retry</button>
+			</div>
+		{/if}
+	</main>
+
+	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor || tool !== 'move'}></button>
+	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor || tool !== 'move'}></button>
+
+	{#if !reading && !controls}
+		<button class="annotation-toggle" title="Annotation tools" aria-label="Open annotation tools" onclick={toggleControls}><Pencil size={18} /></button>
+	{/if}
+	{#if !reading && controls}
+		<aside class="annotation-bar">
+			<div class="tool-group">
+				<button class:active={tool === 'move'} class="tool-button" title="Move" onclick={() => choose('move')}><MousePointer2 size={18} /><span>Move</span></button>
+				<button class:active={tool === 'pen'} class="tool-button" title="Pen (P)" onclick={() => choose('pen')}><PenTool size={18} /><span>Pen</span></button>
+				<button class:active={tool === 'highlighter'} class="tool-button" title="Highlighter (H)" onclick={() => choose('highlighter')}><Highlighter size={18} /><span>Highlight</span></button>
+				<button class:active={tool === 'line'} class="tool-button" title="Line" onclick={() => choose('line')}><Minus size={18} /><span>Line</span></button>
+				<button class:active={tool === 'arrow'} class="tool-button" title="Arrow" onclick={() => choose('arrow')}><ArrowUpRight size={18} /><span>Arrow</span></button>
+				<button class:active={tool === 'eraser'} class="tool-button" title="Eraser (E)" onclick={() => choose('eraser')}><Eraser size={18} /><span>Erase</span></button>
+				<button class:active={tool === 'symbol'} class="tool-button" title="Symbols (S)" onclick={() => choose('symbol')}><Music2 size={18} /><span>Symbols</span></button>
+				<button class:active={tool === 'text'} class="tool-button" title="Text (T)" onclick={() => choose('text')}><Type size={18} /><span>Text</span></button>
+			</div>
+			<div class="divider"></div>
+			<div class="tool-group compact">
+				<button class="icon-button" title="Undo" disabled={!canUndo} onclick={undo}><Undo2 size={18} /></button>
+				<button class="icon-button" title="Redo" disabled={!canRedo} onclick={redo}><Redo2 size={18} /></button>
+				<div class="color-row">
+					{#each colors as swatch}
+						<button class="swatch" class:selected={color === swatch} style={`--swatch:${swatch}`} title={swatch} onclick={() => (color = swatch)}></button>
+					{/each}
+				</div>
+				<label class="range-label">Size <input type="range" min="1" max="14" bind:value={width} /></label>
+				<button class="icon-button" title="Close annotation tools" onclick={toggleControls}><X size={18} /></button>
+			</div>
+		</aside>
+	{/if}
+
+	{#if !reading && controls && tool === 'symbol'}
+		<section class="symbol-palette">
+			<div class="palette-header">
+				<div>
+					<strong>Musical symbols</strong>
+					<span>Leland notation font · select a symbol, then click the score</span>
+				</div>
+				<input bind:value={symbolSearch} placeholder="Search symbols" />
+			</div>
+			{#if recentSymbolObjects.length}
+				<div class="recent-row">
+					<span>Recent</span>
+					{#each recentSymbolObjects as symbol}
+						<button class:selected={selectedSymbol.id === symbol.id} title={symbol.name} onclick={() => (selectedSymbol = symbol)}><span>{symbol.glyph}</span></button>
+					{/each}
+				</div>
+			{/if}
+			<div class="category-row">
+				{#each MUSIC_SYMBOL_CATEGORIES as category}
+					<button class:active={symbolCategory === category} onclick={() => (symbolCategory = category)}>{category}</button>
+				{/each}
+			</div>
+			<div class="symbol-grid">
+				{#each filteredSymbols as symbol}
+					<button class:selected={selectedSymbol.id === symbol.id} class="symbol-button" title={symbol.name} onclick={() => (selectedSymbol = symbol)}
+						><span>{symbol.glyph}</span><small>{symbol.name}</small></button>
+				{/each}
+			</div>
+			<div class="palette-footer">
+				<span>{selectedSymbol.name}</span>
+				<label>Symbol size <input type="range" min="18" max="72" bind:value={symbolSize} /></label>
+			</div>
+		</section>
+	{/if}
+
+
+	{#if settingsOpen && !reading}
+		<div class="settings-backdrop" role="presentation" onclick={() => { settingsOpen = false; persistPrefs(); }}></div>
+		<div class="settings-card" role="dialog" aria-label="Viewer settings">
+			<header class="settings-header">
+				<strong>Viewer settings</strong>
+				<button class="icon-button" title="Close settings" onclick={() => { settingsOpen = false; persistPrefs(); }}><X size={17} /></button>
+			</header>
+
+			<section class="settings-section">
+				<h3>Layout</h3>
+				<label class="settings-row">
+					<span>
+						<span class="label-title">Auto layout</span>
+						<span class="label-desc">Two pages in landscape, one page in portrait</span>
+					</span>
+					<input
+						type="checkbox"
+						bind:checked={autoLayout}
+						onchange={() => {
+							if (autoLayout) {
+								const landscape = window.matchMedia('(orientation: landscape)').matches;
+								dual = landscape && (host?.clientWidth ?? window.innerWidth) >= 720;
+							}
+							persistPrefs();
+							void render({ quiet: hasPainted });
+						}}
+					/>
+				</label>
+				<label class="settings-row" class:disabled={autoLayout}>
+					<span>
+						<span class="label-title">Two-page view</span>
+						<span class="label-desc">{autoLayout ? 'Controlled by orientation' : 'Show two pages side by side'}</span>
+					</span>
+					<input
+						type="checkbox"
+						bind:checked={dual}
+						disabled={autoLayout}
+						onchange={() => {
+							persistPrefs();
+							void render({ quiet: hasPainted });
+						}}
+					/>
+				</label>
+				<label class="settings-row">
+					<span>
+						<span class="label-title">Keep screen on</span>
+						<span class="label-desc">{wakeLockActive ? 'Screen will stay awake while viewing' : 'Prevents the display from sleeping while a score is open'}</span>
+					</span>
+					<input
+						type="checkbox"
+						bind:checked={keepAwake}
+						onchange={() => {
+							persistPrefs();
+							if (keepAwake) void requestWakeLock();
+							else void releaseWakeLock();
+						}}
+					/>
+				</label>
+			</section>
+
+			<section class="settings-section">
+				<h3>Annotations</h3>
+				<label class="settings-row">
+					<span>
+						<span class="label-title">Show annotations</span>
+						<span class="label-desc">Pens, highlights, symbols, and text</span>
+					</span>
+					<input type="checkbox" bind:checked={annotationsVisible} onchange={toggleAnnotations} />
+				</label>
+				<label class="settings-row">
+					<span class="label-title">Text size</span>
+					<input type="range" min="10" max="36" bind:value={textSize} />
+					<span class="range-value">{textSize}px</span>
+				</label>
+			</section>
+
+			<section class="settings-section">
+				<h3>Shortcuts</h3>
+				<ul class="shortcut-list">
+					<li><kbd>F</kbd> Reading mode</li>
+					<li><kbd>←</kbd> <kbd>→</kbd> / <kbd>Space</kbd> Page turn</li>
+					<li><kbd>Ctrl</kbd> + scroll Zoom</li>
+					<li><kbd>Esc</kbd> Back / close</li>
+					<li><kbd>P</kbd> Pen · <kbd>H</kbd> Highlight · <kbd>E</kbd> Eraser</li>
+				</ul>
+			</section>
+
+			<footer class="settings-footer">
+				<button class="text-button primary" onclick={() => { settingsOpen = false; persistPrefs(); }}>Done</button>
+			</footer>
+		</div>
+	{/if}
+</div>
+
+<style>
+	@font-face {
+		font-family: Leland;
+		src: url('/fonts/Leland.otf') format('opentype'), url('/Leland.otf') format('opentype');
+		font-display: swap;
+	}
+	.viewer {
+		position: relative;
+		width: 100%;
+		height: 100%;
+		min-height: 0;
+		overflow: hidden;
+		background: #11110f;
+		color: #f4f4f0;
+		font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+	}
+	.topbar {
+		position: relative;
+		z-index: 30;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 9px 14px;
+		background: rgba(25, 25, 22, 0.96);
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+		backdrop-filter: blur(18px);
+	}
+	.bottombar {
+		position: relative;
+		top: 8px;
+		left: 8px;
+		width: calc(100% - 16px);
+		display: flex;
+		justify-content: space-between;
+		z-index: 30;
+	}
+
+	.footer-section {
+    	display: flex;
+        align-items: center;
+        gap: 5px;
+    	z-index: 30;
+    	min-height: 44px;
+    	padding: 5px;
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 14px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
+	}
+
+	.topbar-left,
+	.topbar-right,
+	.page-controls,
+	.footer-section,
+	.tool-group,
+	.color-row {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.topbar-left,
+	.topbar-right {
+		flex: 1;
+	}
+	.topbar-right {
+		justify-content: flex-end;
+	}
+	.score-title {
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.score-title strong {
+		max-width: 42vw;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-size: 13px;
+	}
+	.score-title span {
+		color: #85857d;
+		font-size: 10px;
+		margin-top: 2px;
+	}
+	.page-controls {
+		justify-content: center;
+	}
+	.icon-button,
+	.tool-button,
+	.text-button {
+		border: 1px solid transparent;
+		background: transparent;
+		color: #aaa9a1;
+		border-radius: 9px;
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.icon-button {
+		width: 36px;
+		height: 36px;
+	}
+	.icon-button:hover,
+	.tool-button:hover,
+	.text-button:hover,
+	.icon-button.active,
+	.tool-button.active {
+		background: rgba(255, 255, 255, 0.08);
+		color: #fff;
+	}
+	.icon-button:disabled {
+		opacity: 0.3;
+		cursor: not-allowed;
+	}
+	.text-button {
+		min-height: 36px;
+		padding: 7px 10px;
+		gap: 5px;
+		font-size: 11px;
+		animation: settings-in 160ms cubic-bezier(.2,.8,.2,1);
+	}
+	.page-controls input {
+		width: 48px;
+		height: 34px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 9px;
+		background: #0d0d0b;
+		color: #fff;
+		text-align: center;
+		outline: none;
+	}
+	.page-controls span {
+		color: #77776f;
+		font-size: 11px;
+	}
+	.workspace {
+		position: absolute;
+		inset: 56px 0 8px;
+		overflow: auto;
+		scrollbar-width: none;
+		-ms-overflow-style: none;
+		display: flex;
+		justify-content: center;
+		align-items: flex-start;
+		padding: 28px;
+		background: radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%);
+		scroll-behavior: smooth;
+		overscroll-behavior: contain;
+		-webkit-overflow-scrolling: touch;
+	}
+	.workspace::-webkit-scrollbar { display: none; }
+
+	.pages {
+		display: flex;
+		align-items: flex-start;
+		justify-content: center;
+		gap: 20px;
+		min-width: max-content;
+		margin: auto;
+	}
+	.pages.dual {
+		gap: 0;
+	}
+	.pages.transitioning .page-shell {
+		opacity: 0.55;
+		transition: opacity 120ms ease;
+	}
+	.pages.dual .page-shell { box-shadow: 0 18px 55px rgba(0,0,0,.42); }
+	/* Realistic inner-page gutter gradients (book-like) */
+	.pages.dual .page-shell::after {
+		content: '';
+		position: absolute;
+		top: 0; bottom: 0;
+		width: 28px;
+		pointer-events: none;
+		z-index: 2;
+	}
+	.pages.dual .page-shell:first-child::after {
+		right: 0;
+		background: linear-gradient(
+			to right,
+			rgba(0, 0, 0, 0) 0%,
+			rgba(0, 0, 0, 0.04) 35%,
+			rgba(0, 0, 0, 0.14) 70%,
+			rgba(0, 0, 0, 0.28) 100%
+		);
+	}
+	.pages.dual .page-shell:last-child::after {
+		left: 0;
+		background: linear-gradient(
+			to left,
+			rgba(0, 0, 0, 0) 0%,
+			rgba(0, 0, 0, 0.04) 35%,
+			rgba(0, 0, 0, 0.14) 70%,
+			rgba(0, 0, 0, 0.28) 100%
+		);
+	}
+	.page-shell {
+		position: relative;
+		flex: 0 0 auto;
+		background: #fff;
+		box-shadow: 0 18px 55px rgba(0, 0, 0, 0.42);
+		will-change: opacity, transform;
+		transition: opacity 140ms ease;
+	}
+	.pdf-canvas,
+	.ink-canvas {
+		display: block;
+	}
+	.ink-canvas {
+		position: absolute;
+		inset: 0;
+		touch-action: none;
+		pointer-events: none;
+	}
+	.ink-canvas.interactive {
+		pointer-events: auto;
+		cursor: crosshair;
+	}
+	.page-hit {
+		position: absolute;
+		z-index: 15;
+		top: 56px;
+		bottom: 8px;
+		width: min(9vw, 88px);
+		border: 0;
+		background: transparent;
+		opacity: 0;
+		cursor: pointer;
+	}
+	.page-hit:disabled {
+		pointer-events: none;
+	}
+	.left-hit {
+		left: 0;
+	}
+	.right-hit {
+		right: 0;
+	}
+	.loading,
+	.error {
+		position: absolute;
+		z-index: 50;
+		left: 50%;
+		top: 50%;
+		transform: translate(-50%, -50%);
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 8px;
+		padding: 14px 18px;
+		font-size: 12px;
+		color: #b8b8b0;
+		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 14px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
+	}
+
+	.loading.subtle {
+		padding: 8px;
+		background: rgba(28, 28, 25, 0.55);
+		box-shadow: none;
+		pointer-events: none;
+	}
+	.loading span:first-child {
+		width: 18px;
+		height: 18px;
+		border: 2px solid #55554e;
+		border-top-color: #fff;
+		border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+	}
+	.error strong {
+		color: #fff;
+	}
+	.error span {
+		max-width: 360px;
+		text-align: center;
+		line-height: 1.45;
+	}
+	.error button {
+		border: 0;
+		border-radius: 8px;
+		padding: 7px 11px;
+		cursor: pointer;
+		background: #fff;
+		color: #111;
+	}
+	.annotation-toggle {
+		position: absolute;
+		z-index: 32;
+		left: 16px;
+		bottom: 16px;
+		width: 42px;
+		height: 42px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 12px;
+		background: rgba(28, 28, 25, 0.94);
+		color: #ddd;
+		display: grid;
+		place-items: center;
+		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+		cursor: pointer;
+	}
+	.annotation-bar {
+		position: absolute;
+		z-index: 35;
+		left: 50%;
+		bottom: 8px;
+		transform: translateX(-50%);
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		max-width: calc(100% - 24px);
+		padding: 5px;
+		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 14px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
+	}
+	.tool-button {
+		min-width: 48px;
+		padding: 8px 8px;
+		flex-direction: column;
+		gap: 3px;
+		font-size: 9px;
+	}
+	.divider {
+		width: 1px;
+		height: 31px;
+		background: rgba(255, 255, 255, 0.08);
+	}
+	.compact {
+		gap: 4px;
+	}
+	.color-row {
+		margin-left: 3px;
+	}
+	.swatch {
+		width: 17px;
+		height: 17px;
+		border: 2px solid transparent;
+		border-radius: 50%;
+		background: var(--swatch);
+		cursor: pointer;
+	}
+	.swatch.selected {
+		border-color: #fff;
+		box-shadow: 0 0 0 1px #111;
+	}
+	.range-label {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		color: #888880;
+		font-size: 9px;
+		white-space: nowrap;
+	}
+	.range-label input {
+		width: 68px;
+	}
+	.symbol-palette {
+		position: absolute;
+		z-index: 45;
+		left: 50%;
+		bottom: 119px;
+		transform: translateX(-50%);
+		width: min(780px, calc(100% - 24px));
+		max-height: min(56vh, 540px);
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 18px;
+		background: rgba(28, 28, 25, 0.98);
+		box-shadow: 0 25px 75px rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(22px);
+	}
+	.palette-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 14px 16px 10px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	}
+	.palette-header div {
+		display: flex;
+		flex-direction: column;
+	}
+	.palette-header strong {
+		font-size: 13px;
+	}
+	.palette-header span {
+		color: #77776f;
+		font-size: 9px;
+		margin-top: 3px;
+	}
+	.palette-header input {
+		width: 180px;
+		padding: 8px 10px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 9px;
+		outline: none;
+		background: #11110f;
+		color: #fff;
+		font-size: 11px;
+	}
+	.recent-row {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 7px 11px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+		overflow: auto;
+	}
+	.recent-row > span {
+		color: #77776f;
+		font-size: 9px;
+		margin-right: 3px;
+	}
+	.recent-row button {
+		flex: 0 0 auto;
+		width: 34px;
+		height: 34px;
+		border: 1px solid transparent;
+		border-radius: 8px;
+		background: rgba(255, 255, 255, 0.03);
+		color: #fff;
+		cursor: pointer;
+	}
+	.recent-row button.selected,
+	.recent-row button:hover {
+		background: rgba(255, 255, 255, 0.1);
+		border-color: rgba(255, 255, 255, 0.1);
+	}
+	.recent-row button span {
+		font: 23px/1 Leland;
+	}
+	.category-row {
+		display: flex;
+		gap: 4px;
+		padding: 7px 11px;
+		overflow: auto;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+	}
+	.category-row button {
+		border: 0;
+		background: transparent;
+		color: #85857d;
+		border-radius: 8px;
+		padding: 7px 9px;
+		white-space: nowrap;
+		cursor: pointer;
+		font-size: 9px;
+	}
+	.category-row button.active,
+	.category-row button:hover {
+		background: rgba(255, 255, 255, 0.08);
+		color: #fff;
+	}
+	.symbol-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+		gap: 5px;
+		overflow: auto;
+		padding: 10px;
+	}
+	.symbol-button {
+		min-height: 68px;
+		border: 1px solid transparent;
+		border-radius: 9px;
+		background: rgba(255, 255, 255, 0.025);
+		color: #fff;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 4px;
+		cursor: pointer;
+	}
+	.symbol-button:hover,
+	.symbol-button.selected {
+		background: rgba(255, 255, 255, 0.09);
+		border-color: rgba(255, 255, 255, 0.12);
+	}
+	.symbol-button span {
+		font: 34px/1 Leland;
+	}
+	.symbol-button small {
+		color: #85857d;
+		font-size: 8px;
+		text-align: center;
+	}
+	.palette-footer {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 10px;
+		padding: 10px 14px;
+		border-top: 1px solid rgba(255, 255, 255, 0.07);
+		color: #888880;
+		font-size: 10px;
+	}
+	.text-editor {
+		position: absolute;
+		z-index: 60;
+		transform: translate(0, -50%);
+		display: flex;
+		align-items: center;
+		gap: 3px;
+		padding: 3px;
+		border: 1px solid rgba(255, 255, 255, 0.18);
+		border-radius: 9px;
+		background: rgba(28, 28, 25, 0.98);
+		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+	}
+	.text-editor input {
+		width: 190px;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		color: #fff;
+		padding: 7px 8px;
+		font-size: 12px;
+	}
+	.text-editor button {
+		width: 30px;
+		height: 30px;
+		border: 0;
+		border-radius: 7px;
+		background: transparent;
+		color: #aaa;
+		cursor: pointer;
+		display: grid;
+		place-items: center;
+	}
+	.text-editor button:hover {
+		background: rgba(255, 255, 255, 0.08);
+		color: #fff;
+	}
+	.search-panel {
+		position: absolute;
+		z-index: 50;
+		top: 56px;
+		left: 50%;
+		transform: translateX(-50%);
+		width: min(620px, calc(100% - 24px));
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 8px 10px;
+		background: rgba(30, 30, 27, 0.98);
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-top: 0;
+		border-radius: 0 0 14px 14px;
+		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+	}
+	.search-panel input {
+		flex: 1;
+		min-width: 0;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		color: #fff;
+		font-size: 11px;
+	}
+	.search-panel span {
+		color: #85857d;
+		font-size: 9px;
+		white-space: nowrap;
+	}
+	.settings-backdrop {
+		position: absolute;
+		inset: 0;
+		z-index: 54;
+		background: rgba(0, 0, 0, 0.35);
+		backdrop-filter: blur(2px);
+		animation: settings-in 160ms cubic-bezier(.2,.8,.2,1);
+	}
+	.settings-card {
+		position: absolute;
+		z-index: 55;
+		top: 56px;
+		right: 12px;
+		width: min(320px, calc(100vw - 24px));
+		max-height: calc(100% - 80px);
+		overflow: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+		padding: 0;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 16px;
+		background: #1c1c19;
+		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+		font-size: 12px;
+		animation: settings-in 180ms cubic-bezier(.2,.8,.2,1);
+	}
+	.settings-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 14px 14px 10px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	}
+	.settings-header strong {
+		font-size: 13px;
+		font-weight: 600;
+		letter-spacing: 0.01em;
+	}
+	.settings-section {
+		padding: 12px 14px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+	}
+	.settings-section h3 {
+		margin: 0 0 10px;
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: #8a8a82;
+	}
+	.settings-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		margin-bottom: 10px;
+		color: #d4d4cc;
+	}
+	.settings-row:last-child {
+		margin-bottom: 0;
+	}
+	.settings-row.disabled {
+		opacity: 0.45;
+		pointer-events: none;
+	}
+	.settings-row .label-title {
+		display: block;
+		font-size: 12px;
+		font-weight: 500;
+		color: #f0f0ea;
+	}
+	.settings-row .label-desc {
+		display: block;
+		margin-top: 2px;
+		font-size: 10px;
+		line-height: 1.35;
+		color: #8a8a82;
+	}
+	.settings-row input[type='checkbox'] {
+		width: 18px;
+		height: 18px;
+		accent-color: #c2410c;
+		flex-shrink: 0;
+	}
+	.settings-row input[type='range'] {
+		flex: 1;
+		min-width: 0;
+		accent-color: #c2410c;
+	}
+	.settings-row .range-value {
+		min-width: 34px;
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+		color: #aaa9a0;
+		font-size: 11px;
+	}
+	.shortcut-list {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		color: #aaa9a0;
+		font-size: 11px;
+	}
+	.shortcut-list kbd {
+		display: inline-block;
+		min-width: 1.4em;
+		padding: 1px 5px;
+		border-radius: 4px;
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		background: rgba(255, 255, 255, 0.06);
+		font-size: 10px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		color: #e8e8e0;
+		text-align: center;
+	}
+	.settings-footer {
+		padding: 12px 14px 14px;
+		display: flex;
+		justify-content: flex-end;
+	}
+	.settings-footer .text-button.primary {
+		background: #c2410c;
+		color: #fff;
+		border: none;
+		padding: 8px 16px;
+		border-radius: 8px;
+		font-weight: 600;
+	}
+	.settings-footer .text-button.primary:hover {
+		background: #d97706;
+	}
+	.hint {
+		margin: 0;
+		color: #77776f;
+		font-size: 10px;
+		line-height: 1.45;
+	}
+	.reading-exit {
+		position: absolute;
+		z-index: 70;
+		top: 16px;
+		right: 16px;
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 8px 11px;
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		border-radius: 10px;
+		background: rgba(28, 28, 25, 0.88);
+		color: #ddd;
+		cursor: pointer;
+		opacity: 0.55;
+		transition: opacity 0.15s ease;
+		backdrop-filter: blur(14px);
+	}
+	.reading-exit:hover {
+		opacity: 1;
+	}
+	.reading .workspace {
+		inset: 0;
+	}
+	.reading .page-hit {
+		top: 0;
+		bottom: 0;
+	}
+	.reading .pages {
+		padding: 12px;
+	}
+	@keyframes settings-in {
+		from { opacity: 0; transform: translateY(-5px) scale(.98); }
+		to { opacity: 1; transform: translateY(0) scale(1); }
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+	@media (max-width: 900px) {
+		.annotation-bar {
+			left: 10px;
+			right: 10px;
+			transform: none;
+			justify-content: center;
+			overflow: auto;
+		}
+		.tool-button {
+			min-width: 42px;
+		}
+		.tool-button span,
+		.divider,
+		.range-label,
+		.color-row {
+			display: none;
+		}
+		.topbar-right .icon-button:nth-child(3),
+		.topbar-right .icon-button:nth-child(4) {
+			display: none;
+		}
+	}
+	@media (max-width: 620px) {
+		.score-title {
+			display: none;
+		}
+		.topbar {
+			padding: 8px;
+		}
+		.workspace {
+			padding: 14px;
+		}
+		.symbol-palette {
+			max-height: 64vh;
+		}
+		.palette-header input {
+			width: 120px;
+		}
+		.bottombar {
+			padding: 7px;
+		}
+		.footer-section .text-button {
+			display: none;
+		}
+		.text-editor input {
+			width: 145px;
+		}
+	}
+	@media print {
+		.topbar,
+		.bottombar,
+		.annotation-bar,
+		.annotation-toggle,
+		.symbol-palette,
+		.search-panel,
+		.settings-card,
+		.loading,
+		.error,
+		.page-hit,
+		.reading-exit {
+			display: none !important;
+		}
+		.viewer {
+			height: auto;
+			overflow: visible;
+			background: #fff;
+		}
+		.workspace {
+			position: static;
+			overflow: visible;
+			padding: 0;
+			background: #fff;
+		}
+		.pages {
+			display: block;
+		}
+		.page-shell {
+			box-shadow: none;
+			page-break-after: always;
+		}
+	}
+</style>
