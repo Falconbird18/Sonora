@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { ScoreItem } from './lib/types';
+	import type { Component } from 'svelte';
 
 	let activeScore = $state<ScoreItem | null>(null);
 	let crash = $state('');
-	let libraryView = $state<any>(null);
+	let libraryView = $state<Component<any> | null>(null);
 	let libraryViewError = $state('');
-	let scoreViewer = $state<any>(null);
+	let scoreViewer = $state<Component<any> | null>(null);
 	let scoreViewerError = $state('');
 
 	onMount(() => {
@@ -79,7 +80,8 @@
 <main class="app-shell">
 	<div class="layer" class:hidden={!!activeScore} inert={!!activeScore}>
 		{#if libraryView}
-			<svelte:component this={libraryView} paused={!!activeScore} onSelectScore={openScore} />
+			{@const Library = libraryView}
+			<Library paused={!!activeScore} onSelectScore={openScore} />
 		{:else if libraryViewError}
 			<div class="startup-error">
 				<strong>Sonora could not load the library.</strong>
@@ -93,7 +95,8 @@
 	{#if activeScore}
 		<div class="layer viewer-layer">
 			{#if scoreViewer}
-				<svelte:component this={scoreViewer} score={activeScore} onClose={closeScore} />
+				{@const Viewer = scoreViewer}
+				<Viewer score={activeScore} onClose={closeScore} />
 			{:else if scoreViewerError}
 				<div class="viewer-error">
 					<strong>Sonora could not load the score viewer.</strong>
