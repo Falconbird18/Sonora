@@ -1,0 +1,30 @@
+name: Apply annotation UI patch
+on:
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/annotation-ui-save-v2
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git apply --check annotation-ui-fix.patch 2>/dev/null; then
+            git apply annotation-ui-fix.patch
+            git add -A
+            git commit -m "Apply annotation-ui-fix.patch" || echo "Nothing to commit"
+            git push
+          else
+            echo "Patch does not apply cleanly; library portion only may apply"
+            git apply --reject annotation-ui-fix.patch || true
+            git add -A
+            git status
+            git commit -m "Partial apply of annotation-ui-fix.patch" || true
+            git push || true
+          fi
