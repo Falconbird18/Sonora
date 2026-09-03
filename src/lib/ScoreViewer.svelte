@@ -754,14 +754,6 @@
 		persistPrefs();
 		void render({ quiet: hasPainted });
 	}
-	function scrubPage(event: Event) {
-		const value = Number((event.currentTarget as HTMLInputElement).value);
-		page = Math.max(1, Math.min(pdf?.numPages || 1, value));
-		pageInput = String(page);
-		ensureHistory(page);
-		persistPrefs();
-		void render({ quiet: hasPainted });
-	}
 	function toggleBookmark() {
 		bookmarked = !bookmarked;
 		persistPrefs();
@@ -881,15 +873,6 @@
 				<span>{Math.round(zoom * 100)}%</span>
 				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.1)}><ZoomIn size={17} /></button>
 			</div>
-			<input
-				class="page-scrubber"
-				type="range"
-				min="1"
-				max={pdf?.numPages || 1}
-				value={page}
-				aria-label="Scrub pages"
-				oninput={scrubPage}
-			/>
 			<div class="footer-section">
 				<button
 					class:active={dual}
@@ -1082,11 +1065,12 @@
 	}
 	.bottombar {
 		position: relative;
+		top: 8px;
+		left: 8px;
+		width: calc(100% - 16px);
 		display: flex;
 		justify-content: space-between;
-		width: 100%;
 		z-index: 30;
-		top: 8px;
 	}
 
 	.footer-section {
@@ -1188,13 +1172,6 @@
 		color: #77776f;
 		font-size: 11px;
 	}
-	.page-scrubber {
-		flex: 1;
-		min-width: 80px;
-		max-width: 280px;
-		accent-color: #c4a574;
-		cursor: pointer;
-	}
 	.workspace {
 		position: absolute;
 		inset: 56px 0 8px;
@@ -1282,13 +1259,15 @@
 		align-items: center;
 		gap: 8px;
 		padding: 14px 18px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 14px;
-		background: rgba(28, 28, 25, 0.96);
-		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
 		font-size: 12px;
 		color: #b8b8b0;
+		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 14px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
 	}
+
 	.loading.subtle {
 		padding: 8px;
 		background: rgba(28, 28, 25, 0.55);
@@ -1323,7 +1302,7 @@
 		position: absolute;
 		z-index: 32;
 		left: 16px;
-		bottom: 70px;
+		bottom: 16px;
 		width: 42px;
 		height: 42px;
 		border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1339,7 +1318,7 @@
 		position: absolute;
 		z-index: 35;
 		left: 50%;
-		bottom: -50px;
+		bottom: 8px;
 		transform: translateX(-50%);
 		display: flex;
 		align-items: center;
@@ -1691,9 +1670,6 @@
 		}
 		.topbar-right .icon-button:nth-child(3),
 		.topbar-right .icon-button:nth-child(4) {
-			display: none;
-		}
-		.page-scrubber {
 			display: none;
 		}
 	}

@@ -1059,7 +1059,7 @@
 		aspect-ratio: 3/4;
 		overflow: hidden;
 		border: 1px solid #2d2d28;
-		border-radius: 9px;
+		border-radius: 14px;
 		background: #191916;
 		box-shadow: 0 7px 20px #0005;
 	}
@@ -1141,14 +1141,18 @@
 		gap: 4px;
 		padding: 3px;
 		border: 1px solid #34342e;
-		border-radius: 9px;
-		background: #151512dd;
-		backdrop-filter: blur(9px);
 		opacity: 0;
 		transform: translateY(-2px);
 		transition:
 			opacity 0.14s ease,
 			transform 0.14s ease;
+		color: #b8b8b0;
+		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 7px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
+
 	}
 	.card:hover .card-actions,
 	.card:focus-within .card-actions,
@@ -1189,10 +1193,11 @@
 		right: 0;
 		width: 174px;
 		padding: 4px;
-		border: 1px solid #35352f;
-		border-radius: 10px;
-		background: #1a1a17;
-		box-shadow: 0 12px 28px #0008;
+		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
+    	border: 1px solid rgba(255, 255, 255, 0.08);
+    	border-radius: 7px;
+    	background: rgba(25, 25, 22, 0.78);
+    	backdrop-filter: blur(18px);
 	}
 	.score-menu button {
 		width: 100%;
