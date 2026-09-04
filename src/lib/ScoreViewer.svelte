@@ -25,7 +25,6 @@
 		Maximize2,
 		Minimize2,
 		Minus,
-		MousePointer2,
 		Music2,
 		PenTool,
 		Printer,
@@ -44,7 +43,7 @@
 	} from '@lucide/svelte';
 	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
 
-	type Tool = 'move' | 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';
+	type Tool = 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';
 	type Fit = 'page' | 'width';
 	type Snapshot = { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] };
 	type TextEditor = { page: number; x: number; y: number; text: string; id?: string };
@@ -72,8 +71,8 @@
 	let settingsOpen = $state(false);
 	let bookmarked = $state(false);
 	let annotationsVisible = $state(true);
-	let tool = $state<Tool>('move');
-	let color = $state('#c2410c');
+	let tool = $state<Tool>('pen');
+	let color = $state('#111827');
 	let width = $state(3);
 	let selectedSymbol = $state(MUSIC_SYMBOLS[0]);
 	let symbolCategory = $state<(typeof MUSIC_SYMBOL_CATEGORIES)[number]>('Clefs');
@@ -82,6 +81,8 @@
 	let recentSymbols = $state<string[]>([]);
 	let textSize = $state(18);
 	let textEditor = $state<TextEditor | null>(null);
+	let textDraft = $state('');
+	let draggingAnnot: { kind: 'stamp' | 'note'; page: number; id: string; canvas: HTMLCanvasElement; pointerId: number } | null = null;
 	let strokes = $state<Record<number, Stroke[]>>({});
 	let stamps = $state<Record<number, SymbolStamp[]>>({});
 	let notes = $state<Record<number, TextNote[]>>({});
@@ -136,7 +137,7 @@
 	}
 
 	const prefs = $derived(`sonora-viewer-${score.id}`);
-	const colors = ['#c2410c', '#2563eb', '#15803d', '#a16207', '#7e22ce', '#111827', '#ffffff'];
+	const colors = ['#c2410c', '#111827', '#2563eb', '#15803d', '#a16207', '#7e22ce', '#ffffff'];
 	const primaryColors = colors.slice(0, 3);
 	const extraColors = colors.slice(3);
 	let colorPickerOpen = $state(false);
@@ -239,7 +240,7 @@
 					searchOpen = false;
 					controls = false;
 					if (reading) exitReading();
-					choose('move');
+					choose('pen');
 				} else {
 					void leave();
 				}
@@ -504,34 +505,66 @@
 	}
 	function choose(nextTool: Tool) {
 		tool = nextTool;
-		if (nextTool === 'move') textEditor = null;
+		if (nextTool !== 'text') {
+			textEditor = null;
+			textDraft = '';
+		}
+	}
+
+	function hitAnnotation(number: number, point: Point, radius = 0.04): { kind: 'stamp' | 'note'; id: string } | null {
+		for (let i = (stamps[number] || []).length - 1; i >= 0; i--) {
+			const stamp = stamps[number][i];
+			if (Math.hypot(stamp.x - point.x, stamp.y - point.y) <= radius) return { kind: 'stamp', id: stamp.id };
+		}
+		for (let i = (notes[number] || []).length - 1; i >= 0; i--) {
+			const note = notes[number][i];
+			if (Math.hypot(note.x - point.x, note.y - point.y) <= radius) return { kind: 'note', id: note.id };
+		}
+		return null;
+	}
+
+	function placeSymbolAt(number: number, point: Point, canvas: HTMLCanvasElement | null) {
+		stamps[number] = [
+			...(stamps[number] || []),
+			{
+				id: crypto.randomUUID(),
+				symbol: selectedSymbol.glyph,
+				label: selectedSymbol.name,
+				x: point.x,
+				y: point.y,
+				fontSize: symbolSize,
+				color
+			}
+		];
+		recentSymbols = [selectedSymbol.id, ...recentSymbols.filter((id) => id !== selectedSymbol.id)].slice(0, 10);
+		persistPrefs();
+		checkpoint(number);
+		if (canvas) redraw(number, canvas);
+	}
+
+	function placeSymbolOnPage() {
+		placeSymbolAt(page, { x: 0.5, y: 0.42 }, leftInk);
 	}
 
 	function begin(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {
-		if (tool === 'move' || reading || textEditor) return;
+		if (reading) return;
+		if (textEditor) {
+			commitText();
+			return;
+		}
 		event.preventDefault();
-		canvas.setPointerCapture(event.pointerId);
 		const point = position(event, canvas);
+		if (tool !== 'eraser') {
+			const hit = hitAnnotation(number, point, tool === 'symbol' || tool === 'text' ? 0.05 : 0.035);
+			if (hit) {
+				canvas.setPointerCapture(event.pointerId);
+				draggingAnnot = { kind: hit.kind, page: number, id: hit.id, canvas, pointerId: event.pointerId };
+				return;
+			}
+		}
+		canvas.setPointerCapture(event.pointerId);
 		if (tool === 'symbol') {
-			stamps[number] = [
-				...(stamps[number] || []),
-				{
-					id: crypto.randomUUID(),
-					symbol: selectedSymbol.glyph,
-					label: selectedSymbol.name,
-					x: point.x,
-					y: point.y,
-					fontSize: symbolSize,
-					color
-				}
-			];
-			recentSymbols = [selectedSymbol.id, ...recentSymbols.filter((id) => id !== selectedSymbol.id)].slice(
-				0,
-				10
-			);
-			persistPrefs();
-			checkpoint(number);
-			redraw(number, canvas);
+			placeSymbolAt(number, point, canvas);
 			return;
 		}
 		if (tool === 'text') {
@@ -559,23 +592,24 @@
 
 	function openTextEditor(number: number, point: Point) {
 		const existing = (notes[number] || []).find(
-			(note) => Math.hypot(note.x - point.x, note.y - point.y) < 0.035
+			(note) => Math.hypot(note.x - point.x, note.y - point.y) < 0.04
 		);
-		textEditor = {
-			page: number,
-			x: point.x,
-			y: point.y,
-			text: existing?.text || '',
-			id: existing?.id
-		};
-		void tick().then(() =>
-			document.querySelector<HTMLInputElement>('[data-score-text-input]')?.focus()
-		);
+		const x = Math.min(0.72, Math.max(0.02, point.x));
+		const y = Math.min(0.88, Math.max(0.06, point.y));
+		textDraft = existing?.text || '';
+		textEditor = { page: number, x, y, text: textDraft, id: existing?.id };
+		void tick().then(() => {
+			const el = document.querySelector<HTMLInputElement>('[data-score-text-input]');
+			el?.focus();
+			el?.select();
+		});
 	}
 	function commitText() {
 		if (!textEditor) return;
 		const editor = textEditor;
-		const text = editor.text.trim();
+		const text = textDraft.trim();
+		textEditor = null;
+		textDraft = '';
 		if (text) {
 			if (editor.id)
 				notes[editor.page] = (notes[editor.page] || []).map((note) =>
@@ -588,15 +622,31 @@
 				];
 			checkpoint(editor.page);
 		}
-		textEditor = null;
 		const canvas = editor.page === visiblePages[0] ? leftInk : rightInk;
-		redraw(editor.page, canvas);
+		if (canvas) redraw(editor.page, canvas);
 	}
 	function cancelText() {
 		textEditor = null;
+		textDraft = '';
 	}
 
 	function move(event: PointerEvent) {
+		if (draggingAnnot) {
+			const point = position(event, draggingAnnot.canvas);
+			const x = Math.min(0.98, Math.max(0.02, point.x));
+			const y = Math.min(0.98, Math.max(0.02, point.y));
+			if (draggingAnnot.kind === 'stamp') {
+				stamps[draggingAnnot.page] = (stamps[draggingAnnot.page] || []).map((stamp) =>
+					stamp.id === draggingAnnot!.id ? { ...stamp, x, y } : stamp
+				);
+			} else {
+				notes[draggingAnnot.page] = (notes[draggingAnnot.page] || []).map((note) =>
+					note.id === draggingAnnot!.id ? { ...note, x, y } : note
+				);
+			}
+			redraw(draggingAnnot.page, draggingAnnot.canvas);
+			return;
+		}
 		if (!drawing) return;
 		for (const pointEvent of event.getCoalescedEvents?.() || [event]) {
 			if (drawing.stroke) {
@@ -617,13 +667,19 @@
 			});
 	}
 	function end() {
+		if (draggingAnnot) {
+			const active = draggingAnnot;
+			draggingAnnot = null;
+			try { active.canvas.releasePointerCapture(active.pointerId); } catch {}
+			checkpoint(active.page);
+			redraw(active.page, active.canvas);
+			return;
+		}
 		if (!drawing) return;
 		const active = drawing;
 		if (active.raf) cancelAnimationFrame(active.raf);
 		drawing = null;
-		try {
-			active.canvas.releasePointerCapture(active.pointerId);
-		} catch {}
+		try { active.canvas.releasePointerCapture(active.pointerId); } catch {}
 		redraw(active.page, active.canvas);
 		checkpoint(active.page);
 	}
@@ -858,7 +914,7 @@
 		if (!controls) {
 			settingsOpen = false;
 			colorPickerOpen = false;
-			choose('move');
+			choose('pen');
 		}
 	}
 	function enterReading() {
@@ -866,7 +922,7 @@
 		controls = false;
 		settingsOpen = false;
 		searchOpen = false;
-		choose('move');
+		choose('pen');
 	}
 	function exitReading() {
 		reading = false;
@@ -994,16 +1050,35 @@
 				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
 				<canvas
 					class="ink-canvas"
-					class:interactive={tool !== 'move' && !reading}
+					class:interactive={!reading}
 					bind:this={leftInk}
 					onpointerdown={(event) => begin(event, visiblePages[0], leftInk!)}
 					onpointermove={move}
 					onpointerup={end}
 					onpointercancel={end}></canvas>
 				{#if textEditor && textEditor.page === visiblePages[0]}
-					<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>
-						<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />
-						<button title="Save" onclick={commitText}><Check size={15} /></button>
+					<div
+						class="text-editor"
+						class:near-bottom={textEditor.y > 0.7}
+						style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}
+						onpointerdown={(e) => e.stopPropagation()}
+					>
+						<span class="text-editor-label">Note</span>
+						<input
+							data-score-text-input
+							bind:value={textDraft}
+							placeholder="Write a note…"
+							onkeydown={(e) => {
+								if (e.key === 'Enter') {
+									e.preventDefault();
+									commitText();
+								} else if (e.key === 'Escape') {
+									e.preventDefault();
+									cancelText();
+								}
+							}}
+						/>
+						<button class="text-editor-save" title="Save" onclick={commitText}><Check size={15} /></button>
 						<button title="Cancel" onclick={cancelText}><X size={15} /></button>
 					</div>
 				{/if}
@@ -1013,18 +1088,37 @@
 					<canvas class="pdf-canvas" bind:this={rightPdf}></canvas>
 					<canvas
 						class="ink-canvas"
-						class:interactive={tool !== 'move' && !reading}
+						class:interactive={!reading}
 						bind:this={rightInk}
 						onpointerdown={(event) => begin(event, visiblePages[1], rightInk!)}
 						onpointermove={move}
 						onpointerup={end}
 						onpointercancel={end}></canvas>
 					{#if textEditor && textEditor.page === visiblePages[1]}
-						<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>
-							<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />
-							<button title="Save" onclick={commitText}><Check size={15} /></button>
-							<button title="Cancel" onclick={cancelText}><X size={15} /></button>
-						</div>
+						<div
+						class="text-editor"
+						class:near-bottom={textEditor.y > 0.7}
+						style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}
+						onpointerdown={(e) => e.stopPropagation()}
+					>
+						<span class="text-editor-label">Note</span>
+						<input
+							data-score-text-input
+							bind:value={textDraft}
+							placeholder="Write a note…"
+							onkeydown={(e) => {
+								if (e.key === 'Enter') {
+									e.preventDefault();
+									commitText();
+								} else if (e.key === 'Escape') {
+									e.preventDefault();
+									cancelText();
+								}
+							}}
+						/>
+						<button class="text-editor-save" title="Save" onclick={commitText}><Check size={15} /></button>
+						<button title="Cancel" onclick={cancelText}><X size={15} /></button>
+					</div>
 					{/if}
 				</div>
 			{/if}
@@ -1043,8 +1137,8 @@
 		{/if}
 	</main>
 
-	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor || tool !== 'move'}></button>
-	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor || tool !== 'move'}></button>
+	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor }></button>
+	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor }></button>
 
 	{#if !reading && !controls}
 		<button class="annotation-toggle" title="Annotation tools" aria-label="Open annotation tools" onclick={toggleControls}><Pencil size={18} /></button>
@@ -1052,7 +1146,6 @@
 	{#if !reading && controls}
 		<aside class="annotation-bar">
 			<div class="tool-group">
-				<button class:active={tool === 'move'} class="tool-button" title="Move" onclick={() => choose('move')}><MousePointer2 size={18} /><span>Move</span></button>
 				<button class:active={tool === 'pen'} class="tool-button" title="Pen (P)" onclick={() => choose('pen')}><PenTool size={18} /><span>Pen</span></button>
 				<button class:active={tool === 'highlighter'} class="tool-button" title="Highlighter (H)" onclick={() => choose('highlighter')}><Highlighter size={18} /><span>Highlight</span></button>
 				<button class:active={tool === 'line'} class="tool-button" title="Line" onclick={() => choose('line')}><Minus size={18} /><span>Line</span></button>
@@ -1113,36 +1206,47 @@
 
 	{#if !reading && controls && tool === 'symbol'}
 		<section class="symbol-palette">
-			<div class="palette-header">
-				<div>
-					<strong>Musical symbols</strong>
-					<span>Leland notation font · select a symbol, then click the score</span>
-				</div>
-				<input bind:value={symbolSearch} placeholder="Search symbols" />
+			<div class="palette-toolbar">
+				<input class="palette-search" bind:value={symbolSearch} placeholder="Search…" aria-label="Search symbols" />
+				<label class="palette-size" title="Symbol size">
+					<span>{symbolSize}</span>
+					<input type="range" min="18" max="72" bind:value={symbolSize} />
+				</label>
+				<button type="button" class="palette-place" title="Place on page" onclick={placeSymbolOnPage}>Place</button>
 			</div>
 			{#if recentSymbolObjects.length}
 				<div class="recent-row">
-					<span>Recent</span>
 					{#each recentSymbolObjects as symbol}
-						<button class:selected={selectedSymbol.id === symbol.id} title={symbol.name} onclick={() => (selectedSymbol = symbol)}><span>{symbol.glyph}</span></button>
+						<button
+							type="button"
+							class:selected={selectedSymbol.id === symbol.id}
+							title={symbol.name}
+							onclick={() => {
+								selectedSymbol = symbol;
+								placeSymbolOnPage();
+							}}><span>{symbol.glyph}</span></button>
 					{/each}
 				</div>
 			{/if}
 			<div class="category-row">
 				{#each MUSIC_SYMBOL_CATEGORIES as category}
-					<button class:active={symbolCategory === category} onclick={() => (symbolCategory = category)}>{category}</button>
+					<button type="button" class:active={symbolCategory === category} onclick={() => (symbolCategory = category)}>{category}</button>
 				{/each}
 			</div>
 			<div class="symbol-grid">
 				{#each filteredSymbols as symbol}
-					<button class:selected={selectedSymbol.id === symbol.id} class="symbol-button" title={symbol.name} onclick={() => (selectedSymbol = symbol)}
-						><span>{symbol.glyph}</span><small>{symbol.name}</small></button>
+					<button
+						type="button"
+						class:selected={selectedSymbol.id === symbol.id}
+						class="symbol-button"
+						title="{symbol.name} — tap to place"
+						onclick={() => {
+							selectedSymbol = symbol;
+							placeSymbolOnPage();
+						}}><span>{symbol.glyph}</span></button>
 				{/each}
 			</div>
-			<div class="palette-footer">
-				<span>{selectedSymbol.name}</span>
-				<label>Symbol size <input type="range" min="18" max="72" bind:value={symbolSize} /></label>
-			</div>
+			<p class="palette-hint">Tap a symbol to place · drag on the score to move · or tap the page after selecting</p>
 		</section>
 	{/if}
 
@@ -1601,12 +1705,13 @@
 		margin-left: 3px;
 	}
 	.swatch {
-		width: 17px;
-		height: 17px;
+		width: 22px;
+		height: 22px;
 		border: 2px solid transparent;
 		border-radius: 50%;
 		background: var(--swatch);
 		cursor: pointer;
+		flex-shrink: 0;
 	}
 	.swatch.selected {
 		border-color: #fff;
@@ -1707,181 +1812,204 @@
 		position: absolute;
 		z-index: 45;
 		left: 50%;
-		bottom: 119px;
+		bottom: 72px;
 		transform: translateX(-50%);
-		width: min(780px, calc(100% - 24px));
-		max-height: min(56vh, 540px);
+		width: min(520px, calc(100% - 16px));
+		max-height: min(42vh, 360px);
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
 		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 18px;
-		background: rgba(28, 28, 25, 0.98);
-		box-shadow: 0 25px 75px rgba(0, 0, 0, 0.55);
-		backdrop-filter: blur(22px);
+		border-radius: 16px;
+		background: rgba(22, 22, 19, 0.97);
+		box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+		backdrop-filter: blur(18px);
 	}
-	.palette-header {
+	.palette-toolbar {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		padding: 14px 16px 10px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+		gap: 8px;
+		padding: 10px 12px 8px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
 	}
-	.palette-header div {
-		display: flex;
-		flex-direction: column;
-	}
-	.palette-header strong {
-		font-size: 13px;
-	}
-	.palette-header span {
-		color: #77776f;
-		font-size: 9px;
-		margin-top: 3px;
-	}
-	.palette-header input {
-		width: 180px;
-		padding: 8px 10px;
+	.palette-search {
+		flex: 1;
+		min-width: 0;
+		height: 34px;
 		border: 1px solid rgba(255, 255, 255, 0.1);
 		border-radius: 9px;
-		outline: none;
-		background: #11110f;
+		background: #0d0d0b;
 		color: #fff;
+		padding: 0 10px;
+		font-size: 13px;
+		outline: none;
+	}
+	.palette-size {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		color: #8a8a82;
 		font-size: 11px;
+		white-space: nowrap;
+	}
+	.palette-size input { width: 64px; }
+	.palette-place {
+		height: 34px;
+		padding: 0 12px;
+		border: 0;
+		border-radius: 9px;
+		background: rgba(37, 99, 235, 0.25);
+		color: #93c5fd;
+		font-size: 12px;
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.palette-place:hover {
+		background: rgba(37, 99, 235, 0.4);
+		color: #dbeafe;
 	}
 	.recent-row {
 		display: flex;
 		align-items: center;
-		gap: 4px;
-		padding: 7px 11px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-		overflow: auto;
-	}
-	.recent-row > span {
-		color: #77776f;
-		font-size: 9px;
-		margin-right: 3px;
+		gap: 6px;
+		padding: 8px 12px 0;
+		overflow-x: auto;
 	}
 	.recent-row button {
-		flex: 0 0 auto;
-		width: 34px;
-		height: 34px;
+		width: 40px;
+		height: 40px;
 		border: 1px solid transparent;
-		border-radius: 8px;
-		background: rgba(255, 255, 255, 0.03);
-		color: #fff;
+		border-radius: 10px;
+		background: rgba(255, 255, 255, 0.04);
+		color: #f4f4f0;
+		font: 22px/1 Leland, serif;
 		cursor: pointer;
 	}
 	.recent-row button.selected,
 	.recent-row button:hover {
+		border-color: rgba(255, 255, 255, 0.2);
 		background: rgba(255, 255, 255, 0.1);
-		border-color: rgba(255, 255, 255, 0.1);
-	}
-	.recent-row button span {
-		font: 23px/1 Leland;
 	}
 	.category-row {
 		display: flex;
 		gap: 4px;
-		padding: 7px 11px;
-		overflow: auto;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+		padding: 8px 12px;
+		overflow-x: auto;
+		scrollbar-width: none;
 	}
+	.category-row::-webkit-scrollbar { display: none; }
 	.category-row button {
+		flex-shrink: 0;
+		height: 28px;
+		padding: 0 10px;
 		border: 0;
+		border-radius: 999px;
 		background: transparent;
-		color: #85857d;
-		border-radius: 8px;
-		padding: 7px 9px;
-		white-space: nowrap;
+		color: #8a8a82;
+		font-size: 11px;
+		font-weight: 500;
 		cursor: pointer;
-		font-size: 9px;
 	}
-	.category-row button.active,
-	.category-row button:hover {
-		background: rgba(255, 255, 255, 0.08);
+	.category-row button.active {
+		background: rgba(255, 255, 255, 0.1);
 		color: #fff;
 	}
 	.symbol-grid {
+		flex: 1;
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
-		gap: 5px;
+		grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+		gap: 6px;
+		padding: 4px 12px 8px;
 		overflow: auto;
-		padding: 10px;
+		align-content: start;
 	}
 	.symbol-button {
-		min-height: 68px;
+		height: 48px;
 		border: 1px solid transparent;
-		border-radius: 9px;
-		background: rgba(255, 255, 255, 0.025);
-		color: #fff;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 4px;
+		border-radius: 12px;
+		background: rgba(255, 255, 255, 0.03);
+		color: #f4f4f0;
+		font: 26px/1 Leland, serif;
 		cursor: pointer;
+		display: grid;
+		place-items: center;
 	}
-	.symbol-button:hover,
-	.symbol-button.selected {
-		background: rgba(255, 255, 255, 0.09);
-		border-color: rgba(255, 255, 255, 0.12);
+	.symbol-button small { display: none; }
+	.symbol-button.selected,
+	.symbol-button:hover {
+		border-color: rgba(147, 197, 253, 0.45);
+		background: rgba(37, 99, 235, 0.18);
 	}
-	.symbol-button span {
-		font: 34px/1 Leland;
-	}
-	.symbol-button small {
-		color: #85857d;
-		font-size: 8px;
+	.palette-hint {
+		margin: 0;
+		padding: 6px 12px 10px;
+		color: #6f6f68;
+		font-size: 10px;
 		text-align: center;
 	}
-	.palette-footer {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 10px;
-		padding: 10px 14px;
-		border-top: 1px solid rgba(255, 255, 255, 0.07);
-		color: #888880;
-		font-size: 10px;
-	}
+
 	.text-editor {
 		position: absolute;
-		z-index: 60;
-		transform: translate(0, -50%);
+		z-index: 80;
+		transform: translate(0, -110%);
 		display: flex;
 		align-items: center;
-		gap: 3px;
-		padding: 3px;
-		border: 1px solid rgba(255, 255, 255, 0.18);
-		border-radius: 9px;
-		background: rgba(28, 28, 25, 0.98);
-		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+		gap: 6px;
+		min-width: min(260px, 70vw);
+		padding: 8px 10px;
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		border-radius: 14px;
+		background: rgba(18, 18, 16, 0.98);
+		box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(16px);
+		pointer-events: auto;
+	}
+	.text-editor.near-bottom {
+		transform: translate(0, 12%);
+	}
+	.text-editor-label {
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: #8a8a82;
+		flex-shrink: 0;
 	}
 	.text-editor input {
-		width: 190px;
+		flex: 1;
+		min-width: 0;
+		width: 160px;
 		border: 0;
 		outline: 0;
-		background: transparent;
+		background: rgba(255, 255, 255, 0.06);
 		color: #fff;
-		padding: 7px 8px;
-		font-size: 12px;
+		padding: 8px 10px;
+		font-size: 14px;
+		border-radius: 8px;
 	}
 	.text-editor button {
-		width: 30px;
-		height: 30px;
+		width: 34px;
+		height: 34px;
 		border: 0;
-		border-radius: 7px;
+		border-radius: 9px;
 		background: transparent;
 		color: #aaa;
 		cursor: pointer;
 		display: grid;
 		place-items: center;
+		flex-shrink: 0;
+	}
+	.text-editor button.text-editor-save {
+		background: rgba(34, 197, 94, 0.18);
+		color: #86efac;
 	}
 	.text-editor button:hover {
 		background: rgba(255, 255, 255, 0.08);
 		color: #fff;
+	}
+	.text-editor button.text-editor-save:hover {
+		background: rgba(34, 197, 94, 0.32);
+		color: #bbf7d0;
 	}
 	.search-panel {
 		position: absolute;
