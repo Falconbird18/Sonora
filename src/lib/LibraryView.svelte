@@ -8,6 +8,7 @@
 		List,
 		Music2,
 		RefreshCw,
+		Settings,
 		Star
 	} from '@lucide/svelte';
 	import SearchField from './ui/SearchField.svelte';
@@ -17,12 +18,10 @@
 	import TagDialog from './ui/TagDialog.svelte';
 	import ComposerPortrait from './ui/ComposerPortrait.svelte';
 	import IconButton from './ui/IconButton.svelte';
+	import SettingsPanel from './ui/SettingsPanel.svelte';
+	import { settings } from './settingsStore';
 	import { db } from './db';
-	import {
-		chooseAndAddFolder,
-		resolveScoreSource,
-		syncAllFolders
-	} from './folderSync';
+	import { chooseAndAddFolder, resolveScoreSource, syncAllFolders } from './folderSync';
 	import { getComposerPortrait } from './composerPortraits';
 	import { getPdfInfoFromSource } from './pdfUtils';
 	import { isTauri } from './paths';
@@ -48,6 +47,7 @@
 	let openingId = $state<string | null>(null),
 		timer: ReturnType<typeof setInterval> | undefined,
 		backfillRunning = false;
+	let settingsOpen = $state(false);
 
 	async function refresh() {
 		const [nextScores, nextFolder] = await Promise.all([
@@ -86,8 +86,7 @@
 			void backfillThumbnails();
 		} catch (e) {
 			if ((e as DOMException)?.name !== 'AbortError')
-				error =
-					e instanceof Error ? e.message : 'Could not choose the score folder';
+				error = e instanceof Error ? e.message : 'Could not choose the score folder';
 		}
 	}
 	function prepareScore(score: ScoreItem): ScoreItem {
@@ -110,9 +109,7 @@
 				!prepared.nativePath &&
 				!(prepared.pdfBlob && prepared.pdfBlob.size > 0)
 			)
-				throw new Error(
-					`“${score.title}” has no PDF source. Try refreshing the library.`
-				);
+				throw new Error(`“${score.title}” has no PDF source. Try refreshing the library.`);
 			const openedAt = Date.now();
 			void db.scores
 				.update(score.id, { lastOpenedAt: openedAt })
@@ -131,9 +128,7 @@
 		event.stopPropagation();
 		const favorite = !score.favorite;
 		await db.scores.update(score.id, { favorite });
-		scores = scores.map((item) =>
-			item.id === score.id ? { ...item, favorite } : item
-		);
+		scores = scores.map((item) => (item.id === score.id ? { ...item, favorite } : item));
 		if (favorite) closeMenu();
 	}
 	function toggleMenu(score: ScoreItem, event: MouseEvent) {
@@ -229,8 +224,7 @@
 		backfillRunning = true;
 		try {
 			const missing = scores.filter(
-				(score) =>
-					!score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
+				(score) => !score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
 			);
 			for (const score of missing.slice(0, 4)) {
 				if (paused) break;
@@ -262,8 +256,7 @@
 			if (
 				!paused &&
 				scores.some(
-					(score) =>
-						!score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
+					(score) => !score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
 				)
 			)
 				setTimeout(() => void backfillThumbnails(), 700);
@@ -281,9 +274,7 @@
 				try {
 					const value = JSON.parse(saved);
 					view = value.view === 'list' ? 'list' : 'grid';
-					sort = ['recent', 'title', 'composer'].includes(value.sort)
-						? value.sort
-						: 'recent';
+					sort = ['recent', 'title', 'composer'].includes(value.sort) ? value.sort : 'recent';
 				} catch {}
 			}
 			if (disposed) return;
@@ -302,10 +293,7 @@
 		};
 	});
 	$effect(() => {
-		localStorage.setItem(
-			'sonora-library-settings',
-			JSON.stringify({ view, sort })
-		);
+		localStorage.setItem('sonora-library-settings', JSON.stringify({ view, sort }));
 	});
 	$effect(() => {
 		if (!paused) void backfillThumbnails();
@@ -319,8 +307,8 @@
 		return counts;
 	});
 	const allTags = $derived(
-		Array.from(new Set(scores.flatMap((score) => score.tags ?? []))).sort(
-			(a, b) => a.localeCompare(b)
+		Array.from(new Set(scores.flatMap((score) => score.tags ?? []))).sort((a, b) =>
+			a.localeCompare(b)
 		)
 	);
 	const filtered = $derived(
@@ -365,32 +353,39 @@
 		if (event.key === 'Escape') {
 			closeMenu();
 			if (metadata) metadata = null;
+			if (settingsOpen) settingsOpen = false;
 		}
 	}}
 />
 
-<div class="library">
+<div class="library" class:compact={$settings.compactLibrary}>
 	<header class="header">
 		<div class="brand">
-			<div class="brand-mark"><Music2 size={19} /></div>
+			<div class="brand-mark"><Music2 size={18} strokeWidth={2.1} /></div>
 			<strong>Sonora</strong>
 		</div>
 		<SearchField bind:value={search} placeholder="Search your scores" ariaLabel="Search scores" />
 		<div class="header-actions">
-			<button class="folder-button" onclick={chooseFolder}
-				><FolderPlus size={17} /><span>{folder ? 'Change folder' : 'Choose folder'}</span></button
-			>
-			<IconButton title="Refresh library" ariaLabel="Refresh library" onclick={sync}
-				><RefreshCw size={18} class={syncing ? 'spinning' : ''} /></IconButton
-			>
+			<button class="folder-button" onclick={chooseFolder}>
+				<FolderPlus size={17} strokeWidth={2} />
+				<span>{folder ? 'Change folder' : 'Choose folder'}</span>
+			</button>
+			<IconButton title="Refresh library" ariaLabel="Refresh library" onclick={sync}>
+				<RefreshCw size={18} class={syncing ? 'spinning' : ''} />
+			</IconButton>
+			<IconButton title="Settings" ariaLabel="Open settings" onclick={() => (settingsOpen = true)}>
+				<Settings size={18} />
+			</IconButton>
 		</div>
 	</header>
+
 	{#if error}
 		<Notice variant="error" dismissible ondismiss={() => (error = '')}>{error}</Notice>
 	{/if}
 	{#if notice}
 		<Notice variant="success">{notice}</Notice>
 	{/if}
+
 	<div class="body">
 		<aside class="sidebar">
 			<nav aria-label="Library filters">
@@ -399,8 +394,10 @@
 					onclick={() => {
 						filter = 'all';
 						composer = null;
-					}}><Grid2X2 size={16} /><span>All scores</span><b>{scores.length}</b></button
+					}}
 				>
+					<Grid2X2 size={16} /><span>All scores</span><b>{scores.length}</b>
+				</button>
 				<button
 					class:active={filter === 'recent'}
 					onclick={() => {
@@ -459,22 +456,27 @@
 						<option value="composer">Composer</option>
 					</select>
 					<div class="seg">
-						<button class:active={view === 'grid'} onclick={() => (view = 'grid')} aria-label="Grid view"
-							><Grid2X2 size={16} /></button
+						<button
+							class:active={view === 'grid'}
+							onclick={() => (view = 'grid')}
+							aria-label="Grid view"><Grid2X2 size={16} /></button
 						>
-						<button class:active={view === 'list'} onclick={() => (view = 'list')} aria-label="List view"
-							><List size={16} /></button
+						<button
+							class:active={view === 'list'}
+							onclick={() => (view = 'list')}
+							aria-label="List view"><List size={16} /></button
 						>
 					</div>
 				</div>
 			</div>
 			{#if !folder}
 				<div class="empty">
+					<div class="empty-orb" aria-hidden="true"></div>
 					<h2>Choose a score folder</h2>
 					<p>Point Sonora at the folder where you keep your PDF scores to get started.</p>
-					<button class="folder-button" onclick={chooseFolder}
-						><FolderPlus size={17} /><span>Choose folder</span></button
-					>
+					<button class="folder-button" onclick={chooseFolder}>
+						<FolderPlus size={17} /><span>Choose folder</span>
+					</button>
 				</div>
 			{:else if !filtered.length}
 				<div class="empty">
@@ -518,6 +520,7 @@
 			{/if}
 		</main>
 	</div>
+
 	{#if metadata}
 		<TagDialog
 			title={metadata.title}
@@ -527,6 +530,8 @@
 			onClose={() => (metadata = null)}
 		/>
 	{/if}
+
+	<SettingsPanel open={settingsOpen} onClose={() => (settingsOpen = false)} />
 </div>
 
 <style>
@@ -535,21 +540,22 @@
 		width: 100%;
 		display: flex;
 		flex-direction: column;
-		background: #11110f;
-		color: #f5f5f4;
+		background: var(--sonora-bg-workspace);
+		color: var(--sonora-text);
 		overflow: hidden;
 	}
 	.header {
-		height: 70px;
-		flex: 0 0 70px;
+		height: 68px;
+		flex: 0 0 68px;
 		display: grid;
-		grid-template-columns: 220px minmax(220px, 560px) 220px;
+		grid-template-columns: 200px minmax(200px, 1fr) auto;
 		align-items: center;
-		justify-content: space-between;
-		gap: 24px;
-		padding: 0 28px;
-		border-bottom: 1px solid #282824;
-		background: #151512;
+		gap: 20px;
+		padding: 0 24px;
+		border-bottom: 1px solid var(--sonora-border);
+		background: var(--sonora-bg-header);
+		backdrop-filter: var(--sonora-blur-sm);
+		-webkit-backdrop-filter: var(--sonora-blur-sm);
 	}
 	.brand {
 		display: flex;
@@ -558,18 +564,20 @@
 		min-width: 0;
 	}
 	.brand strong {
-		font-size: 17px;
-		letter-spacing: -0.02em;
+		font-size: 16px;
+		font-weight: 650;
+		letter-spacing: var(--sonora-tracking-tight);
 	}
 	.brand-mark {
 		width: 34px;
 		height: 34px;
 		display: grid;
 		place-items: center;
-		border: 1px solid #35352f;
-		border-radius: 10px;
-		background: #1d1d19;
-		color: #d8d8d0;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: 11px;
+		background: linear-gradient(145deg, var(--sonora-accent-soft), var(--sonora-bg-elevated));
+		color: var(--sonora-accent);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 	}
 	.header-actions {
 		display: flex;
@@ -577,24 +585,31 @@
 		align-items: center;
 		gap: 8px;
 	}
-	.folder-button,
-	.primary {
+	.folder-button {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
 		gap: 8px;
-		border: 1px solid #3c3c35;
-		border-radius: 10px;
-		background: #e6e6de;
-		color: #171713;
-		padding: 9px 13px;
-		font-size: 12px;
+		border: 1px solid transparent;
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-accent);
+		color: var(--sonora-accent-contrast);
+		padding: 9px 14px;
+		font-size: var(--sonora-text-sm);
 		font-weight: 650;
 		cursor: pointer;
+		box-shadow: var(--sonora-accent-glow);
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			transform var(--sonora-duration) var(--sonora-ease),
+			box-shadow var(--sonora-duration) var(--sonora-ease);
 	}
-	.folder-button:hover,
-	.primary:hover {
-		background: #f0f0e8;
+	.folder-button:hover {
+		background: var(--sonora-accent-hover);
+		transform: translateY(-1px);
+	}
+	.folder-button:active {
+		transform: translateY(0);
 	}
 	:global(.spinning) {
 		animation: spin 0.9s linear infinite;
@@ -613,14 +628,14 @@
 	.sidebar {
 		min-height: 0;
 		overflow: auto;
-		padding: 18px 14px 28px;
-		border-right: 1px solid #282824;
-		background: #131311;
+		padding: 16px 12px 28px;
+		border-right: 1px solid var(--sonora-border);
+		background: var(--sonora-bg-sidebar);
 	}
 	.sidebar nav {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		gap: 3px;
 	}
 	.sidebar nav button,
 	.sidebar section button {
@@ -630,18 +645,24 @@
 		width: 100%;
 		padding: 9px 10px;
 		border: 0;
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 		background: transparent;
-		color: #8a8a82;
-		font-size: 12px;
+		color: var(--sonora-text-muted);
+		font-size: var(--sonora-text-sm);
 		cursor: pointer;
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			color var(--sonora-duration) var(--sonora-ease);
 	}
 	.sidebar nav button:hover,
-	.sidebar section button:hover,
+	.sidebar section button:hover {
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
+	}
 	.sidebar nav button.active,
 	.sidebar section button.active {
-		background: #1f1f1b;
-		color: #e4e4dc;
+		background: var(--sonora-accent-soft);
+		color: var(--sonora-text);
 	}
 	.sidebar button span {
 		min-width: 0;
@@ -649,9 +670,10 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		text-align: left;
 	}
 	.sidebar button b {
-		color: #5f5f58;
+		color: var(--sonora-text-faint);
 		font-size: 10px;
 		font-weight: 500;
 	}
@@ -659,12 +681,12 @@
 		display: flex;
 		gap: 10px;
 		align-items: center;
-		margin: 22px 5px 0;
-		padding: 11px 9px;
-		border: 1px solid #282824;
-		border-radius: 10px;
-		background: #191916;
-		color: #797971;
+		margin: 20px 4px 0;
+		padding: 11px 10px;
+		border: 1px solid var(--sonora-border);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-bg-elevated);
+		color: var(--sonora-text-muted);
 	}
 	.folder-summary div {
 		min-width: 0;
@@ -676,52 +698,49 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		color: #b4b4ac;
+		color: var(--sonora-text-secondary);
 		font-size: 11px;
 	}
 	.folder-summary span {
 		font-size: 10px;
-		color: #5f5f58;
+		color: var(--sonora-text-faint);
 	}
 	.sidebar section {
-		margin-top: 24px;
+		margin-top: 22px;
 	}
 	.sidebar h2 {
 		margin: 0 0 10px 8px;
-		color: #5f5f58;
+		color: var(--sonora-text-faint);
 		font-size: 10px;
 		font-weight: 650;
-		letter-spacing: 0.06em;
+		letter-spacing: var(--sonora-tracking-wide);
 		text-transform: uppercase;
-	}
-	.sidebar section button {
-		margin-bottom: 2px;
 	}
 	.main {
 		min-width: 0;
 		min-height: 0;
 		overflow: auto;
-		padding: 28px 32px 42px;
+		padding: 26px 30px 40px;
 	}
 	.toolbar {
 		display: flex;
 		align-items: flex-end;
 		justify-content: space-between;
 		gap: 18px;
-		margin-bottom: 24px;
+		margin-bottom: 22px;
 	}
 	.toolbar h1 {
 		margin: 0;
-		font-size: 23px;
+		font-size: var(--sonora-text-2xl);
 		line-height: 1.1;
-		letter-spacing: -0.03em;
+		letter-spacing: var(--sonora-tracking-tight);
 		font-weight: 650;
 	}
 	.toolbar > div:first-child span {
 		display: block;
 		margin-top: 6px;
-		color: #66665f;
-		font-size: 11px;
+		color: var(--sonora-text-faint);
+		font-size: var(--sonora-text-sm);
 	}
 	.toolbar-actions {
 		display: flex;
@@ -730,45 +749,61 @@
 	}
 	.sort-select {
 		height: 36px;
-		border: 1px solid #30302b;
-		border-radius: 9px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-sm);
 		padding: 0 10px;
-		background: #1a1a17;
-		color: #a6a69e;
+		background: var(--sonora-bg-elevated);
+		color: var(--sonora-text-secondary);
 		outline: 0;
-		font-size: 11px;
+		font-size: var(--sonora-text-sm);
+		transition: border-color var(--sonora-duration) var(--sonora-ease);
+	}
+	.sort-select:hover {
+		border-color: color-mix(in srgb, var(--sonora-accent) 35%, var(--sonora-border-strong));
 	}
 	.sort-select:focus {
-		border-color: #55554d;
+		border-color: var(--sonora-border-focus);
+		box-shadow: 0 0 0 3px var(--sonora-accent-soft);
 	}
 	.seg {
 		display: flex;
 		gap: 2px;
 		padding: 3px;
-		border: 1px solid #30302b;
-		border-radius: 10px;
-		background: #1a1a17;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-bg-elevated);
 	}
 	.seg button {
-		width: 31px;
+		width: 32px;
 		height: 30px;
 		display: grid;
 		place-items: center;
 		border: 0;
-		border-radius: 7px;
+		border-radius: 8px;
 		background: transparent;
-		color: #66665f;
+		color: var(--sonora-text-muted);
 		cursor: pointer;
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			color var(--sonora-duration) var(--sonora-ease);
 	}
-	.seg button:hover,
+	.seg button:hover {
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
+	}
 	.seg button.active {
-		background: #292923;
-		color: #ddd;
+		background: var(--sonora-bg-active);
+		color: var(--sonora-text);
+		box-shadow: var(--sonora-shadow-xs);
 	}
 	.score-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
 		gap: 28px 18px;
+	}
+	.library.compact .score-grid {
+		gap: 18px 12px;
+		grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
 	}
 	.score-list {
 		display: flex;
@@ -776,16 +811,27 @@
 		gap: 4px;
 	}
 	.empty {
+		position: relative;
 		max-width: 420px;
-		margin: 48px auto 0;
+		margin: 56px auto 0;
 		text-align: center;
-		color: #77776f;
+		color: var(--sonora-text-muted);
+	}
+	.empty-orb {
+		width: 72px;
+		height: 72px;
+		margin: 0 auto 18px;
+		border-radius: 50%;
+		background: radial-gradient(circle at 30% 30%, var(--sonora-accent-soft), transparent 70%);
+		border: 1px solid var(--sonora-border);
+		box-shadow: var(--sonora-accent-glow);
 	}
 	.empty h2 {
 		margin: 0 0 8px;
-		color: #d5d5cd;
+		color: var(--sonora-text);
 		font-size: 18px;
 		font-weight: 650;
+		letter-spacing: var(--sonora-tracking-tight);
 	}
 	.empty p {
 		margin: 0 0 18px;
@@ -796,7 +842,7 @@
 		.header {
 			grid-template-columns: auto minmax(0, 1fr) auto;
 			gap: 12px;
-			padding: 0 18px;
+			padding: 0 16px;
 		}
 		.sidebar {
 			width: 190px;
@@ -805,7 +851,7 @@
 			grid-template-columns: 190px minmax(0, 1fr);
 		}
 		.main {
-			padding: 22px 20px 34px;
+			padding: 20px 18px 32px;
 		}
 		.folder-button span {
 			display: none;
@@ -813,9 +859,8 @@
 	}
 	@media (max-width: 680px) {
 		.header {
-			height: 62px;
-			flex-basis: 62px;
-			grid-template-columns: auto minmax(0, 1fr) auto;
+			height: 60px;
+			flex-basis: 60px;
 			padding: 0 12px;
 		}
 		.brand strong {
@@ -828,18 +873,18 @@
 			display: none;
 		}
 		.main {
-			padding: 17px 12px 30px;
+			padding: 16px 12px 28px;
 		}
 		.toolbar {
 			align-items: center;
-			margin-bottom: 18px;
+			margin-bottom: 16px;
 		}
 		.sort-select {
 			display: none;
 		}
 		.score-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
-			gap: 20px 11px;
+			gap: 18px 10px;
 		}
 	}
 </style>
