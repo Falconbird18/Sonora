@@ -109,6 +109,13 @@
 	let panVx = 0;
 	let panVy = 0;
 	let panMomentumRaf = 0;
+	/** Active two-finger pinch-to-zoom (tablet). */
+	type PinchState = {
+		lastDist: number;
+		lastMidX: number;
+		lastMidY: number;
+	};
+	let pinch: PinchState | null = null;
 	let textSize = $state(18);
 	let textEditor = $state<TextEditor | null>(null);
 	let textDraft = $state('');
@@ -320,6 +327,14 @@
 			resizeTimer = setTimeout(() => void render({ quiet: true }), 100);
 		});
 		if (host) observer.observe(host);
+		// Pinch-to-zoom for tablets (two-finger). passive:false so we can preventDefault.
+		const pinchOpts: AddEventListenerOptions = { passive: false };
+		if (host) {
+			host.addEventListener('touchstart', onPinchTouchStart, pinchOpts);
+			host.addEventListener('touchmove', onPinchTouchMove, pinchOpts);
+			host.addEventListener('touchend', onPinchTouchEnd);
+			host.addEventListener('touchcancel', onPinchTouchEnd);
+		}
 		const onPageHide = () => {
 			void flushPendingAnnotations();
 		};
@@ -329,6 +344,12 @@
 			document.removeEventListener('fullscreenchange', onFullscreen);
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.removeEventListener('pagehide', onPageHide);
+			if (host) {
+				host.removeEventListener('touchstart', onPinchTouchStart);
+				host.removeEventListener('touchmove', onPinchTouchMove);
+				host.removeEventListener('touchend', onPinchTouchEnd);
+				host.removeEventListener('touchcancel', onPinchTouchEnd);
+			}
 			observer.disconnect();
 			clearTimeout(resizeTimer);
 			clearTimeout(prefetchTimer);
@@ -631,8 +652,10 @@
 		};
 	}
 	function pointToCanvas(point: Point, canvas: HTMLCanvasElement) {
-		const rect = canvas.getBoundingClientRect();
-		return { x: point.x * rect.width, y: point.y * rect.height };
+		// Layout box (not getBoundingClientRect) so ink scales with CSS zoom.
+		const w = Math.max(1, canvas.clientWidth);
+		const h = Math.max(1, canvas.clientHeight);
+		return { x: point.x * w, y: point.y * h };
 	}
 	function choose(nextTool: Tool) {
 		tool = nextTool;
@@ -910,10 +933,12 @@
 	function redraw(number: number, canvas: HTMLCanvasElement | null) {
 		if (!canvas) return;
 		const context = canvas.getContext('2d')!;
-		const rect = canvas.getBoundingClientRect();
-		const scale = canvas.width / Math.max(1, rect.width);
+		// Pre-zoom layout pixels; parent scale(zoom) scales symbols/text with the page.
+		const layoutW = Math.max(1, canvas.clientWidth);
+		const layoutH = Math.max(1, canvas.clientHeight);
+		const scale = canvas.width / layoutW;
 		context.setTransform(scale, 0, 0, scale, 0, 0);
-		context.clearRect(0, 0, rect.width, rect.height);
+		context.clearRect(0, 0, layoutW, layoutH);
 		if (!annotationsVisible) return;
 		for (const stroke of strokes[number] || []) drawStroke(context, stroke, canvas);
 		context.save();
@@ -1196,6 +1221,72 @@
 			panMomentumRaf = requestAnimationFrame(tick);
 		};
 		panMomentumRaf = requestAnimationFrame(tick);
+	}
+
+
+	function touchDistance(a: Touch, b: Touch) {
+		return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+	}
+	function touchMidpoint(a: Touch, b: Touch) {
+		return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
+	}
+	function cancelActiveStroke() {
+		if (drawing) {
+			const active = drawing;
+			if (active.raf) cancelAnimationFrame(active.raf);
+			drawing = null;
+			isDrawing = false;
+			try {
+				active.canvas.releasePointerCapture(active.pointerId);
+			} catch {}
+		}
+		if (draggingAnnot) {
+			const active = draggingAnnot;
+			draggingAnnot = null;
+			try {
+				active.canvas.releasePointerCapture(active.pointerId);
+			} catch {}
+		}
+		panDrag = null;
+		stopPanMomentum();
+	}
+	function onPinchTouchStart(event: TouchEvent) {
+		if (event.touches.length !== 2 || !host) return;
+		event.preventDefault();
+		cancelActiveStroke();
+		const a = event.touches[0];
+		const b = event.touches[1];
+		const mid = touchMidpoint(a, b);
+		const rect = host.getBoundingClientRect();
+		pinch = {
+			lastDist: Math.max(1, touchDistance(a, b)),
+			lastMidX: mid.x - rect.left,
+			lastMidY: mid.y - rect.top
+		};
+	}
+	function onPinchTouchMove(event: TouchEvent) {
+		if (!pinch || event.touches.length < 2 || !host) return;
+		event.preventDefault();
+		const a = event.touches[0];
+		const b = event.touches[1];
+		const dist = Math.max(1, touchDistance(a, b));
+		const rect = host.getBoundingClientRect();
+		const mid = touchMidpoint(a, b);
+		const midX = mid.x - rect.left;
+		const midY = mid.y - rect.top;
+		const factor = dist / pinch.lastDist;
+		// Keep the score under your fingers while pinching.
+		panX += midX - pinch.lastMidX;
+		panY += midY - pinch.lastMidY;
+		pinch.lastDist = dist;
+		pinch.lastMidX = midX;
+		pinch.lastMidY = midY;
+		if (Math.abs(factor - 1) > 0.001) {
+			setZoom(zoom * factor, { focusX: midX, focusY: midY });
+		}
+	}
+	function onPinchTouchEnd(event: TouchEvent) {
+		if (event.touches.length < 2) pinch = null;
 	}
 
 	function onWorkspacePointerDown(event: PointerEvent) {
@@ -1633,7 +1724,7 @@
 	{#if cursorScreen && tool === 'symbol' && !reading}
 		<div
 			class="symbol-ghost"
-			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px;--ghost-size:${symbolSize}px;--ghost-color:${color}`}
+			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px;--ghost-size:${symbolSize * zoom}px;--ghost-color:${color}`}
 			aria-hidden="true"
 		>
 			<span class="symbol-ghost-ring"></span>
@@ -1708,9 +1799,7 @@
 	.topbar-left,
 	.topbar-right,
 	.page-controls,
-	.footer-section,
-	.tool-group,
-	.color-row {
+	.footer-section {
 		display: flex;
 		align-items: center;
 		gap: 5px;
@@ -1743,7 +1832,6 @@
 		justify-content: center;
 	}
 	.icon-button,
-	.tool-button,
 	.text-button {
 		border: 1px solid transparent;
 		background: transparent;
@@ -1759,24 +1847,11 @@
 		height: 36px;
 	}
 	.icon-button:hover,
-	.tool-button:hover,
 	.text-button:hover,
 	.icon-button.active {
 		background: rgba(255, 255, 255, 0.08);
 		color: #fff;
 	}
-	.tool-button.active {
-		color: #fff;
-		background: color-mix(in srgb, var(--tool-accent, #3b82f6) 28%, transparent);
-		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tool-accent, #3b82f6) 55%, transparent);
-	}
-	.tool-button[data-tool='pen'] { --tool-accent: #f59e0b; }
-	.tool-button[data-tool='highlighter'] { --tool-accent: #eab308; }
-	.tool-button[data-tool='line'] { --tool-accent: #38bdf8; }
-	.tool-button[data-tool='arrow'] { --tool-accent: #22d3ee; }
-	.tool-button[data-tool='eraser'] { --tool-accent: #f87171; }
-	.tool-button[data-tool='symbol'] { --tool-accent: #a78bfa; }
-	.tool-button[data-tool='text'] { --tool-accent: #4ade80; }
 	.icon-button:disabled {
 		opacity: 0.3;
 		cursor: not-allowed;
