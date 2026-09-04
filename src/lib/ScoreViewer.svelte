@@ -84,6 +84,9 @@
 	let annotationsVisible = $state(true);
 	let tool = $state<Tool>('pan');
 	let annotating = $derived(controls && tool !== 'pan' && !reading);
+	const strokeTool = $derived(tool === 'pen' || tool === 'highlighter' || tool === 'line' || tool === 'arrow');
+	const showToolOptions = $derived(annotating && (strokeTool || tool === 'eraser'));
+	const paletteAway = $derived(isDrawing);
 	let color = $state('#111827');
 	let width = $state(3);
 	let selectedSymbol = $state(MUSIC_SYMBOLS[0]);
@@ -133,6 +136,10 @@
 		stroke?: Stroke;
 		raf?: number;
 	} | null = null;
+	/** True while a stroke/erase is in progress — palette steps aside. */
+	let isDrawing = $state(false);
+	/** Symbol drawer collapsed to a thin strip after placement. */
+	let symbolSheetCollapsed = $state(false);
 	let hasPainted = $state(false);
 	let closed = false;
 	let isFullscreen = $state(false);
@@ -635,8 +642,8 @@
 			textDraft = '';
 		}
 		if (nextTool !== 'eraser' && nextTool !== 'symbol') cursorScreen = null;
-		if (nextTool === 'symbol' && symbolCategory !== 'Recent' && !symbolSearch.trim()) {
-			// keep current category
+		if (nextTool === 'symbol') {
+			symbolSheetCollapsed = false;
 		}
 	}
 
@@ -664,6 +671,7 @@
 		};
 		stamps[number] = [...(stamps[number] || []), stamp];
 		recentSymbols = [selectedSymbol.id, ...recentSymbols.filter((id) => id !== selectedSymbol.id)].slice(0, 10);
+		symbolSheetCollapsed = true;
 		persistPrefs();
 		if (canvas) redraw(number, canvas);
 		checkpoint(number);
@@ -701,6 +709,7 @@
 		}
 		if (tool === 'eraser') {
 			drawing = { page: number, canvas, pointerId: event.pointerId };
+			isDrawing = true;
 			erase(point, number, canvas, false);
 			return;
 		}
@@ -715,6 +724,7 @@
 		ensureHistory(number);
 		strokes[number] = [...(strokes[number] || []), stroke];
 		drawing = { page: number, canvas, pointerId: event.pointerId, stroke };
+		isDrawing = true;
 		redraw(number, canvas);
 	}
 
@@ -916,6 +926,7 @@
 		const active = drawing;
 		if (active.raf) cancelAnimationFrame(active.raf);
 		drawing = null;
+		isDrawing = false;
 		try { active.canvas.releasePointerCapture(active.pointerId); } catch {}
 		redraw(active.page, active.canvas);
 		checkpoint(active.page);
@@ -1553,127 +1564,145 @@
 	{#if !reading && !controls}
 		<button class="annotation-toggle" title="Annotation tools" aria-label="Open annotation tools" onclick={toggleControls}><Pencil size={18} /></button>
 	{/if}
+
 	{#if !reading && controls}
-		<aside class="annotation-bar">
-			<div class="tool-group">
-				<button class:active={tool === 'pen'} class="tool-button" data-tool="pen" title="Pen (P)" onclick={() => choose('pen')}><PenTool size={18} /><span>Pen</span></button>
-				<button class:active={tool === 'highlighter'} class="tool-button" data-tool="highlighter" title="Highlighter (H)" onclick={() => choose('highlighter')}><Highlighter size={18} /><span>Highlight</span></button>
-				<button class:active={tool === 'line'} class="tool-button" data-tool="line" title="Line" onclick={() => choose('line')}><Minus size={18} /><span>Line</span></button>
-				<button class:active={tool === 'arrow'} class="tool-button" data-tool="arrow" title="Arrow" onclick={() => choose('arrow')}><ArrowUpRight size={18} /><span>Arrow</span></button>
-				<button class:active={tool === 'eraser'} class="tool-button" data-tool="eraser" title="Eraser (E)" onclick={() => choose('eraser')}><Eraser size={18} /><span>Erase</span></button>
-				<button class:active={tool === 'symbol'} class="tool-button" data-tool="symbol" title="Symbols (S)" onclick={() => choose('symbol')}><Music2 size={18} /><span>Symbols</span></button>
-				<button class:active={tool === 'text'} class="tool-button" data-tool="text" title="Text (T)" onclick={() => choose('text')}><Type size={18} /><span>Text</span></button>
-			</div>
-			<div class="divider"></div>
-			<div class="tool-group compact">
-				<button class="icon-button" title="Undo" disabled={!canUndo} onclick={undo}><Undo2 size={18} /></button>
-				<button class="icon-button" title="Redo" disabled={!canRedo} onclick={redo}><Redo2 size={18} /></button>
-				<div class="color-row">
-					{#each primaryColors as swatch}
-						<button class="swatch" class:selected={color === swatch} style={`--swatch:${swatch}`} title={swatch} onclick={() => { color = swatch; colorPickerOpen = false; }}></button>
-					{/each}
-					<div class="color-more-wrap">
-						<button
-							class="swatch more-swatch"
-							class:selected={extraColors.includes(color)}
-							class:open={colorPickerOpen}
-							style={extraColors.includes(color) ? `--swatch:${color}` : ''}
-							title="More colors"
-							aria-label="More colors"
-							aria-expanded={colorPickerOpen}
-							onclick={() => (colorPickerOpen = !colorPickerOpen)}
-						>
-							{#if !extraColors.includes(color)}
-								<span class="more-plus">+</span>
-							{/if}
-						</button>
-						{#if colorPickerOpen}
-							<div class="color-popup" role="listbox" aria-label="More colors">
-								{#each extraColors as swatch}
-									<button
-										class="swatch"
-										class:selected={color === swatch}
-										style={`--swatch:${swatch}`}
-										title={swatch}
-										role="option"
-										aria-selected={color === swatch}
-										onclick={() => { color = swatch; colorPickerOpen = false; }}
-									></button>
-								{/each}
-							</div>
+		<div class="palette" class:is-away={paletteAway} class:symbol-open={tool === 'symbol' && !symbolSheetCollapsed}>
+			<aside class="tool-rail" aria-label="Annotation tools">
+				<div class="rail-group" role="toolbar" aria-label="Draw">
+					<button type="button" class:active={tool === 'pen'} class="rail-btn" data-tool="pen" title="Pen (P)" aria-label="Pen" onclick={() => choose('pen')}><PenTool size={18} /></button>
+					<button type="button" class:active={tool === 'highlighter'} class="rail-btn" data-tool="highlighter" title="Highlighter (H)" aria-label="Highlighter" onclick={() => choose('highlighter')}><Highlighter size={18} /></button>
+					<button type="button" class:active={tool === 'line'} class="rail-btn" data-tool="line" title="Line" aria-label="Line" onclick={() => choose('line')}><Minus size={18} /></button>
+					<button type="button" class:active={tool === 'arrow'} class="rail-btn" data-tool="arrow" title="Arrow" aria-label="Arrow" onclick={() => choose('arrow')}><ArrowUpRight size={18} /></button>
+					<button type="button" class:active={tool === 'eraser'} class="rail-btn" data-tool="eraser" title="Eraser (E)" aria-label="Eraser" onclick={() => choose('eraser')}><Eraser size={18} /></button>
+				</div>
+				<div class="rail-sep" aria-hidden="true"></div>
+				<div class="rail-group" role="toolbar" aria-label="Place">
+					<button type="button" class:active={tool === 'symbol'} class="rail-btn" data-tool="symbol" title="Symbols (S)" aria-label="Symbols" onclick={() => choose('symbol')}>
+						{#if tool === 'symbol'}
+							<span class="rail-glyph" aria-hidden="true">{selectedSymbol.glyph}</span>
+						{:else}
+							<Music2 size={18} />
 						{/if}
-					</div>
+					</button>
+					<button type="button" class:active={tool === 'text'} class="rail-btn" data-tool="text" title="Text (T)" aria-label="Text" onclick={() => choose('text')}><Type size={18} /></button>
 				</div>
-				<label class="range-label size-slider">
-					<span>Size</span>
-					<input type="range" min="1" max="14" bind:value={width} />
-					<span class="size-value">{width}</span>
-				</label>
-				<button class="icon-button" title="Close annotation tools" onclick={toggleControls}><X size={18} /></button>
-			</div>
-		</aside>
-	{/if}
-
-	{#if !reading && controls && tool === 'symbol'}
-		<div class="symbol-sheet" role="dialog" aria-label="Musical symbols">
-			<header class="symbol-sheet-head">
-				<div class="symbol-sheet-title">
-					<strong>Symbols</strong>
-					<span>Click page to place · drag to move</span>
+				<div class="rail-sep" aria-hidden="true"></div>
+				<div class="rail-group" role="toolbar" aria-label="History">
+					<button type="button" class="rail-btn" title="Undo" aria-label="Undo" disabled={!canUndo} onclick={undo}><Undo2 size={18} /></button>
+					<button type="button" class="rail-btn" title="Redo" aria-label="Redo" disabled={!canRedo} onclick={redo}><Redo2 size={18} /></button>
 				</div>
-				<button type="button" class="icon-button" title="Close symbols" aria-label="Close symbols" onclick={() => choose('pan')}><X size={17} /></button>
-			</header>
+				<div class="rail-sep" aria-hidden="true"></div>
+				<button type="button" class="rail-btn rail-close" title="Close tools" aria-label="Close annotation tools" onclick={toggleControls}><X size={17} /></button>
+			</aside>
 
-			<div class="symbol-search-row">
-				<input bind:value={symbolSearch} placeholder="Search symbols…" aria-label="Search symbols" />
-				<label class="symbol-size-control" title="Size">
-					<span>{symbolSize}px</span>
-					<input type="range" min="20" max="64" bind:value={symbolSize} />
-				</label>
-			</div>
+			{#if showToolOptions}
+				<div class="tool-options" role="group" aria-label="Tool options">
+					{#if strokeTool}
+						<div class="opt-colors">
+							{#each colors as swatch}
+								<button
+									type="button"
+									class="swatch"
+									class:selected={color === swatch}
+									style={`--swatch:${swatch}`}
+									title={swatch}
+									onclick={() => (color = swatch)}
+								></button>
+							{/each}
+						</div>
+						<label class="opt-size">
+							<span class="opt-size-val">{width}</span>
+							<input type="range" min="1" max="14" bind:value={width} aria-label="Stroke size" />
+						</label>
+					{:else if tool === 'eraser'}
+						<label class="opt-size">
+							<span class="opt-size-val">{width}</span>
+							<input type="range" min="1" max="14" bind:value={width} aria-label="Eraser size" />
+						</label>
+					{/if}
+				</div>
+			{/if}
 
-			<nav class="symbol-cats" aria-label="Symbol tags">
-				<button
-					type="button"
-					class:active={symbolCategory === 'Recent' && !symbolSearch.trim()}
-					onclick={() => {
-						symbolCategory = 'Recent';
-						symbolSearch = '';
-					}}
-				>Recent</button>
-				{#each MUSIC_SYMBOL_CATEGORIES as category}
+			{#if tool === 'symbol'}
+				{#if symbolSheetCollapsed}
 					<button
 						type="button"
-						class:active={symbolCategory === category && !symbolSearch.trim()}
-						onclick={() => {
-							symbolCategory = category;
-							symbolSearch = '';
-						}}
-					>{category}</button>
-				{/each}
-			</nav>
-
-			<div class="symbol-tray">
-				{#each filteredSymbols as symbol (symbol.id)}
-					<button
-						type="button"
-						class="symbol-tile"
-						class:selected={selectedSymbol.id === symbol.id}
-						title={symbol.name}
-						onclick={() => {
-							selectedSymbol = symbol;
-						}}
+						class="symbol-chip"
+						title="Open symbol picker"
+						aria-label="Open symbol picker"
+						onclick={() => (symbolSheetCollapsed = false)}
 					>
-						<span class="glyph">{symbol.glyph}</span>
-						<span class="name">{symbol.name}</span>
+						<span class="symbol-chip-glyph">{selectedSymbol.glyph}</span>
+						<span class="symbol-chip-meta">
+							<strong>{selectedSymbol.name}</strong>
+							<span>Tap to change · click score to place</span>
+						</span>
 					</button>
 				{:else}
-					<p class="symbol-empty">{symbolSearch.trim() ? `No symbols match “${symbolSearch}”` : 'No recent symbols yet — pick one below'}</p>
-				{/each}
-			</div>
+					<div class="symbol-drawer" role="dialog" aria-label="Musical symbols">
+						<header class="symbol-drawer-head">
+							<div class="symbol-drawer-title">
+								<strong>Symbols</strong>
+								<span>Select, then click the score</span>
+							</div>
+							<div class="symbol-drawer-actions">
+								<button type="button" class="icon-button" title="Minimize" aria-label="Minimize symbol picker" onclick={() => (symbolSheetCollapsed = true)}><Minus size={16} /></button>
+								<!-- <button type="button" class="icon-button" title="Close symbols" aria-label="Close symbols" onclick={() => choose('pen')}><X size={16} /></button> -->
+							</div>
+						</header>
+
+						<div class="symbol-search-row">
+							<input bind:value={symbolSearch} placeholder="Search symbols…" aria-label="Search symbols" />
+							<label class="symbol-size-control" title="Placement size">
+								<span>{symbolSize}px</span>
+								<input type="range" min="20" max="64" bind:value={symbolSize} />
+							</label>
+						</div>
+
+						<nav class="symbol-cats" aria-label="Symbol categories">
+							<button
+								type="button"
+								class:active={symbolCategory === 'Recent' && !symbolSearch.trim()}
+								onclick={() => {
+									symbolCategory = 'Recent';
+									symbolSearch = '';
+								}}
+							>Recent</button>
+							{#each MUSIC_SYMBOL_CATEGORIES as category}
+								<button
+									type="button"
+									class:active={symbolCategory === category && !symbolSearch.trim()}
+									onclick={() => {
+										symbolCategory = category;
+										symbolSearch = '';
+									}}
+								>{category}</button>
+							{/each}
+						</nav>
+
+						<div class="symbol-tray">
+							{#each filteredSymbols as symbol (symbol.id)}
+								<button
+									type="button"
+									class="symbol-tile"
+									class:selected={selectedSymbol.id === symbol.id}
+									title={symbol.name}
+									onclick={() => {
+										selectedSymbol = symbol;
+									}}
+								>
+									<span class="glyph-box"><span class="glyph">{symbol.glyph}</span></span>
+									<span class="name">{symbol.name}</span>
+								</button>
+							{:else}
+								<p class="symbol-empty">{symbolSearch.trim() ? `No symbols match “${symbolSearch}”` : 'No recent symbols yet — pick a category'}</p>
+							{/each}
+						</div>
+					</div>
+				{/if}
+			{/if}
 		</div>
 	{/if}
-
 
 	{#if cursorScreen && tool === 'eraser' && !reading}
 		<div
@@ -2071,10 +2100,10 @@
 		z-index: 32;
 		left: 16px;
 		bottom: 16px;
-		width: 42px;
-		height: 42px;
+		width: 44px;
+		height: 44px;
 		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 12px;
+		border-radius: 14px;
 		background: rgba(28, 28, 25, 0.94);
 		color: #ddd;
 		display: grid;
@@ -2082,47 +2111,126 @@
 		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
 		cursor: pointer;
 	}
-	.annotation-bar {
+	.annotation-toggle:hover {
+		background: rgba(40, 40, 36, 0.98);
+		color: #fff;
+	}
+
+	/* —— Annotation palette (redesign) —— */
+	.palette {
 		position: absolute;
-		z-index: 35;
-		left: 50%;
-		bottom: 8px;
-		transform: translateX(-50%);
+		z-index: 36;
+		left: 12px;
+		top: 50%;
+		transform: translateY(-50%);
 		display: flex;
 		align-items: center;
-		gap: 5px;
-		max-width: calc(100% - 24px);
-		padding: 5px;
-		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
-    	border: 1px solid rgba(255, 255, 255, 0.08);
-    	border-radius: 14px;
-    	background: rgba(25, 25, 22, 0.78);
-    	backdrop-filter: blur(18px);
-		/* Let strokes / stamps start under the bar; only chrome captures clicks */
+		gap: 8px;
 		pointer-events: none;
+		transition: opacity 160ms ease, transform 180ms ease;
 	}
-	.annotation-bar > * {
+	.palette > * {
 		pointer-events: auto;
 	}
-	.tool-button {
-		min-width: 48px;
-		padding: 8px 8px;
-		flex-direction: column;
-		gap: 3px;
-		font-size: 9px;
+	/* While drawing, step fully aside so placement under the rail is frictionless */
+	.palette.is-away {
+		opacity: 0.12;
+		transform: translateY(-50%) translateX(-12px);
+		pointer-events: none;
 	}
-	.divider {
-		width: 1px;
-		height: 31px;
+	.palette.is-away > * {
+		pointer-events: none;
+	}
+
+	.tool-rail {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+		padding: 8px 6px;
+		border-radius: 18px;
+		border: 1px solid rgba(255, 255, 255, 0.09);
+		background: rgba(18, 18, 16, 0.88);
+		backdrop-filter: blur(18px);
+		box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+	}
+	.rail-group {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 2px;
+	}
+	.rail-sep {
+		width: 22px;
+		height: 1px;
+		margin: 3px 0;
 		background: rgba(255, 255, 255, 0.08);
 	}
-	.compact {
-		gap: 4px;
+	.rail-btn {
+		width: 40px;
+		height: 40px;
+		border: 1px solid transparent;
+		border-radius: 12px;
+		background: transparent;
+		color: #aaa9a1;
+		display: grid;
+		place-items: center;
+		cursor: pointer;
+		transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
 	}
-	.color-row {
-		margin-left: 3px;
+	.rail-btn:hover:not(:disabled) {
+		background: rgba(255, 255, 255, 0.07);
+		color: #fff;
 	}
-	.swatch {
+	.rail-btn:disabled {
+		opacity: 0.28;
+		cursor: not-allowed;
+	}
+	.rail-btn.active {
+		color: #fff;
+		background: color-mix(in srgb, var(--tool-accent, #3b82f6) 30%, transparent);
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tool-accent, #3b82f6) 55%, transparent);
+	}
+	.rail-btn[data-tool='pen'] { --tool-accent: #f59e0b; }
+	.rail-btn[data-tool='highlighter'] { --tool-accent: #eab308; }
+	.rail-btn[data-tool='line'] { --tool-accent: #38bdf8; }
+	.rail-btn[data-tool='arrow'] { --tool-accent: #22d3ee; }
+	.rail-btn[data-tool='eraser'] { --tool-accent: #f87171; }
+	.rail-btn[data-tool='symbol'] { --tool-accent: #a78bfa; }
+	.rail-btn[data-tool='text'] { --tool-accent: #4ade80; }
+	.rail-close {
+		margin-top: 1px;
+	}
+	.rail-glyph {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
+		overflow: hidden;
+		font: 20px/1 Leland, serif;
+		color: #f4f4f0;
+	}
+
+	.tool-options {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		padding: 10px 12px;
+		border-radius: 16px;
+		border: 1px solid rgba(255, 255, 255, 0.09);
+		background: rgba(18, 18, 16, 0.9);
+		backdrop-filter: blur(18px);
+		box-shadow: 0 16px 40px rgba(0, 0, 0, 0.42);
+		max-width: 56px;
+	}
+	.opt-colors {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 7px;
+	}
+	.opt-colors .swatch {
 		width: 22px;
 		height: 22px;
 		border: 2px solid transparent;
@@ -2130,43 +2238,41 @@
 		background: var(--swatch);
 		cursor: pointer;
 		flex-shrink: 0;
+		padding: 0;
 	}
-	.swatch.selected {
+	.opt-colors .swatch.selected {
 		border-color: #fff;
 		box-shadow: 0 0 0 1px #111;
 	}
-	.range-label {
+	.opt-size {
 		display: flex;
+		flex-direction: column;
 		align-items: center;
-		gap: 4px;
-		color: #888880;
-		font-size: 9px;
-		white-space: nowrap;
-	}
-	.range-label input {
-		width: 68px;
-	}
-	.size-slider {
 		gap: 6px;
-		padding: 0 4px;
+		color: #8a8a82;
+		font-size: 10px;
 	}
-	.size-slider .size-value {
+	.opt-size-val {
 		min-width: 14px;
 		text-align: center;
 		color: #c8c8c0;
 		font-variant-numeric: tabular-nums;
+		font-weight: 600;
 	}
-	.size-slider input[type='range'] {
+	.opt-size input[type='range'] {
 		-webkit-appearance: none;
 		appearance: none;
-		width: 72px;
-		height: 4px;
+		writing-mode: vertical-lr;
+		direction: rtl;
+		width: 4px;
+		height: 72px;
 		border-radius: 999px;
-		background: linear-gradient(90deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.28));
+		background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.1));
 		outline: none;
 		cursor: pointer;
+		padding: 0;
 	}
-	.size-slider input[type='range']::-webkit-slider-thumb {
+	.opt-size input[type='range']::-webkit-slider-thumb {
 		-webkit-appearance: none;
 		appearance: none;
 		width: 14px;
@@ -2177,7 +2283,7 @@
 		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
 		cursor: pointer;
 	}
-	.size-slider input[type='range']::-moz-range-thumb {
+	.opt-size input[type='range']::-moz-range-thumb {
 		width: 14px;
 		height: 14px;
 		border-radius: 50%;
@@ -2186,89 +2292,111 @@
 		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
 		cursor: pointer;
 	}
-	.size-slider input[type='range']::-moz-range-track {
-		height: 4px;
-		border-radius: 999px;
-		background: linear-gradient(90deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.28));
-	}
-	.color-more-wrap {
-		position: relative;
-		display: inline-flex;
-	}
-	.more-swatch {
-		display: grid;
-		place-items: center;
-		align-items: center;
-		background: rgba(255, 255, 255, 0.08);
-		border: 1px dashed rgba(255, 255, 255, 0.28);
-	}
-	.more-swatch.open {
-		border-style: solid;
-		border-color: rgba(255, 255, 255, 0.45);
-	}
-	.more-plus {
-		font-size: 12px;
-		line-height: 1;
-		color: #c8c8c0;
-		font-weight: 600;
-		transform: translate(0px,-1px);
-	}
-	.color-popup {
+
+	/* Collapsed symbol chip (after place) */
+	.symbol-chip {
 		position: absolute;
-		bottom: calc(100% + 8px);
-		left: 50%;
-		transform: translateX(-50%);
+		left: calc(100% + 10px);
+		bottom: 0;
 		display: flex;
-		gap: 6px;
-		padding: 8px;
-		border-radius: 12px;
+		align-items: center;
+		gap: 10px;
+		min-width: 180px;
+		max-width: min(260px, 48vw);
+		padding: 8px 12px 8px 10px;
+		border-radius: 14px;
 		border: 1px solid rgba(255, 255, 255, 0.1);
-		background: rgba(22, 22, 19, 0.96);
-		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+		background: rgba(18, 18, 16, 0.92);
 		backdrop-filter: blur(16px);
-		z-index: 40;
+		box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+		color: #ddd;
+		cursor: pointer;
+		text-align: left;
 	}
-	.symbol-sheet {
-		position: absolute;
+	.symbol-chip:hover {
+		border-color: rgba(167, 139, 250, 0.45);
+		background: rgba(28, 24, 40, 0.95);
+	}
+	.symbol-chip-glyph {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 36px;
+		height: 36px;
+		overflow: hidden;
+		border-radius: 10px;
+		background: rgba(255, 255, 255, 0.05);
+		font: 22px/1 Leland, serif;
+		color: #f4f4f0;
+		flex-shrink: 0;
+	}
+	.symbol-chip-meta {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.symbol-chip-meta strong {
+		font-size: 12px;
+		font-weight: 600;
+		color: #f0f0ea;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.symbol-chip-meta span {
+		font-size: 10px;
+		color: #7a7a72;
+		white-space: nowrap;
+	}
+
+	/* Expanded symbol drawer — docked bottom-right, away from score center */
+	.symbol-drawer {
+		position: fixed;
 		z-index: 46;
-		right: 8px;
-		bottom: 80px;
-		width: min(440px, calc(100% - 12px));
-		max-height: min(48vh, 420px);
+		left: 64px;
+		bottom: 0;
+		width: min(420px, calc(100vw - 24px));
+		max-height: min(46vh, 400px);
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
 		border: 1px solid rgba(255, 255, 255, 0.1);
 		border-radius: 18px;
-		background: rgba(16, 16, 14, 0.98);
+		background: rgba(14, 14, 12, 0.96);
 		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
 		backdrop-filter: blur(20px);
-		/* Allow placing symbols on the score under the sheet chrome */
+		/* Empty chrome does not steal placement clicks */
 		pointer-events: none;
 	}
-	.symbol-sheet > * {
+	.symbol-drawer > * {
 		pointer-events: auto;
 	}
-	.symbol-sheet-head {
+	.symbol-drawer-head {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
 		padding: 12px 12px 8px;
 	}
-	.symbol-sheet-title {
+	.symbol-drawer-title {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
 		min-width: 0;
 	}
-	.symbol-sheet-title strong {
+	.symbol-drawer-title strong {
 		font-size: 14px;
 		font-weight: 650;
 	}
-	.symbol-sheet-title span {
+	.symbol-drawer-title span {
 		font-size: 11px;
 		color: #7a7a72;
+	}
+	.symbol-drawer-actions {
+		display: flex;
+		align-items: center;
+		gap: 2px;
 	}
 	.symbol-cats {
 		display: flex;
@@ -2326,11 +2454,11 @@
 	}
 	.symbol-tray {
 		flex: 1;
-		min-height: 120px;
+		min-height: 110px;
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
 		gap: 6px;
-		padding: 4px 12px 8px;
+		padding: 4px 12px 12px;
 		overflow: auto;
 		align-content: start;
 	}
@@ -2338,18 +2466,31 @@
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		justify-content: center;
-		gap: 4px;
-		min-height: 64px;
-		padding: 8px 4px;
+		justify-content: flex-start;
+		gap: 6px;
+		min-height: 68px;
+		padding: 8px 4px 6px;
 		border: 1px solid transparent;
 		border-radius: 12px;
 		background: rgba(255, 255, 255, 0.03);
 		color: #f4f4f0;
 		cursor: pointer;
 	}
+	/* Fixed glyph viewport — tall SMuFL glyphs (G clef) no longer overflow */
+	.symbol-tile .glyph-box {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		height: 34px;
+		overflow: hidden;
+		line-height: 1;
+	}
 	.symbol-tile .glyph {
-		font: 28px/1 Leland, serif;
+		display: block;
+		font: 26px/1 Leland, serif;
+		/* Optical centering for glyphs with uneven bounding boxes */
+		transform: translateY(1px);
 	}
 	.symbol-tile .name {
 		font-size: 9px;
@@ -2363,12 +2504,12 @@
 	}
 	.symbol-tile.selected,
 	.symbol-tile:hover {
-		border-color: rgba(147, 197, 253, 0.45);
-		background: rgba(37, 99, 235, 0.16);
+		border-color: rgba(167, 139, 250, 0.45);
+		background: rgba(124, 58, 237, 0.16);
 	}
 	.symbol-tile.selected .name,
 	.symbol-tile:hover .name {
-		color: #c8d9f5;
+		color: #ddd0ff;
 	}
 	.symbol-empty {
 		grid-column: 1 / -1;
@@ -2376,16 +2517,6 @@
 		text-align: center;
 		color: #7a7a72;
 		font-size: 13px;
-	}
-	@media (max-width: 900px) {
-		.symbol-sheet {
-			bottom: 58px;
-			max-height: min(52vh, 380px);
-			border-radius: 16px 16px 12px 12px;
-		}
-		.symbol-tile .name {
-			font-size: 8px;
-		}
 	}
 
 	.text-editor-floating {
@@ -2519,21 +2650,58 @@
 		}
 	}
 	@media (max-width: 900px) {
-		.annotation-bar {
-			left: 10px;
-			right: 10px;
+		.palette {
+			left: 8px;
+			top: auto;
+			bottom: 12px;
 			transform: none;
-			justify-content: center;
-			overflow: auto;
+			flex-direction: column-reverse;
+			align-items: flex-start;
 		}
-		.tool-button {
-			min-width: 42px;
+		.palette.is-away {
+			opacity: 0.12;
+			transform: translateY(10px);
 		}
-		.tool-button span,
-		.divider,
-		.range-label,
-		.color-row {
-			display: none;
+		.tool-rail {
+			flex-direction: row;
+			padding: 6px 8px;
+			border-radius: 16px;
+		}
+		.rail-group {
+			flex-direction: row;
+		}
+		.rail-sep {
+			width: 1px;
+			height: 22px;
+			margin: 0 3px;
+		}
+		.tool-options {
+			flex-direction: row;
+			max-width: none;
+			align-items: center;
+		}
+		.opt-colors {
+			flex-direction: row;
+		}
+		.opt-size {
+			flex-direction: row;
+		}
+		.opt-size input[type='range'] {
+			writing-mode: horizontal-tb;
+			direction: ltr;
+			width: 72px;
+			height: 4px;
+		}
+		.symbol-chip {
+			position: static;
+			left: auto;
+			bottom: auto;
+		}
+		.symbol-drawer {
+			left: 8px;
+			right: 8px;
+			width: auto;
+			max-height: min(52vh, 380px);
 		}
 		.topbar-right .icon-button:nth-child(3),
 		.topbar-right .icon-button:nth-child(4) {
@@ -2550,7 +2718,7 @@
 		.workspace {
 			padding: 14px;
 		}
-		.symbol-sheet {
+		.symbol-drawer {
 			max-height: 64vh;
 		}
 		.bottombar {
@@ -2563,9 +2731,9 @@
 	@media print {
 		.topbar,
 		.bottombar,
-		.annotation-bar,
+		.palette,
 		.annotation-toggle,
-		.symbol-sheet,
+		.symbol-drawer,
 		.search-panel,
 		.loading,
 		.error,
