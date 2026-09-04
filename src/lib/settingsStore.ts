@@ -1,11 +1,19 @@
 import { writable, derived, get } from 'svelte/store';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
+export type ViewerFit = 'page' | 'width';
 
 export type AppSettings = {
 	theme: ThemePreference;
 	reduceMotion: boolean;
 	compactLibrary: boolean;
+	/** Viewer */
+	autoLayout: boolean;
+	dualPages: boolean;
+	keepAwake: boolean;
+	defaultFit: ViewerFit;
+	annotationsVisible: boolean;
+	textSize: number;
 };
 
 const STORAGE_KEY = 'sonora-app-settings';
@@ -13,7 +21,13 @@ const STORAGE_KEY = 'sonora-app-settings';
 const defaults: AppSettings = {
 	theme: 'system',
 	reduceMotion: false,
-	compactLibrary: false
+	compactLibrary: false,
+	autoLayout: true,
+	dualPages: false,
+	keepAwake: true,
+	defaultFit: 'page',
+	annotationsVisible: true,
+	textSize: 18
 };
 
 function load(): AppSettings {
@@ -27,7 +41,16 @@ function load(): AppSettings {
 				? (parsed.theme as ThemePreference)
 				: defaults.theme,
 			reduceMotion: !!parsed.reduceMotion,
-			compactLibrary: !!parsed.compactLibrary
+			compactLibrary: !!parsed.compactLibrary,
+			autoLayout: parsed.autoLayout !== false,
+			dualPages: !!parsed.dualPages,
+			keepAwake: parsed.keepAwake !== false,
+			defaultFit: parsed.defaultFit === 'width' ? 'width' : 'page',
+			annotationsVisible: parsed.annotationsVisible !== false,
+			textSize:
+				typeof parsed.textSize === 'number'
+					? Math.max(10, Math.min(36, parsed.textSize))
+					: defaults.textSize
 		};
 	} catch {
 		return { ...defaults };
@@ -89,6 +112,30 @@ function createSettingsStore() {
 		},
 		setCompactLibrary(compactLibrary: boolean) {
 			update((s) => ({ ...s, compactLibrary }));
+		},
+		setAutoLayout(autoLayout: boolean) {
+			update((s) => ({ ...s, autoLayout }));
+		},
+		setDualPages(dualPages: boolean) {
+			update((s) => ({ ...s, dualPages }));
+		},
+		setKeepAwake(keepAwake: boolean) {
+			update((s) => ({ ...s, keepAwake }));
+		},
+		setDefaultFit(defaultFit: ViewerFit) {
+			update((s) => ({ ...s, defaultFit }));
+		},
+		setAnnotationsVisible(annotationsVisible: boolean) {
+			update((s) => ({ ...s, annotationsVisible }));
+		},
+		setTextSize(textSize: number) {
+			update((s) => ({
+				...s,
+				textSize: Math.max(10, Math.min(36, textSize))
+			}));
+		},
+		patch(partial: Partial<AppSettings>) {
+			update((s) => ({ ...s, ...partial }));
 		},
 		reset() {
 			set({ ...defaults });
