@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { loadAnnotations, saveAnnotation, flushAnnotationSaves, requestPersistentStorage } from './annotationStore';
@@ -2613,3 +2614,6 @@
 		}
 	}
 </style>
+=======
+PLACEHOLDER_WILL_FIX
+>>>>>>> a270ca231cbd53bcf366dd6097da1214177ddac7
