@@ -65,12 +65,12 @@ export const MUSIC_SYMBOLS: MusicSymbol[] = [
 	['da-capo', 'Da capo', 'Repeats', 'E046'],
 	['down-bow', 'Down bow', 'Bowings', 'E610'],
 	['up-bow', 'Up bow', 'Bowings', 'E612'],
-	['finger-0', 'Finger 0', 'Fingering', 'F030'], // Use hex codes for consistency
-	['finger-1', 'Finger 1', 'Fingering', 'F031'],
-	['finger-2', 'Finger 2', 'Fingering', 'F032'],
-	['finger-3', 'Finger 3', 'Fingering', 'F033'],
-	['finger-4', 'Finger 4', 'Fingering', 'F034'],
-	['finger-5', 'Finger 5', 'Fingering', 'F035']
+	['finger-0', 'Finger 0', 'Fingering', 'ED10'],
+	['finger-1', 'Finger 1', 'Fingering', 'ED11'],
+	['finger-2', 'Finger 2', 'Fingering', 'ED12'],
+	['finger-3', 'Finger 3', 'Fingering', 'ED13'],
+	['finger-4', 'Finger 4', 'Fingering', 'ED14'],
+	['finger-5', 'Finger 5', 'Fingering', 'ED15']
 ].map(([id, name, category, hex]) => ({
 	id,
 	name,

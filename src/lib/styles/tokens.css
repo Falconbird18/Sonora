@@ -1,0 +1,84 @@
+/* Sonora design tokens — shared across library + viewer */
+:root {
+	/* Surfaces */
+	--sonora-bg: #11110f;
+	--sonora-bg-elevated: #1c1c19;
+	--sonora-bg-panel: rgba(25, 25, 22, 0.78);
+	--sonora-bg-panel-solid: rgba(25, 25, 22, 0.96);
+	--sonora-bg-deep: #0a0a09;
+	--sonora-bg-workspace: radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%);
+
+	/* Text */
+	--sonora-text: #f4f4f0;
+	--sonora-text-secondary: #c8c8c0;
+	--sonora-text-muted: #8a8a82;
+	--sonora-text-faint: #77776f;
+
+	/* Borders */
+	--sonora-border: rgba(255, 255, 255, 0.08);
+	--sonora-border-strong: rgba(255, 255, 255, 0.14);
+
+	/* Accents */
+	--sonora-accent: #2563eb;
+	--sonora-accent-soft: rgba(37, 99, 235, 0.2);
+	--sonora-danger: #f87171;
+	--sonora-success: #4ade80;
+
+	/* Tool accents (viewer) */
+	--sonora-tool-pen: #f59e0b;
+	--sonora-tool-highlighter: #eab308;
+	--sonora-tool-line: #38bdf8;
+	--sonora-tool-arrow: #22d3ee;
+	--sonora-tool-eraser: #f87171;
+	--sonora-tool-symbol: #a78bfa;
+	--sonora-tool-text: #4ade80;
+
+	/* Geometry */
+	--sonora-radius-sm: 9px;
+	--sonora-radius-md: 12px;
+	--sonora-radius-lg: 14px;
+	--sonora-radius-xl: 18px;
+	--sonora-radius-pill: 999px;
+
+	/* Controls */
+	--sonora-control-size: 36px;
+	--sonora-control-size-sm: 34px;
+	--sonora-touch-target: 40px;
+	--sonora-gap: 5px;
+	--sonora-gap-md: 8px;
+	--sonora-gap-lg: 12px;
+
+	/* Type */
+	--sonora-font: Inter, ui-sans-serif, system-ui, sans-serif;
+	--sonora-font-music: Leland, serif;
+	--sonora-text-xs: 10px;
+	--sonora-text-sm: 11px;
+	--sonora-text-md: 13px;
+	--sonora-text-lg: 14px;
+
+	/* Elevation */
+	--sonora-shadow-sm: 0 12px 30px rgba(0, 0, 0, 0.35);
+	--sonora-shadow-md: 0 18px 50px rgba(0, 0, 0, 0.42);
+	--sonora-shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
+
+	/* Motion */
+	--sonora-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+	--sonora-duration: 160ms;
+	--sonora-duration-med: 220ms;
+
+	/* Blur */
+	--sonora-blur: blur(18px);
+}
+
+@media (max-width: 900px) {
+	:root {
+		--sonora-touch-target: 44px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	:root {
+		--sonora-duration: 0ms;
+		--sonora-duration-med: 0ms;
+	}
+}

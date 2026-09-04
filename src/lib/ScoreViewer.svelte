@@ -25,7 +25,6 @@
 		Maximize2,
 		Minimize2,
 		Minus,
-		MousePointer2,
 		Music2,
 		PenTool,
 		Printer,
@@ -44,10 +43,10 @@
 	} from '@lucide/svelte';
 	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
 
-	type Tool = 'move' | 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';
+	type Tool = 'pan' | 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';
 	type Fit = 'page' | 'width';
 	type Snapshot = { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] };
-	type TextEditor = { page: number; x: number; y: number; text: string; id?: string };
+	type TextEditor = { page: number; x: number; y: number; text: string; id?: string; screenX?: number; screenY?: number };
 
 	let pdf = $state<PdfDocumentProxy | null>(null);
 	let openedPdf: Awaited<ReturnType<typeof openPdfSource>> | null = null;
@@ -72,16 +71,35 @@
 	let settingsOpen = $state(false);
 	let bookmarked = $state(false);
 	let annotationsVisible = $state(true);
-	let tool = $state<Tool>('move');
-	let color = $state('#c2410c');
+	let tool = $state<Tool>('pan');
+	let annotating = $derived(controls && tool !== 'pan' && !reading);
+	let color = $state('#111827');
 	let width = $state(3);
 	let selectedSymbol = $state(MUSIC_SYMBOLS[0]);
-	let symbolCategory = $state<(typeof MUSIC_SYMBOL_CATEGORIES)[number]>('Clefs');
+	let symbolCategory = $state<'Recent' | (typeof MUSIC_SYMBOL_CATEGORIES)[number]>('Recent');
 	let symbolSearch = $state('');
 	let symbolSize = $state(34);
 	let recentSymbols = $state<string[]>([]);
+	let cursorScreen = $state<{ x: number; y: number } | null>(null);
+	let loupeCanvas = $state<HTMLCanvasElement | null>(null);
+	/** View pan offset in CSS pixels (transform-based for smooth dragging). */
+	let panX = $state(0);
+	let panY = $state(0);
+	type PanDrag = {
+		pointerId: number;
+		lastX: number;
+		lastY: number;
+		lastT: number;
+	};
+
+	let panDrag = $state<PanDrag | null>(null);
+	let panVx = 0;
+	let panVy = 0;
+	let panMomentumRaf = 0;
 	let textSize = $state(18);
 	let textEditor = $state<TextEditor | null>(null);
+	let textDraft = $state('');
+	let draggingAnnot: { kind: 'stamp' | 'note'; page: number; id: string; canvas: HTMLCanvasElement; pointerId: number } | null = null;
 	let strokes = $state<Record<number, Stroke[]>>({});
 	let stamps = $state<Record<number, SymbolStamp[]>>({});
 	let notes = $state<Record<number, TextNote[]>>({});
@@ -136,25 +154,28 @@
 	}
 
 	const prefs = $derived(`sonora-viewer-${score.id}`);
-	const colors = ['#c2410c', '#2563eb', '#15803d', '#a16207', '#7e22ce', '#111827', '#ffffff'];
+	const colors = ['#c2410c', '#111827', '#2563eb', '#15803d', '#a16207', '#7e22ce', '#ffffff'];
 	const primaryColors = colors.slice(0, 3);
 	const extraColors = colors.slice(3);
 	let colorPickerOpen = $state(false);
 	const visiblePages = $derived(
 		pdf ? (dual ? [page, Math.min(pdf.numPages, page + 1)] : [page]) : [page]
 	);
-	const filteredSymbols = $derived(
-		MUSIC_SYMBOLS.filter(
-			(s) =>
-				s.category === symbolCategory &&
-				(!symbolSearch.trim() || s.name.toLowerCase().includes(symbolSearch.toLowerCase()))
-		)
-	);
 	const recentSymbolObjects = $derived(
 		recentSymbols
 			.map((id) => MUSIC_SYMBOLS.find((s) => s.id === id))
 			.filter((s): s is (typeof MUSIC_SYMBOLS)[number] => !!s)
 	);
+	const filteredSymbols = $derived.by(() => {
+		const q = symbolSearch.trim().toLowerCase();
+		if (q) {
+			return MUSIC_SYMBOLS.filter((s) => s.name.toLowerCase().includes(q));
+		}
+		if (symbolCategory === 'Recent') {
+			return recentSymbolObjects.length ? recentSymbolObjects : MUSIC_SYMBOLS.slice(0, 24);
+		}
+		return MUSIC_SYMBOLS.filter((s) => s.category === symbolCategory);
+	});
 	const canUndo = $derived((historyIndex[page] ?? 0) > 0);
 	const canRedo = $derived((historyIndex[page] ?? 0) < (histories[page]?.length ?? 1) - 1);
 
@@ -217,16 +238,16 @@
 			} else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
 				event.preventDefault();
 				previous();
-			} else if (event.key === '+' || event.key === '=') setZoom(zoom + 0.1);
-			else if (event.key === '-') setZoom(zoom - 0.1);
+			} else if (event.key === '+' || event.key === '=') setZoom(zoom + 0.08);
+			else if (event.key === '-') setZoom(zoom - 0.08);
 			else if (event.key.toLowerCase() === 'f') {
 				event.preventDefault();
 				reading ? exitReading() : enterReading();
-			} else if (event.key.toLowerCase() === 'p') choose('pen');
-			else if (event.key.toLowerCase() === 'h') choose('highlighter');
-			else if (event.key.toLowerCase() === 'e') choose('eraser');
-			else if (event.key.toLowerCase() === 's') choose('symbol');
-			else if (event.key.toLowerCase() === 't') choose('text');
+			} else if (event.key.toLowerCase() === 'p') { controls = true; choose('pen'); }
+			else if (event.key.toLowerCase() === 'h') { controls = true; choose('highlighter'); }
+			else if (event.key.toLowerCase() === 'e') { controls = true; choose('eraser'); }
+			else if (event.key.toLowerCase() === 's') { controls = true; choose('symbol'); }
+			else if (event.key.toLowerCase() === 't') { controls = true; choose('text'); }
 			else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
 				event.preventDefault();
 				undo();
@@ -239,7 +260,7 @@
 					searchOpen = false;
 					controls = false;
 					if (reading) exitReading();
-					choose('move');
+					choose('pan');
 				} else {
 					void leave();
 				}
@@ -268,6 +289,7 @@
 			clearTimeout(resizeTimer);
 			clearTimeout(prefetchTimer);
 			clearTimeout(zoomTimer);
+			stopPanMomentum();
 			cancelRender();
 			void releaseWakeLock();
 			// Flush annotations before marking closed / tearing down canvases.
@@ -504,34 +526,69 @@
 	}
 	function choose(nextTool: Tool) {
 		tool = nextTool;
-		if (nextTool === 'move') textEditor = null;
+		if (nextTool !== 'text') {
+			textEditor = null;
+			textDraft = '';
+		}
+		if (nextTool !== 'eraser' && nextTool !== 'symbol') cursorScreen = null;
+		if (nextTool === 'symbol' && symbolCategory !== 'Recent' && !symbolSearch.trim()) {
+			// keep current category
+		}
+	}
+
+	function hitAnnotation(number: number, point: Point, radius = 0.04): { kind: 'stamp' | 'note'; id: string } | null {
+		for (let i = (stamps[number] || []).length - 1; i >= 0; i--) {
+			const stamp = stamps[number][i];
+			if (Math.hypot(stamp.x - point.x, stamp.y - point.y) <= radius) return { kind: 'stamp', id: stamp.id };
+		}
+		for (let i = (notes[number] || []).length - 1; i >= 0; i--) {
+			const note = notes[number][i];
+			if (Math.hypot(note.x - point.x, note.y - point.y) <= radius) return { kind: 'note', id: note.id };
+		}
+		return null;
+	}
+
+	function placeSymbolAt(number: number, point: Point, canvas: HTMLCanvasElement | null) {
+		const stamp = {
+			id: crypto.randomUUID(),
+			symbol: selectedSymbol.glyph,
+			label: selectedSymbol.name,
+			x: point.x,
+			y: point.y,
+			fontSize: symbolSize,
+			color
+		};
+		stamps[number] = [...(stamps[number] || []), stamp];
+		recentSymbols = [selectedSymbol.id, ...recentSymbols.filter((id) => id !== selectedSymbol.id)].slice(0, 10);
+		persistPrefs();
+		if (canvas) redraw(number, canvas);
+		checkpoint(number);
+	}
+
+	function placeSymbolOnPage() {
+		const canvas = leftInk ?? rightInk;
+		placeSymbolAt(page, { x: 0.5, y: 0.4 }, canvas);
 	}
 
 	function begin(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {
-		if (tool === 'move' || reading || textEditor) return;
+		if (reading || !annotating) return;
+		if (textEditor) {
+			commitText();
+			return;
+		}
 		event.preventDefault();
-		canvas.setPointerCapture(event.pointerId);
 		const point = position(event, canvas);
+		if (tool !== 'eraser') {
+			const hit = hitAnnotation(number, point, tool === 'symbol' || tool === 'text' ? 0.05 : 0.035);
+			if (hit) {
+				canvas.setPointerCapture(event.pointerId);
+				draggingAnnot = { kind: hit.kind, page: number, id: hit.id, canvas, pointerId: event.pointerId };
+				return;
+			}
+		}
+		canvas.setPointerCapture(event.pointerId);
 		if (tool === 'symbol') {
-			stamps[number] = [
-				...(stamps[number] || []),
-				{
-					id: crypto.randomUUID(),
-					symbol: selectedSymbol.glyph,
-					label: selectedSymbol.name,
-					x: point.x,
-					y: point.y,
-					fontSize: symbolSize,
-					color
-				}
-			];
-			recentSymbols = [selectedSymbol.id, ...recentSymbols.filter((id) => id !== selectedSymbol.id)].slice(
-				0,
-				10
-			);
-			persistPrefs();
-			checkpoint(number);
-			redraw(number, canvas);
+			placeSymbolAt(number, point, canvas);
 			return;
 		}
 		if (tool === 'text') {
@@ -559,23 +616,38 @@
 
 	function openTextEditor(number: number, point: Point) {
 		const existing = (notes[number] || []).find(
-			(note) => Math.hypot(note.x - point.x, note.y - point.y) < 0.035
+			(note) => Math.hypot(note.x - point.x, note.y - point.y) < 0.04
 		);
-		textEditor = {
-			page: number,
-			x: point.x,
-			y: point.y,
-			text: existing?.text || '',
-			id: existing?.id
-		};
-		void tick().then(() =>
-			document.querySelector<HTMLInputElement>('[data-score-text-input]')?.focus()
-		);
+		const x = Math.min(0.92, Math.max(0.04, point.x));
+		const y = Math.min(0.92, Math.max(0.04, point.y));
+		const canvas = number === visiblePages[0] ? leftInk : rightInk;
+		let screenX = 24;
+		let screenY = 120;
+		if (canvas) {
+			const rect = canvas.getBoundingClientRect();
+			screenX = rect.left + x * rect.width;
+			screenY = rect.top + y * rect.height;
+			// Prefer editor above the tap; flip below if near top
+			if (screenY < 100) screenY += 28;
+			else screenY -= 12;
+			// Keep fully on screen
+			screenX = Math.min(window.innerWidth - 300, Math.max(12, screenX - 20));
+			screenY = Math.min(window.innerHeight - 80, Math.max(12, screenY));
+		}
+		textDraft = existing?.text || '';
+		textEditor = { page: number, x, y, text: textDraft, id: existing?.id, screenX, screenY };
+		void tick().then(() => {
+			const el = document.querySelector<HTMLInputElement>('[data-score-text-input]');
+			el?.focus();
+			el?.select();
+		});
 	}
 	function commitText() {
 		if (!textEditor) return;
 		const editor = textEditor;
-		const text = editor.text.trim();
+		const text = textDraft.trim();
+		textEditor = null;
+		textDraft = '';
 		if (text) {
 			if (editor.id)
 				notes[editor.page] = (notes[editor.page] || []).map((note) =>
@@ -586,17 +658,128 @@
 					...(notes[editor.page] || []),
 					{ id: crypto.randomUUID(), text, x: editor.x, y: editor.y, fontSize: textSize, color }
 				];
+			const canvas = editor.page === visiblePages[0] ? leftInk : rightInk;
+			if (canvas) redraw(editor.page, canvas);
 			checkpoint(editor.page);
 		}
-		textEditor = null;
-		const canvas = editor.page === visiblePages[0] ? leftInk : rightInk;
-		redraw(editor.page, canvas);
 	}
 	function cancelText() {
 		textEditor = null;
+		textDraft = '';
+	}
+
+	function updateCursorOverlay(event: PointerEvent, canvas?: HTMLCanvasElement | null) {
+		if (tool !== 'eraser' && tool !== 'symbol') {
+			cursorScreen = null;
+			return;
+		}
+		cursorScreen = { x: event.clientX, y: event.clientY };
+		if (tool === 'symbol' && canvas) {
+			requestAnimationFrame(() => paintLoupe(event, canvas));
+		}
+	}
+
+	function paintLoupe(event: PointerEvent, sourceCanvas: HTMLCanvasElement) {
+		const loupe = loupeCanvas;
+		if (!loupe || !cursorScreen) return;
+		const ctx = loupe.getContext('2d');
+		if (!ctx) return;
+		const size = 120;
+		if (loupe.width !== size) {
+			loupe.width = size;
+			loupe.height = size;
+		}
+		const rect = sourceCanvas.getBoundingClientRect();
+		const sx = ((event.clientX - rect.left) / rect.width) * sourceCanvas.width;
+		const sy = ((event.clientY - rect.top) / rect.height) * sourceCanvas.height;
+		const srcR = 28 * (sourceCanvas.width / Math.max(1, rect.width));
+		ctx.clearRect(0, 0, size, size);
+		ctx.save();
+		ctx.beginPath();
+		ctx.arc(size / 2, size / 2, size / 2 - 1, 0, Math.PI * 2);
+		ctx.clip();
+		// Prefer PDF underlay if available
+		const pdfUnder =
+			sourceCanvas === leftInk ? leftPdf : sourceCanvas === rightInk ? rightPdf : null;
+		const under = pdfUnder && pdfUnder.width ? pdfUnder : sourceCanvas;
+		try {
+			ctx.drawImage(
+				under,
+				sx - srcR,
+				sy - srcR,
+				srcR * 2,
+				srcR * 2,
+				0,
+				0,
+				size,
+				size
+			);
+		} catch {
+			/* cross-origin / empty */
+		}
+		// Overlay ink layer when under is PDF
+		if (under !== sourceCanvas && sourceCanvas.width) {
+			try {
+				ctx.drawImage(
+					sourceCanvas,
+					sx - srcR,
+					sy - srcR,
+					srcR * 2,
+					srcR * 2,
+					0,
+					0,
+					size,
+					size
+				);
+			} catch {}
+		}
+		// Placement crosshair + symbol preview
+		ctx.strokeStyle = 'rgba(255,255,255,1)';
+		ctx.lineWidth = 1.25;
+		ctx.beginPath();
+		ctx.moveTo(size / 2 - 10, size / 2);
+		ctx.lineTo(size / 2 + 10, size / 2);
+		ctx.moveTo(size / 2, size / 2 - 10);
+		ctx.lineTo(size / 2, size / 2 + 10);
+		ctx.stroke();
+		ctx.font = `${Math.round(symbolSize * 1.35)}px Leland, serif`;
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillStyle = color;
+		ctx.globalAlpha = 0.92;
+		ctx.fillText(selectedSymbol.glyph, size / 2, size / 2);
+		ctx.restore();
+		// Outer ring
+		ctx.beginPath();
+		ctx.arc(size / 2, size / 2, size / 2 - 0.75, 0, Math.PI * 2);
+		ctx.strokeStyle = 'rgba(255,255,255,1)';
+		ctx.lineWidth = 2;
+		ctx.stroke();
 	}
 
 	function move(event: PointerEvent) {
+		const targetCanvas =
+			draggingAnnot?.canvas ||
+			drawing?.canvas ||
+			(event.currentTarget instanceof HTMLCanvasElement ? event.currentTarget : null);
+		updateCursorOverlay(event, targetCanvas);
+
+		if (draggingAnnot) {
+			const point = position(event, draggingAnnot.canvas);
+			const x = Math.min(0.98, Math.max(0.02, point.x));
+			const y = Math.min(0.98, Math.max(0.02, point.y));
+			if (draggingAnnot.kind === 'stamp') {
+				stamps[draggingAnnot.page] = (stamps[draggingAnnot.page] || []).map((stamp) =>
+					stamp.id === draggingAnnot!.id ? { ...stamp, x, y } : stamp
+				);
+			} else {
+				notes[draggingAnnot.page] = (notes[draggingAnnot.page] || []).map((note) =>
+					note.id === draggingAnnot!.id ? { ...note, x, y } : note
+				);
+			}
+			redraw(draggingAnnot.page, draggingAnnot.canvas);
+			return;
+		}
 		if (!drawing) return;
 		for (const pointEvent of event.getCoalescedEvents?.() || [event]) {
 			if (drawing.stroke) {
@@ -617,26 +800,55 @@
 			});
 	}
 	function end() {
+		if (draggingAnnot) {
+			const active = draggingAnnot;
+			draggingAnnot = null;
+			try { active.canvas.releasePointerCapture(active.pointerId); } catch {}
+			checkpoint(active.page);
+			redraw(active.page, active.canvas);
+			return;
+		}
 		if (!drawing) return;
 		const active = drawing;
 		if (active.raf) cancelAnimationFrame(active.raf);
 		drawing = null;
-		try {
-			active.canvas.releasePointerCapture(active.pointerId);
-		} catch {}
+		try { active.canvas.releasePointerCapture(active.pointerId); } catch {}
 		redraw(active.page, active.canvas);
 		checkpoint(active.page);
 	}
+
+	function onInkPointerLeave() {
+		if (!drawing && !draggingAnnot) cursorScreen = null;
+	}
+	function distPointToSegment(p: Point, a: Point, b: Point): number {
+		const dx = b.x - a.x;
+		const dy = b.y - a.y;
+		const len2 = dx * dx + dy * dy;
+		if (len2 < 1e-12) return Math.hypot(p.x - a.x, p.y - a.y);
+		let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+		t = Math.max(0, Math.min(1, t));
+		return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+	}
+
+	function strokeHitsEraser(stroke: Stroke, point: Point, radius: number): boolean {
+		const pts = stroke.points;
+		if (!pts.length) return false;
+		// Point hits (works for freehand samples and endpoints)
+		for (const candidate of pts) {
+			if (Math.hypot(candidate.x - point.x, candidate.y - point.y) < radius) return true;
+		}
+		// Segment hits — critical for line / arrow (often only 2 points)
+		for (let i = 1; i < pts.length; i++) {
+			if (distPointToSegment(point, pts[i - 1], pts[i]) < radius) return true;
+		}
+		return false;
+	}
+
 	function erase(point: Point, number: number, canvas: HTMLCanvasElement | null, save = true) {
-		const radius = Math.max(0.01, width / 700);
+		const radius = Math.max(0.012, width / 700);
 		let changed = false;
 		const before = strokes[number] || [];
-		const after = before.filter(
-			(stroke) =>
-				!stroke.points.some(
-					(candidate) => Math.hypot(candidate.x - point.x, candidate.y - point.y) < radius
-				)
-		);
+		const after = before.filter((stroke) => !strokeHitsEraser(stroke, point, radius));
 		if (after.length !== before.length) {
 			strokes[number] = after;
 			changed = true;
@@ -734,11 +946,15 @@
 		context.restore();
 	}
 
+	/** Deep plain copy — Svelte 5 $state proxies cannot be structuredClone'd. */
+	function cloneData<T>(value: T): T {
+		return $state.snapshot(value) as T;
+	}
 	function snapshot(number: number): Snapshot {
 		return {
-			strokes: structuredClone(strokes[number] || []),
-			stamps: structuredClone(stamps[number] || []),
-			notes: structuredClone(notes[number] || [])
+			strokes: cloneData(strokes[number] || []),
+			stamps: cloneData(stamps[number] || []),
+			notes: cloneData(notes[number] || [])
 		};
 	}
 	function ensureHistory(number: number) {
@@ -757,9 +973,9 @@
 		scheduleSave(number);
 	}
 	function applySnapshot(number: number, state: Snapshot) {
-		strokes[number] = structuredClone(state.strokes);
-		stamps[number] = structuredClone(state.stamps);
-		notes[number] = structuredClone(state.notes);
+		strokes[number] = cloneData(state.strokes);
+		stamps[number] = cloneData(state.stamps);
+		notes[number] = cloneData(state.notes);
 		redraw(number, number === visiblePages[0] ? leftInk : rightInk);
 		scheduleSave(number);
 	}
@@ -802,21 +1018,25 @@
 		);
 	}
 	function setZoom(value: number) {
-		zoom = Math.max(0.4, Math.min(2.5, Number(value.toFixed(2))));
+		const next = Math.max(0.35, Math.min(3, Number(value.toFixed(3))));
+		if (Math.abs(next - zoom) < 0.001) return;
+		zoom = next;
 		persistPrefs();
 		clearTimeout(zoomTimer);
-		// Debounce expensive re-render so continuous zoom (wheel / buttons) feels responsive
-		zoomTimer = setTimeout(() => void render({ quiet: hasPainted }), 90);
+		// Short debounce keeps wheel zoom fluid while avoiding per-frame PDF re-renders
+		zoomTimer = setTimeout(() => void render({ quiet: hasPainted }), 48);
 	}
 	function setFit(value: Fit) {
 		fit = value;
 		zoom = 1;
+		resetPan();
 		persistPrefs();
 		void render({ quiet: hasPainted });
 	}
 	function next() {
 		if (!pdf) return;
 		pageTransition = true;
+		resetPan();
 		page = Math.min(pdf.numPages, dual ? Math.min(pdf.numPages, page + 2) : page + 1);
 		pageInput = String(page);
 		ensureHistory(page);
@@ -827,6 +1047,7 @@
 	}
 	function previous() {
 		pageTransition = true;
+		resetPan();
 		page = Math.max(1, dual ? page - 2 : page - 1);
 		pageInput = String(page);
 		ensureHistory(page);
@@ -858,7 +1079,9 @@
 		if (!controls) {
 			settingsOpen = false;
 			colorPickerOpen = false;
-			choose('move');
+			choose('pan');
+		} else if (tool === 'pan') {
+			choose('pen');
 		}
 	}
 	function enterReading() {
@@ -866,15 +1089,109 @@
 		controls = false;
 		settingsOpen = false;
 		searchOpen = false;
-		choose('move');
+		choose('pan');
 	}
 	function exitReading() {
 		reading = false;
 	}
+
+	function stopPanMomentum() {
+		if (panMomentumRaf) {
+			cancelAnimationFrame(panMomentumRaf);
+			panMomentumRaf = 0;
+		}
+		panVx = 0;
+		panVy = 0;
+	}
+
+	function resetPan() {
+		stopPanMomentum();
+		panX = 0;
+		panY = 0;
+	}
+
+	function startPanMomentum() {
+		stopPanMomentum();
+		const friction = 0.94;
+		const minV = 0.12;
+		const tick = () => {
+			panVx *= friction;
+			panVy *= friction;
+			if (Math.hypot(panVx, panVy) < minV) {
+				panMomentumRaf = 0;
+				panVx = 0;
+				panVy = 0;
+				return;
+			}
+			panX += panVx;
+			panY += panVy;
+			panMomentumRaf = requestAnimationFrame(tick);
+		};
+		panMomentumRaf = requestAnimationFrame(tick);
+	}
+
+	function onWorkspacePointerDown(event: PointerEvent) {
+		if (annotating || reading || textEditor) return;
+		if (event.button !== 0 && event.pointerType === 'mouse') return;
+		stopPanMomentum();
+		panDrag = {
+			pointerId: event.pointerId,
+			lastX: event.clientX,
+			lastY: event.clientY,
+			lastT: performance.now()
+		};
+		panVx = 0;
+		panVy = 0;
+		try {
+			(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+		} catch {}
+	}
+
+	function onWorkspacePointerMove(event: PointerEvent) {
+		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
+		const now = performance.now();
+		const dt = Math.max(8, now - panDrag.lastT);
+		const dx = event.clientX - panDrag.lastX;
+		const dy = event.clientY - panDrag.lastY;
+		panX += dx;
+		panY += dy;
+		// velocity in px per frame (~16ms)
+		const scale = 16 / dt;
+		panVx = dx * scale;
+		panVy = dy * scale;
+		panDrag.lastX = event.clientX;
+		panDrag.lastY = event.clientY;
+		panDrag.lastT = now;
+	}
+
+	function onWorkspacePointerUp(event: PointerEvent) {
+		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
+		panDrag = null;
+		try {
+			(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+		} catch {}
+		if (Math.hypot(panVx, panVy) > 0.8) startPanMomentum();
+		else {
+			panVx = 0;
+			panVy = 0;
+		}
+	}
+
 	function onWheel(event: WheelEvent) {
-		if (!(event.ctrlKey || event.metaKey)) return;
 		event.preventDefault();
-		setZoom(zoom + (event.deltaY > 0 ? -0.1 : 0.1));
+		if (event.ctrlKey || event.metaKey) {
+			const step =
+				event.deltaMode === 0
+					? Math.min(0.18, Math.max(0.02, Math.abs(event.deltaY) * 0.0018))
+					: 0.08;
+			setZoom(zoom + (event.deltaY > 0 ? -step : step));
+			return;
+		}
+		// Trackpad / mouse wheel pans the view (buttery, no layout thrash)
+		stopPanMomentum();
+		const factor = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 40 : 1;
+		panX -= event.deltaX * factor;
+		panY -= event.deltaY * factor;
 	}
 	async function searchPdf() {
 		if (!pdf || !searchText.trim()) return;
@@ -957,9 +1274,9 @@
 			<div class="footer-section">
 				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Scan size={16} /></button>
 				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><StretchHorizontal size={17} /></button>
-				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.1)}><ZoomOut size={17} /></button>
+				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.08)}><ZoomOut size={17} /></button>
 				<span>{Math.round(zoom * 100)}%</span>
-				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.1)}><ZoomIn size={17} /></button>
+				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.08)}><ZoomIn size={17} /></button>
 			</div>
 			<div class="footer-section">
 				<button
@@ -988,44 +1305,51 @@
 			<button class="icon-button" aria-label="Close search" onclick={() => (searchOpen = false)}><X size={17} /></button>
 		</div>{/if}
 
-	<main class="workspace" class:fit-page={fit === 'page'} onwheel={onWheel}>
-		<div class="pages" class:dual class:transitioning={pageTransition}>
+	<main
+		class="workspace"
+		class:fit-page={fit === 'page'}
+		class:is-panning={!!panDrag}
+		class:is-annotating={annotating}
+		onwheel={onWheel}
+		onpointerdown={onWorkspacePointerDown}
+		onpointermove={onWorkspacePointerMove}
+		onpointerup={onWorkspacePointerUp}
+		onpointercancel={onWorkspacePointerUp}
+	>
+		<div
+			class="pages"
+			class:dual
+			class:transitioning={pageTransition}
+			style={`transform: translate3d(${panX}px, ${panY}px, 0)`}
+		>
 			<div class="page-shell">
 				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
 				<canvas
 					class="ink-canvas"
-					class:interactive={tool !== 'move' && !reading}
+					class:interactive={annotating}
+					class:eraser-mode={tool === 'eraser'}
+					class:symbol-mode={tool === 'symbol'}
 					bind:this={leftInk}
 					onpointerdown={(event) => begin(event, visiblePages[0], leftInk!)}
 					onpointermove={move}
 					onpointerup={end}
-					onpointercancel={end}></canvas>
-				{#if textEditor && textEditor.page === visiblePages[0]}
-					<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>
-						<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />
-						<button title="Save" onclick={commitText}><Check size={15} /></button>
-						<button title="Cancel" onclick={cancelText}><X size={15} /></button>
-					</div>
-				{/if}
+					onpointercancel={end}
+					onpointerleave={onInkPointerLeave}></canvas>
 			</div>
 			{#if dual && visiblePages.length > 1}
 				<div class="page-shell">
 					<canvas class="pdf-canvas" bind:this={rightPdf}></canvas>
 					<canvas
 						class="ink-canvas"
-						class:interactive={tool !== 'move' && !reading}
+						class:interactive={annotating}
+						class:eraser-mode={tool === 'eraser'}
+						class:symbol-mode={tool === 'symbol'}
 						bind:this={rightInk}
 						onpointerdown={(event) => begin(event, visiblePages[1], rightInk!)}
 						onpointermove={move}
 						onpointerup={end}
-						onpointercancel={end}></canvas>
-					{#if textEditor && textEditor.page === visiblePages[1]}
-						<div class="text-editor" style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}>
-							<input data-score-text-input bind:value={textEditor.text} placeholder="Type annotation…" onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitText(); } }} />
-							<button title="Save" onclick={commitText}><Check size={15} /></button>
-							<button title="Cancel" onclick={cancelText}><X size={15} /></button>
-						</div>
-					{/if}
+						onpointercancel={end}
+						onpointerleave={onInkPointerLeave}></canvas>
 				</div>
 			{/if}
 		</div>
@@ -1043,8 +1367,35 @@
 		{/if}
 	</main>
 
-	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor || tool !== 'move'}></button>
-	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor || tool !== 'move'}></button>
+	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor }></button>
+	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor }></button>
+
+
+	{#if textEditor}
+		<div
+			class="text-editor-floating"
+			style={`left:${textEditor.screenX ?? 24}px;top:${textEditor.screenY ?? 120}px`}
+			onpointerdown={(e) => e.stopPropagation()}
+		>
+			<span class="text-editor-label">Note</span>
+			<input
+				data-score-text-input
+				bind:value={textDraft}
+				placeholder="Write a note…"
+				onkeydown={(e) => {
+					if (e.key === 'Enter') {
+						e.preventDefault();
+						commitText();
+					} else if (e.key === 'Escape') {
+						e.preventDefault();
+						cancelText();
+					}
+				}}
+			/>
+			<button type="button" class="text-editor-save" title="Save" onclick={commitText}><Check size={15} /></button>
+			<button type="button" title="Cancel" onclick={cancelText}><X size={15} /></button>
+		</div>
+	{/if}
 
 	{#if !reading && !controls}
 		<button class="annotation-toggle" title="Annotation tools" aria-label="Open annotation tools" onclick={toggleControls}><Pencil size={18} /></button>
@@ -1052,14 +1403,13 @@
 	{#if !reading && controls}
 		<aside class="annotation-bar">
 			<div class="tool-group">
-				<button class:active={tool === 'move'} class="tool-button" title="Move" onclick={() => choose('move')}><MousePointer2 size={18} /><span>Move</span></button>
-				<button class:active={tool === 'pen'} class="tool-button" title="Pen (P)" onclick={() => choose('pen')}><PenTool size={18} /><span>Pen</span></button>
-				<button class:active={tool === 'highlighter'} class="tool-button" title="Highlighter (H)" onclick={() => choose('highlighter')}><Highlighter size={18} /><span>Highlight</span></button>
-				<button class:active={tool === 'line'} class="tool-button" title="Line" onclick={() => choose('line')}><Minus size={18} /><span>Line</span></button>
-				<button class:active={tool === 'arrow'} class="tool-button" title="Arrow" onclick={() => choose('arrow')}><ArrowUpRight size={18} /><span>Arrow</span></button>
-				<button class:active={tool === 'eraser'} class="tool-button" title="Eraser (E)" onclick={() => choose('eraser')}><Eraser size={18} /><span>Erase</span></button>
-				<button class:active={tool === 'symbol'} class="tool-button" title="Symbols (S)" onclick={() => choose('symbol')}><Music2 size={18} /><span>Symbols</span></button>
-				<button class:active={tool === 'text'} class="tool-button" title="Text (T)" onclick={() => choose('text')}><Type size={18} /><span>Text</span></button>
+				<button class:active={tool === 'pen'} class="tool-button" data-tool="pen" title="Pen (P)" onclick={() => choose('pen')}><PenTool size={18} /><span>Pen</span></button>
+				<button class:active={tool === 'highlighter'} class="tool-button" data-tool="highlighter" title="Highlighter (H)" onclick={() => choose('highlighter')}><Highlighter size={18} /><span>Highlight</span></button>
+				<button class:active={tool === 'line'} class="tool-button" data-tool="line" title="Line" onclick={() => choose('line')}><Minus size={18} /><span>Line</span></button>
+				<button class:active={tool === 'arrow'} class="tool-button" data-tool="arrow" title="Arrow" onclick={() => choose('arrow')}><ArrowUpRight size={18} /><span>Arrow</span></button>
+				<button class:active={tool === 'eraser'} class="tool-button" data-tool="eraser" title="Eraser (E)" onclick={() => choose('eraser')}><Eraser size={18} /><span>Erase</span></button>
+				<button class:active={tool === 'symbol'} class="tool-button" data-tool="symbol" title="Symbols (S)" onclick={() => choose('symbol')}><Music2 size={18} /><span>Symbols</span></button>
+				<button class:active={tool === 'text'} class="tool-button" data-tool="text" title="Text (T)" onclick={() => choose('text')}><Type size={18} /><span>Text</span></button>
 			</div>
 			<div class="divider"></div>
 			<div class="tool-group compact">
@@ -1112,40 +1462,82 @@
 	{/if}
 
 	{#if !reading && controls && tool === 'symbol'}
-		<section class="symbol-palette">
-			<div class="palette-header">
-				<div>
-					<strong>Musical symbols</strong>
-					<span>Leland notation font · select a symbol, then click the score</span>
+		<div class="symbol-sheet" role="dialog" aria-label="Musical symbols">
+			<header class="symbol-sheet-head">
+				<div class="symbol-sheet-title">
+					<strong>Symbols</strong>
+					<span>Click page to place · drag to move</span>
 				</div>
-				<input bind:value={symbolSearch} placeholder="Search symbols" />
+				<button type="button" class="icon-button" title="Close symbols" aria-label="Close symbols" onclick={() => choose('pan')}><X size={17} /></button>
+			</header>
+
+			<div class="symbol-search-row">
+				<input bind:value={symbolSearch} placeholder="Search symbols…" aria-label="Search symbols" />
+				<label class="symbol-size-control" title="Size">
+					<span>{symbolSize}px</span>
+					<input type="range" min="20" max="64" bind:value={symbolSize} />
+				</label>
 			</div>
-			{#if recentSymbolObjects.length}
-				<div class="recent-row">
-					<span>Recent</span>
-					{#each recentSymbolObjects as symbol}
-						<button class:selected={selectedSymbol.id === symbol.id} title={symbol.name} onclick={() => (selectedSymbol = symbol)}><span>{symbol.glyph}</span></button>
-					{/each}
-				</div>
-			{/if}
-			<div class="category-row">
+
+			<nav class="symbol-cats" aria-label="Symbol tags">
+				<button
+					type="button"
+					class:active={symbolCategory === 'Recent' && !symbolSearch.trim()}
+					onclick={() => {
+						symbolCategory = 'Recent';
+						symbolSearch = '';
+					}}
+				>Recent</button>
 				{#each MUSIC_SYMBOL_CATEGORIES as category}
-					<button class:active={symbolCategory === category} onclick={() => (symbolCategory = category)}>{category}</button>
+					<button
+						type="button"
+						class:active={symbolCategory === category && !symbolSearch.trim()}
+						onclick={() => {
+							symbolCategory = category;
+							symbolSearch = '';
+						}}
+					>{category}</button>
+				{/each}
+			</nav>
+
+			<div class="symbol-tray">
+				{#each filteredSymbols as symbol (symbol.id)}
+					<button
+						type="button"
+						class="symbol-tile"
+						class:selected={selectedSymbol.id === symbol.id}
+						title={symbol.name}
+						onclick={() => {
+							selectedSymbol = symbol;
+						}}
+					>
+						<span class="glyph">{symbol.glyph}</span>
+						<span class="name">{symbol.name}</span>
+					</button>
+				{:else}
+					<p class="symbol-empty">{symbolSearch.trim() ? `No symbols match “${symbolSearch}”` : 'No recent symbols yet — pick one below'}</p>
 				{/each}
 			</div>
-			<div class="symbol-grid">
-				{#each filteredSymbols as symbol}
-					<button class:selected={selectedSymbol.id === symbol.id} class="symbol-button" title={symbol.name} onclick={() => (selectedSymbol = symbol)}
-						><span>{symbol.glyph}</span><small>{symbol.name}</small></button>
-				{/each}
-			</div>
-			<div class="palette-footer">
-				<span>{selectedSymbol.name}</span>
-				<label>Symbol size <input type="range" min="18" max="72" bind:value={symbolSize} /></label>
-			</div>
-		</section>
+		</div>
 	{/if}
 
+
+	{#if cursorScreen && tool === 'eraser' && !reading}
+		<div
+			class="eraser-cursor"
+			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px;--eraser-size:${Math.max(14, width * 1.8)}px`}
+			aria-hidden="true"
+		></div>
+	{/if}
+	{#if cursorScreen && tool === 'symbol' && !reading}
+		<div
+			class="symbol-loupe"
+			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px`}
+			aria-hidden="true"
+		>
+			<canvas bind:this={loupeCanvas} width="120" height="120"></canvas>
+		</div>
+	{/if}
 
 	{#if settingsOpen && !reading}
 		<div class="settings-backdrop" role="presentation" onclick={() => { settingsOpen = false; persistPrefs(); }}></div>
@@ -1261,9 +1653,9 @@
 		height: 100%;
 		min-height: 0;
 		overflow: hidden;
-		background: #11110f;
-		color: #f4f4f0;
-		font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+		background: var(--sonora-bg, #11110f);
+		color: var(--sonora-text, #f4f4f0);
+		font-family: var(--sonora-font, Inter, ui-sans-serif, system-ui, sans-serif);
 	}
 	.topbar {
 		position: relative;
@@ -1356,11 +1748,22 @@
 	.icon-button:hover,
 	.tool-button:hover,
 	.text-button:hover,
-	.icon-button.active,
-	.tool-button.active {
+	.icon-button.active {
 		background: rgba(255, 255, 255, 0.08);
 		color: #fff;
 	}
+	.tool-button.active {
+		color: #fff;
+		background: color-mix(in srgb, var(--tool-accent, #3b82f6) 28%, transparent);
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tool-accent, #3b82f6) 55%, transparent);
+	}
+	.tool-button[data-tool='pen'] { --tool-accent: #f59e0b; }
+	.tool-button[data-tool='highlighter'] { --tool-accent: #eab308; }
+	.tool-button[data-tool='line'] { --tool-accent: #38bdf8; }
+	.tool-button[data-tool='arrow'] { --tool-accent: #22d3ee; }
+	.tool-button[data-tool='eraser'] { --tool-accent: #f87171; }
+	.tool-button[data-tool='symbol'] { --tool-accent: #a78bfa; }
+	.tool-button[data-tool='text'] { --tool-accent: #4ade80; }
 	.icon-button:disabled {
 		opacity: 0.3;
 		cursor: not-allowed;
@@ -1389,21 +1792,26 @@
 	.workspace {
 		position: absolute;
 		inset: 56px 0 8px;
-		overflow: auto;
+		overflow: hidden; /* pan via transform — avoids janky overflow scroll */
 		scrollbar-width: none;
 		-ms-overflow-style: none;
 		display: flex;
 		justify-content: center;
 		align-items: flex-start;
 		padding: 28px;
-		background: radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%);
-		scroll-behavior: smooth;
-		overscroll-behavior: contain;
-		-webkit-overflow-scrolling: touch;
+		background: var(--sonora-bg-workspace, radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%));
+		overscroll-behavior: none;
+		touch-action: none;
+		cursor: grab;
+		user-select: none;
+	}
+	.workspace.is-panning {
+		cursor: grabbing;
+	}
+	.workspace.is-annotating {
+		cursor: default;
 	}
 	.workspace.fit-page {
-		/* Fit-to-page: lock scrolling so the page stays fully framed */
-		overflow: hidden;
 		align-items: center;
 	}
 	.workspace::-webkit-scrollbar { display: none; }
@@ -1415,6 +1823,9 @@
 		gap: 20px;
 		min-width: max-content;
 		margin: auto;
+		will-change: transform;
+		transform: translate3d(0, 0, 0);
+		/* no transition while dragging — applied only when we want settle */
 	}
 	.pages.dual {
 		gap: 0;
@@ -1475,6 +1886,47 @@
 		pointer-events: auto;
 		cursor: crosshair;
 	}
+	.ink-canvas.interactive.eraser-mode {
+		cursor: none;
+	}
+	.ink-canvas.interactive.symbol-mode {
+		cursor: none;
+	}
+	.eraser-cursor {
+		position: fixed;
+		z-index: 80;
+		width: var(--eraser-size, 24px);
+		height: var(--eraser-size, 24px);
+		margin-left: calc(var(--eraser-size, 24px) / -2);
+		margin-top: calc(var(--eraser-size, 24px) / -2);
+		border-radius: 50%;
+		border: 1.5px solid rgba(248, 113, 113, 0.95);
+		background: rgba(248, 113, 113, 0.12);
+		box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), inset 0 0 8px rgba(248, 113, 113, 0.25);
+		pointer-events: none;
+		mix-blend-mode: normal;
+	}
+	.symbol-loupe {
+		position: fixed;
+		z-index: 80;
+		width: 120px;
+		height: 120px;
+		margin-left: -60px;
+		margin-top: -150px; /* sit above the cursor */
+		border-radius: 50%;
+		overflow: hidden;
+		pointer-events: none;
+		box-shadow:
+			0 0 0 2px rgba(167, 139, 250, 0.85),
+			0 12px 28px rgba(0, 0, 0, 0.55),
+			0 0 0 1px rgba(0, 0, 0, 0.4);
+		background: #0a0a09;
+	}
+	.symbol-loupe canvas {
+		display: block;
+		width: 120px;
+		height: 120px;
+	}
 	.page-hit {
 		position: absolute;
 		z-index: 15;
@@ -1508,7 +1960,6 @@
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 8px;
 		padding: 14px 18px;
 		font-size: 12px;
 		color: #b8b8b0;
@@ -1601,12 +2052,13 @@
 		margin-left: 3px;
 	}
 	.swatch {
-		width: 17px;
-		height: 17px;
+		width: 22px;
+		height: 22px;
 		border: 2px solid transparent;
 		border-radius: 50%;
 		background: var(--swatch);
 		cursor: pointer;
+		flex-shrink: 0;
 	}
 	.swatch.selected {
 		border-color: #fff;
@@ -1675,6 +2127,7 @@
 	.more-swatch {
 		display: grid;
 		place-items: center;
+		align-items: center;
 		background: rgba(255, 255, 255, 0.08);
 		border: 1px dashed rgba(255, 255, 255, 0.28);
 	}
@@ -1687,6 +2140,7 @@
 		line-height: 1;
 		color: #c8c8c0;
 		font-weight: 600;
+		transform: translate(0px,-1px);
 	}
 	.color-popup {
 		position: absolute;
@@ -1703,185 +2157,219 @@
 		backdrop-filter: blur(16px);
 		z-index: 40;
 	}
-	.symbol-palette {
+	.symbol-sheet {
 		position: absolute;
-		z-index: 45;
-		left: 50%;
-		bottom: 119px;
-		transform: translateX(-50%);
-		width: min(780px, calc(100% - 24px));
-		max-height: min(56vh, 540px);
+		z-index: 46;
+		right: 8px;
+		bottom: 80px;
+		width: min(440px, calc(100% - 12px));
+		max-height: min(48vh, 420px);
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
 		border: 1px solid rgba(255, 255, 255, 0.1);
 		border-radius: 18px;
-		background: rgba(28, 28, 25, 0.98);
-		box-shadow: 0 25px 75px rgba(0, 0, 0, 0.55);
-		backdrop-filter: blur(22px);
+		background: rgba(16, 16, 14, 0.98);
+		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(20px);
 	}
-	.palette-header {
+	.symbol-sheet-head {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 12px;
-		padding: 14px 16px 10px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+		gap: 8px;
+		padding: 12px 12px 8px;
 	}
-	.palette-header div {
+	.symbol-sheet-title {
 		display: flex;
 		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
 	}
-	.palette-header strong {
-		font-size: 13px;
+	.symbol-sheet-title strong {
+		font-size: 14px;
+		font-weight: 650;
 	}
-	.palette-header span {
-		color: #77776f;
-		font-size: 9px;
-		margin-top: 3px;
-	}
-	.palette-header input {
-		width: 180px;
-		padding: 8px 10px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 9px;
-		outline: none;
-		background: #11110f;
-		color: #fff;
+	.symbol-sheet-title span {
 		font-size: 11px;
+		color: #7a7a72;
 	}
-	.recent-row {
+	.symbol-cats {
+		display: flex;
+		gap: 4px;
+		padding: 0 12px 8px;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	.symbol-cats::-webkit-scrollbar { display: none; }
+	.symbol-cats button {
+		flex-shrink: 0;
+		height: 30px;
+		padding: 0 12px;
+		border: 0;
+		border-radius: 999px;
+		background: transparent;
+		color: #8a8a82;
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+	}
+	.symbol-cats button.active {
+		background: var(--sonora-accent);
+		color: #11110f;
+	}
+	.symbol-search-row {
 		display: flex;
 		align-items: center;
-		gap: 4px;
-		padding: 7px 11px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-		overflow: auto;
+		gap: 8px;
+		padding: 0 12px 8px;
 	}
-	.recent-row > span {
-		color: #77776f;
-		font-size: 9px;
-		margin-right: 3px;
-	}
-	.recent-row button {
-		flex: 0 0 auto;
-		width: 34px;
-		height: 34px;
-		border: 1px solid transparent;
-		border-radius: 8px;
-		background: rgba(255, 255, 255, 0.03);
+	.symbol-search-row input:not([type]),
+	.symbol-search-row > input {
+		flex: 1;
+		min-width: 0;
+		height: 36px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 10px;
+		background: #0a0a09;
 		color: #fff;
-		cursor: pointer;
+		padding: 0 12px;
+		font-size: 13px;
+		outline: none;
 	}
-	.recent-row button.selected,
-	.recent-row button:hover {
-		background: rgba(255, 255, 255, 0.1);
-		border-color: rgba(255, 255, 255, 0.1);
-	}
-	.recent-row button span {
-		font: 23px/1 Leland;
-	}
-	.category-row {
+	.symbol-size-control {
 		display: flex;
-		gap: 4px;
-		padding: 7px 11px;
-		overflow: auto;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-	}
-	.category-row button {
-		border: 0;
-		background: transparent;
-		color: #85857d;
-		border-radius: 8px;
-		padding: 7px 9px;
+		align-items: center;
+		gap: 6px;
+		color: #8a8a82;
+		font-size: 11px;
 		white-space: nowrap;
-		cursor: pointer;
-		font-size: 9px;
 	}
-	.category-row button.active,
-	.category-row button:hover {
-		background: rgba(255, 255, 255, 0.08);
-		color: #fff;
+	.symbol-size-control input[type='range'] {
+		width: 72px;
 	}
-	.symbol-grid {
+	.symbol-tray {
+		flex: 1;
+		min-height: 120px;
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
-		gap: 5px;
+		grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+		gap: 6px;
+		padding: 4px 12px 8px;
 		overflow: auto;
-		padding: 10px;
+		align-content: start;
 	}
-	.symbol-button {
-		min-height: 68px;
-		border: 1px solid transparent;
-		border-radius: 9px;
-		background: rgba(255, 255, 255, 0.025);
-		color: #fff;
+	.symbol-tile {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
 		gap: 4px;
+		min-height: 64px;
+		padding: 8px 4px;
+		border: 1px solid transparent;
+		border-radius: 12px;
+		background: rgba(255, 255, 255, 0.03);
+		color: #f4f4f0;
 		cursor: pointer;
 	}
-	.symbol-button:hover,
-	.symbol-button.selected {
-		background: rgba(255, 255, 255, 0.09);
-		border-color: rgba(255, 255, 255, 0.12);
+	.symbol-tile .glyph {
+		font: 28px/1 Leland, serif;
 	}
-	.symbol-button span {
-		font: 34px/1 Leland;
-	}
-	.symbol-button small {
-		color: #85857d;
-		font-size: 8px;
+	.symbol-tile .name {
+		font-size: 9px;
+		color: #8a8a82;
 		text-align: center;
+		line-height: 1.2;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
-	.palette-footer {
+	.symbol-tile.selected,
+	.symbol-tile:hover {
+		border-color: rgba(147, 197, 253, 0.45);
+		background: rgba(37, 99, 235, 0.16);
+	}
+	.symbol-tile.selected .name,
+	.symbol-tile:hover .name {
+		color: #c8d9f5;
+	}
+	.symbol-empty {
+		grid-column: 1 / -1;
+		margin: 16px 0;
+		text-align: center;
+		color: #7a7a72;
+		font-size: 13px;
+	}
+	@media (max-width: 900px) {
+		.symbol-sheet {
+			bottom: 58px;
+			max-height: min(52vh, 380px);
+			border-radius: 16px 16px 12px 12px;
+		}
+		.symbol-tile .name {
+			font-size: 8px;
+		}
+	}
+
+	.text-editor-floating {
+		position: fixed;
+		z-index: 200;
 		display: flex;
-		justify-content: space-between;
 		align-items: center;
-		gap: 10px;
-		padding: 10px 14px;
-		border-top: 1px solid rgba(255, 255, 255, 0.07);
-		color: #888880;
+		gap: 6px;
+		min-width: min(280px, calc(100vw - 24px));
+		max-width: calc(100vw - 24px);
+		padding: 8px 10px;
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		border-radius: 14px;
+		background: rgba(18, 18, 16, 0.98);
+		box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(16px);
+		pointer-events: auto;
+	}
+	.text-editor-label {
 		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: #8a8a82;
+		flex-shrink: 0;
 	}
-	.text-editor {
-		position: absolute;
-		z-index: 60;
-		transform: translate(0, -50%);
-		display: flex;
-		align-items: center;
-		gap: 3px;
-		padding: 3px;
-		border: 1px solid rgba(255, 255, 255, 0.18);
-		border-radius: 9px;
-		background: rgba(28, 28, 25, 0.98);
-		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
-	}
-	.text-editor input {
-		width: 190px;
+	.text-editor-floating input {
+		flex: 1;
+		min-width: 0;
 		border: 0;
 		outline: 0;
-		background: transparent;
+		background: rgba(255, 255, 255, 0.06);
 		color: #fff;
-		padding: 7px 8px;
-		font-size: 12px;
+		padding: 8px 10px;
+		font-size: 14px;
+		border-radius: 8px;
 	}
-	.text-editor button {
-		width: 30px;
-		height: 30px;
+	.text-editor-floating button {
+		width: 34px;
+		height: 34px;
 		border: 0;
-		border-radius: 7px;
+		border-radius: 9px;
 		background: transparent;
 		color: #aaa;
 		cursor: pointer;
 		display: grid;
 		place-items: center;
+		flex-shrink: 0;
 	}
-	.text-editor button:hover {
+	.text-editor-floating button.text-editor-save {
+		background: rgba(34, 197, 94, 0.18);
+		color: #86efac;
+	}
+	.text-editor-floating button:hover {
 		background: rgba(255, 255, 255, 0.08);
 		color: #fff;
+	}
+	.text-editor-floating button.text-editor-save:hover {
+		background: rgba(34, 197, 94, 0.32);
+		color: #bbf7d0;
 	}
 	.search-panel {
 		position: absolute;
@@ -2058,12 +2546,6 @@
 	.settings-footer .text-button.primary:hover {
 		background: #d97706;
 	}
-	.hint {
-		margin: 0;
-		color: #77776f;
-		font-size: 10px;
-		line-height: 1.45;
-	}
 	.reading-exit {
 		position: absolute;
 		z-index: 70;
@@ -2136,11 +2618,8 @@
 		.workspace {
 			padding: 14px;
 		}
-		.symbol-palette {
+		.symbol-sheet {
 			max-height: 64vh;
-		}
-		.palette-header input {
-			width: 120px;
 		}
 		.bottombar {
 			padding: 7px;
@@ -2148,16 +2627,13 @@
 		.footer-section .text-button {
 			display: none;
 		}
-		.text-editor input {
-			width: 145px;
-		}
 	}
 	@media print {
 		.topbar,
 		.bottombar,
 		.annotation-bar,
 		.annotation-toggle,
-		.symbol-palette,
+		.symbol-sheet,
 		.search-panel,
 		.settings-card,
 		.loading,
