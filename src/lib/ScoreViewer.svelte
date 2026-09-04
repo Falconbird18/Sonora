@@ -82,6 +82,7 @@
 	let settingsOpen = $state(false);
 	let bookmarked = $state(false);
 	let annotationsVisible = $state(true);
+	let isDrawing = $state(false);
 	let tool = $state<Tool>('pan');
 	let annotating = $derived(controls && tool !== 'pan' && !reading);
 	const strokeTool = $derived(tool === 'pen' || tool === 'highlighter' || tool === 'line' || tool === 'arrow');
@@ -143,7 +144,6 @@
 		raf?: number;
 	} | null = null;
 	/** True while a stroke/erase is in progress — palette steps aside. */
-	let isDrawing = $state(false);
 	/** Symbol drawer collapsed to a thin strip after placement. */
 	let symbolSheetCollapsed = $state(false);
 	let hasPainted = $state(false);
