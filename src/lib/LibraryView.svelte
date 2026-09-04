@@ -3,6 +3,7 @@
 	import {
 		Check,
 		Clock3,
+		Download,
 		FileText,
 		FolderOpen,
 		FolderPlus,
@@ -10,6 +11,7 @@
 		List,
 		MoreHorizontal,
 		Music2,
+		Printer,
 		RefreshCw,
 		Search,
 		Star,
@@ -173,6 +175,52 @@
 	function removeTag(tag: string) {
 		editingTags = editingTags.filter((item) => item !== tag);
 	}
+	
+	function downloadScoreFile(score: ScoreItem, event?: MouseEvent) {
+		event?.stopPropagation();
+		menuScoreId = null;
+		let href = score.pdfUrl || '';
+		if (!href && score.pdfBlob) href = URL.createObjectURL(score.pdfBlob);
+		if (!href) {
+			error = 'No PDF available to download for this score.';
+			return;
+		}
+		const link = document.createElement('a');
+		link.href = href;
+		link.download = `${score.title || 'score'}.pdf`;
+		link.target = '_blank';
+		link.rel = 'noopener';
+		link.click();
+		if (score.pdfBlob && !score.pdfUrl) setTimeout(() => URL.revokeObjectURL(href), 1000);
+	}
+
+	function printScoreFile(score: ScoreItem, event?: MouseEvent) {
+		event?.stopPropagation();
+		menuScoreId = null;
+		const href = score.pdfUrl || (score.pdfBlob ? URL.createObjectURL(score.pdfBlob) : '');
+		if (!href) {
+			error = 'No PDF available to print for this score.';
+			return;
+		}
+		const win = window.open(href, '_blank', 'noopener');
+		if (win) {
+			win.addEventListener('load', () => {
+				try { win.print(); } catch {}
+			});
+		} else {
+			// Popup blocked — fall back to same-tab print of a temp frame
+			const frame = document.createElement('iframe');
+			frame.style.display = 'none';
+			frame.src = href;
+			document.body.appendChild(frame);
+			frame.onload = () => {
+				try { frame.contentWindow?.print(); } catch {}
+				setTimeout(() => frame.remove(), 2000);
+			};
+		}
+		if (score.pdfBlob && !score.pdfUrl) setTimeout(() => URL.revokeObjectURL(href), 5000);
+	}
+
 	async function saveMetadata() {
 		if (!metadata) return;
 		const tags = editingTags.map((tag) => tag.trim()).filter(Boolean);
@@ -542,7 +590,7 @@
 									><Star
 										size={16}
 										fill={score.favorite ? 'currentColor' : 'none'} /></button
-								>{#if !score.favorite}<div class="menu-wrap">
+								><div class="menu-wrap">
 										<button
 											class="action-button"
 											class:active={menuScoreId === score.id}
@@ -558,12 +606,20 @@
 													onclick={(event) => editMetadata(score, event)}
 													><Tag size={15} />Edit tags</button
 												><button
+													role="menuitem"
+													onclick={(event) => downloadScoreFile(score, event)}
+													><Download size={15} />Download PDF</button
+												><button
+													role="menuitem"
+													onclick={(event) => printScoreFile(score, event)}
+													><Printer size={15} />Print</button
+												><button
 													class="danger"
 													role="menuitem"
 													onclick={(event) => deleteScore(score, event)}
 													><Trash2 size={15} />Remove from library</button>
 											</div>{/if}
-									</div>{/if}
+									</div>
 							</div>
 						</div>{/each}
 				</div>{:else}<div class="score-grid">
@@ -612,7 +668,7 @@
 									><Star
 										size={16}
 										fill={score.favorite ? 'currentColor' : 'none'} /></button
-								>{#if !score.favorite}<div class="menu-wrap">
+								><div class="menu-wrap">
 										<button
 											class="action-button"
 											class:active={menuScoreId === score.id}
@@ -628,12 +684,20 @@
 													onclick={(event) => editMetadata(score, event)}
 													><Tag size={15} />Edit tags</button
 												><button
+													role="menuitem"
+													onclick={(event) => downloadScoreFile(score, event)}
+													><Download size={15} />Download PDF</button
+												><button
+													role="menuitem"
+													onclick={(event) => printScoreFile(score, event)}
+													><Printer size={15} />Print</button
+												><button
 													class="danger"
 													role="menuitem"
 													onclick={(event) => deleteScore(score, event)}
 													><Trash2 size={15} />Remove from library</button>
 											</div>{/if}
-									</div>{/if}
+									</div>
 							</div>
 						</div>{/each}
 				</div>{/if}

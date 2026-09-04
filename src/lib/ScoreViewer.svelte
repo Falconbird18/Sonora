@@ -109,18 +109,37 @@
 	let isFullscreen = $state(false);
 
 	async function flushPendingAnnotations() {
-		const pages = [...saveTimers.keys()];
-		for (const number of pages) {
+		// Cancel any debounced timers and force-write those pages first.
+		const pendingPages = [...saveTimers.keys()];
+		for (const number of pendingPages) {
 			const timer = saveTimers.get(number);
 			if (timer) clearTimeout(timer);
 			saveTimers.delete(number);
 			await saveAnnotations(number);
+		}
+		// Also persist any page that already has annotation data in memory,
+		// so a close that races the debounce cannot drop work.
+		const known = new Set<number>([
+			...Object.keys(strokes).map(Number),
+			...Object.keys(stamps).map(Number),
+			...Object.keys(notes).map(Number)
+		]);
+		for (const number of known) {
+			if (pendingPages.includes(number)) continue;
+			const hasData =
+				(strokes[number]?.length ?? 0) > 0 ||
+				(stamps[number]?.length ?? 0) > 0 ||
+				(notes[number]?.length ?? 0) > 0;
+			if (hasData) await saveAnnotations(number);
 		}
 		await flushAnnotationSaves();
 	}
 
 	const prefs = $derived(`sonora-viewer-${score.id}`);
 	const colors = ['#c2410c', '#2563eb', '#15803d', '#a16207', '#7e22ce', '#111827', '#ffffff'];
+	const primaryColors = colors.slice(0, 3);
+	const extraColors = colors.slice(3);
+	let colorPickerOpen = $state(false);
 	const visiblePages = $derived(
 		pdf ? (dual ? [page, Math.min(pdf.numPages, page + 1)] : [page]) : [page]
 	);
@@ -236,21 +255,28 @@
 			resizeTimer = setTimeout(() => void render({ quiet: true }), 100);
 		});
 		if (host) observer.observe(host);
+		const onPageHide = () => {
+			void flushPendingAnnotations();
+		};
+		window.addEventListener('pagehide', onPageHide);
 		return () => {
-			closed = true;
 			window.removeEventListener('keydown', key);
 			document.removeEventListener('fullscreenchange', onFullscreen);
 			document.removeEventListener('visibilitychange', onVisibility);
+			window.removeEventListener('pagehide', onPageHide);
 			observer.disconnect();
 			clearTimeout(resizeTimer);
 			clearTimeout(prefetchTimer);
 			clearTimeout(zoomTimer);
 			cancelRender();
 			void releaseWakeLock();
-			void flushPendingAnnotations();
-			releaseCanvases();
-			if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
-			void destroyDocument();
+			// Flush annotations before marking closed / tearing down canvases.
+			void flushPendingAnnotations().finally(() => {
+				closed = true;
+				releaseCanvases();
+				if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+				void destroyDocument();
+			});
 		};
 	});
 
@@ -831,6 +857,7 @@
 		controls = !controls;
 		if (!controls) {
 			settingsOpen = false;
+			colorPickerOpen = false;
 			choose('move');
 		}
 	}
@@ -917,8 +944,6 @@
 				<button class="icon-button" class:active={bookmarked} title={bookmarked ? 'Remove bookmark' : 'Bookmark score'} onclick={toggleBookmark}
 					>{#if bookmarked}<BookmarkCheck size={18} />{:else}<Bookmark size={18} />{/if}</button>
 				<button class="icon-button" title="Search score" onclick={() => (searchOpen = !searchOpen)}><Search size={18} /></button>
-				<button class="icon-button" title="Print" onclick={printScore}><Printer size={18} /></button>
-				<button class="icon-button" title="Download PDF" onclick={downloadScore}><Download size={18} /></button>
 				<button class="icon-button" title="Reading mode (F)" onclick={enterReading}><Eye size={18} /></button>
 			</div>
 		</header>
@@ -963,7 +988,7 @@
 			<button class="icon-button" aria-label="Close search" onclick={() => (searchOpen = false)}><X size={17} /></button>
 		</div>{/if}
 
-	<main class="workspace" onwheel={onWheel}>
+	<main class="workspace" class:fit-page={fit === 'page'} onwheel={onWheel}>
 		<div class="pages" class:dual class:transitioning={pageTransition}>
 			<div class="page-shell">
 				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
@@ -1041,11 +1066,46 @@
 				<button class="icon-button" title="Undo" disabled={!canUndo} onclick={undo}><Undo2 size={18} /></button>
 				<button class="icon-button" title="Redo" disabled={!canRedo} onclick={redo}><Redo2 size={18} /></button>
 				<div class="color-row">
-					{#each colors as swatch}
-						<button class="swatch" class:selected={color === swatch} style={`--swatch:${swatch}`} title={swatch} onclick={() => (color = swatch)}></button>
+					{#each primaryColors as swatch}
+						<button class="swatch" class:selected={color === swatch} style={`--swatch:${swatch}`} title={swatch} onclick={() => { color = swatch; colorPickerOpen = false; }}></button>
 					{/each}
+					<div class="color-more-wrap">
+						<button
+							class="swatch more-swatch"
+							class:selected={extraColors.includes(color)}
+							class:open={colorPickerOpen}
+							style={extraColors.includes(color) ? `--swatch:${color}` : ''}
+							title="More colors"
+							aria-label="More colors"
+							aria-expanded={colorPickerOpen}
+							onclick={() => (colorPickerOpen = !colorPickerOpen)}
+						>
+							{#if !extraColors.includes(color)}
+								<span class="more-plus">+</span>
+							{/if}
+						</button>
+						{#if colorPickerOpen}
+							<div class="color-popup" role="listbox" aria-label="More colors">
+								{#each extraColors as swatch}
+									<button
+										class="swatch"
+										class:selected={color === swatch}
+										style={`--swatch:${swatch}`}
+										title={swatch}
+										role="option"
+										aria-selected={color === swatch}
+										onclick={() => { color = swatch; colorPickerOpen = false; }}
+									></button>
+								{/each}
+							</div>
+						{/if}
+					</div>
 				</div>
-				<label class="range-label">Size <input type="range" min="1" max="14" bind:value={width} /></label>
+				<label class="range-label size-slider">
+					<span>Size</span>
+					<input type="range" min="1" max="14" bind:value={width} />
+					<span class="size-value">{width}</span>
+				</label>
 				<button class="icon-button" title="Close annotation tools" onclick={toggleControls}><X size={18} /></button>
 			</div>
 		</aside>
@@ -1094,6 +1154,14 @@
 				<strong>Viewer settings</strong>
 				<button class="icon-button" title="Close settings" onclick={() => { settingsOpen = false; persistPrefs(); }}><X size={17} /></button>
 			</header>
+
+			<section class="settings-section">
+				<h3>File</h3>
+				<div class="settings-actions">
+					<button class="text-button" onclick={printScore}><Printer size={15} />Print</button>
+					<button class="text-button" onclick={downloadScore}><Download size={15} />Download PDF</button>
+				</div>
+			</section>
 
 			<section class="settings-section">
 				<h3>Layout</h3>
@@ -1333,6 +1401,11 @@
 		overscroll-behavior: contain;
 		-webkit-overflow-scrolling: touch;
 	}
+	.workspace.fit-page {
+		/* Fit-to-page: lock scrolling so the page stays fully framed */
+		overflow: hidden;
+		align-items: center;
+	}
 	.workspace::-webkit-scrollbar { display: none; }
 
 	.pages {
@@ -1407,11 +1480,14 @@
 		z-index: 15;
 		top: 56px;
 		bottom: 8px;
-		width: min(9vw, 88px);
+		/* Generous invisible hit targets for easy page turns while practicing */
+		width: min(22vw, 160px);
 		border: 0;
 		background: transparent;
 		opacity: 0;
 		cursor: pointer;
+		-webkit-tap-highlight-color: transparent;
+		touch-action: manipulation;
 	}
 	.page-hit:disabled {
 		pointer-events: none;
@@ -1546,6 +1622,86 @@
 	}
 	.range-label input {
 		width: 68px;
+	}
+	.size-slider {
+		gap: 6px;
+		padding: 0 4px;
+	}
+	.size-slider .size-value {
+		min-width: 14px;
+		text-align: center;
+		color: #c8c8c0;
+		font-variant-numeric: tabular-nums;
+	}
+	.size-slider input[type='range'] {
+		-webkit-appearance: none;
+		appearance: none;
+		width: 72px;
+		height: 4px;
+		border-radius: 999px;
+		background: linear-gradient(90deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.28));
+		outline: none;
+		cursor: pointer;
+	}
+	.size-slider input[type='range']::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		appearance: none;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		background: #f4f4f0;
+		border: 2px solid #1a1a17;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+		cursor: pointer;
+	}
+	.size-slider input[type='range']::-moz-range-thumb {
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		background: #f4f4f0;
+		border: 2px solid #1a1a17;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+		cursor: pointer;
+	}
+	.size-slider input[type='range']::-moz-range-track {
+		height: 4px;
+		border-radius: 999px;
+		background: linear-gradient(90deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.28));
+	}
+	.color-more-wrap {
+		position: relative;
+		display: inline-flex;
+	}
+	.more-swatch {
+		display: grid;
+		place-items: center;
+		background: rgba(255, 255, 255, 0.08);
+		border: 1px dashed rgba(255, 255, 255, 0.28);
+	}
+	.more-swatch.open {
+		border-style: solid;
+		border-color: rgba(255, 255, 255, 0.45);
+	}
+	.more-plus {
+		font-size: 12px;
+		line-height: 1;
+		color: #c8c8c0;
+		font-weight: 600;
+	}
+	.color-popup {
+		position: absolute;
+		bottom: calc(100% + 8px);
+		left: 50%;
+		transform: translateX(-50%);
+		display: flex;
+		gap: 6px;
+		padding: 8px;
+		border-radius: 12px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: rgba(22, 22, 19, 0.96);
+		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+		backdrop-filter: blur(16px);
+		z-index: 40;
 	}
 	.symbol-palette {
 		position: absolute;
@@ -1796,6 +1952,15 @@
 		font-size: 13px;
 		font-weight: 600;
 		letter-spacing: 0.01em;
+	}
+	.settings-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		padding: 0 4px 8px;
+	}
+	.settings-actions .text-button {
+		background: rgba(255, 255, 255, 0.06);
 	}
 	.settings-section {
 		padding: 12px 14px;

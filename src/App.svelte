@@ -16,7 +16,7 @@
 
 	async function loadLibraryView() {
 		try {
-			const module = await import('./lib/LibraryViewRedesign.svelte');
+			const module = await import('./lib/LibraryView.svelte');
 			libraryView = module.default;
 		} catch (reason) {
 			console.error('Sonora library failed to load', reason);
