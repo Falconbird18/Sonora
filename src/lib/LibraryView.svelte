@@ -148,7 +148,7 @@
 		closeMenu();
 		metadata = score;
 	}
-	
+
 	function downloadScoreFile(score: ScoreItem, event?: MouseEvent) {
 		event?.stopPropagation();
 		menuScoreId = null;
@@ -178,7 +178,9 @@
 		const win = window.open(href, '_blank', 'noopener');
 		if (win) {
 			win.addEventListener('load', () => {
-				try { win.print(); } catch {}
+				try {
+					win.print();
+				} catch {}
 			});
 		} else {
 			const frame = document.createElement('iframe');
@@ -186,7 +188,9 @@
 			frame.src = href;
 			document.body.appendChild(frame);
 			frame.onload = () => {
-				try { frame.contentWindow?.print(); } catch {}
+				try {
+					frame.contentWindow?.print();
+				} catch {}
 				setTimeout(() => frame.remove(), 2000);
 			};
 		}
@@ -340,8 +344,7 @@
 				sort === 'title'
 					? a.title.localeCompare(b.title)
 					: sort === 'composer'
-						? a.composer.localeCompare(b.composer) ||
-							a.title.localeCompare(b.title)
+						? a.composer.localeCompare(b.composer) || a.title.localeCompare(b.title)
 						: (b.lastOpenedAt || b.addedAt) - (a.lastOpenedAt || a.addedAt)
 			)
 	);
@@ -363,7 +366,8 @@
 			closeMenu();
 			if (metadata) metadata = null;
 		}
-	}} />
+	}}
+/>
 
 <div class="library">
 	<header class="header">
@@ -374,14 +378,11 @@
 		<SearchField bind:value={search} placeholder="Search your scores" ariaLabel="Search scores" />
 		<div class="header-actions">
 			<button class="folder-button" onclick={chooseFolder}
-				><FolderPlus size={17} /><span
-					>{folder ? 'Change folder' : 'Choose folder'}</span
-				></button
-			><IconButton
-				title="Refresh library"
-				ariaLabel="Refresh library"
-				onclick={sync}
-			><RefreshCw size={18} class={syncing ? 'spinning' : ''} /></IconButton>
+				><FolderPlus size={17} /><span>{folder ? 'Change folder' : 'Choose folder'}</span></button
+			>
+			<IconButton title="Refresh library" ariaLabel="Refresh library" onclick={sync}
+				><RefreshCw size={18} class={syncing ? 'spinning' : ''} /></IconButton
+			>
 		</div>
 	</header>
 	{#if error}
@@ -398,67 +399,72 @@
 					onclick={() => {
 						filter = 'all';
 						composer = null;
-					}}
-					><Grid2X2 size={16} /><span>All scores</span><b>{scores.length}</b
-					></button
-				><button
+					}}><Grid2X2 size={16} /><span>All scores</span><b>{scores.length}</b></button
+				>
+				<button
 					class:active={filter === 'recent'}
 					onclick={() => {
 						filter = 'recent';
 						composer = null;
 					}}><Clock3 size={16} /><span>Recently opened</span></button
-				><button
+				>
+				<button
 					class:active={filter === 'favorites'}
 					onclick={() => {
 						filter = 'favorites';
 						composer = null;
-					}}><Star size={16} /><span>Favorites</span></button>
+					}}><Star size={16} /><span>Favorites</span></button
+				>
 			</nav>
-			{#if folder}<div class="folder-summary">
+			{#if folder}
+				<div class="folder-summary">
 					<FolderOpen size={16} />
 					<div>
-						<strong>{folder.name}</strong><span
-							>{scores.length} {scores.length === 1 ? 'score' : 'scores'}</span>
+						<strong>{folder.name}</strong>
+						<span>{scores.length} {scores.length === 1 ? 'score' : 'scores'}</span>
 					</div>
-				</div>{/if}{#if Object.keys(composers).length}<section>
+				</div>
+			{/if}
+			{#if Object.keys(composers).length}
+				<section>
 					<h2>Composers</h2>
 					{#each Object.entries(composers)
 						.sort((a, b) => a[0].localeCompare(b[0]))
-						.slice(0, 16) as [name, count]}{@const portrait =
-							getComposerPortrait(name)}<button
+						.slice(0, 16) as [name, count]}
+						{@const portrait = getComposerPortrait(name)}
+						<button
 							class:active={composer === name}
 							onclick={() => {
 								composer = name;
 								filter = 'all';
 							}}
-							><ComposerPortrait {name} src={portrait} />
-							<span>{name}</span><b>{count}</b></button
-						>{/each}
-				</section>{/if}
+						>
+							<ComposerPortrait {name} src={portrait} />
+							<span>{name}</span><b>{count}</b>
+						</button>
+					{/each}
+				</section>
+			{/if}
 		</aside>
 		<main class="main">
 			<div class="toolbar">
 				<div>
 					<h1>{currentTitle}</h1>
-					<span
-						>{filtered.length}
-						{filtered.length === 1 ? 'score' : 'scores'}</span>
+					<span>{filtered.length} {filtered.length === 1 ? 'score' : 'scores'}</span>
 				</div>
 				<div class="toolbar-actions">
-					<select class="sort-select" bind:value={sort} aria-label="Sort scores"
-						><option value="recent">Recently used</option><option value="title"
-							>Title</option
-						><option value="composer">Composer</option></select
-					>
+					<select class="sort-select" bind:value={sort} aria-label="Sort scores">
+						<option value="recent">Recently used</option>
+						<option value="title">Title</option>
+						<option value="composer">Composer</option>
+					</select>
 					<div class="seg">
-						<button
-							class:active={view === 'grid'}
-							onclick={() => (view = 'grid')}
-							aria-label="Grid view"><Grid2X2 size={16} /></button
-						><button
-							class:active={view === 'list'}
-							onclick={() => (view = 'list')}
-							aria-label="List view"><List size={16} /></button>
+						<button class:active={view === 'grid'} onclick={() => (view = 'grid')} aria-label="Grid view"
+							><Grid2X2 size={16} /></button
+						>
+						<button class:active={view === 'list'} onclick={() => (view = 'list')} aria-label="List view"
+							><List size={16} /></button
+						>
 					</div>
 				</div>
 			</div>
@@ -467,7 +473,8 @@
 					<h2>Choose a score folder</h2>
 					<p>Point Sonora at the folder where you keep your PDF scores to get started.</p>
 					<button class="folder-button" onclick={chooseFolder}
-						><FolderPlus size={17} /><span>Choose folder</span></button>
+						><FolderPlus size={17} /><span>Choose folder</span></button
+					>
 				</div>
 			{:else if !filtered.length}
 				<div class="empty">
@@ -592,6 +599,11 @@
 	:global(.spinning) {
 		animation: spin 0.9s linear infinite;
 	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
 	.body {
 		min-height: 0;
 		flex: 1;
@@ -631,7 +643,7 @@
 		background: #1f1f1b;
 		color: #e4e4dc;
 	}
-	.sidebar button span:not(.portrait span) {
+	.sidebar button span {
 		min-width: 0;
 		flex: 1;
 		overflow: hidden;
@@ -779,11 +791,6 @@
 		margin: 0 0 18px;
 		font-size: 13px;
 		line-height: 1.45;
-	}
-	animation: spin {
-		to {
-			transform: rotate(360deg);
-		}
 	}
 	@media (max-width: 900px) {
 		.header {
