@@ -46,7 +46,7 @@
 	type Tool = 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';
 	type Fit = 'page' | 'width';
 	type Snapshot = { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] };
-	type TextEditor = { page: number; x: number; y: number; text: string; id?: string };
+	type TextEditor = { page: number; x: number; y: number; text: string; id?: string; screenX?: number; screenY?: number };
 
 	let pdf = $state<PdfDocumentProxy | null>(null);
 	let openedPdf: Awaited<ReturnType<typeof openPdfSource>> | null = null;
@@ -524,26 +524,25 @@
 	}
 
 	function placeSymbolAt(number: number, point: Point, canvas: HTMLCanvasElement | null) {
-		stamps[number] = [
-			...(stamps[number] || []),
-			{
-				id: crypto.randomUUID(),
-				symbol: selectedSymbol.glyph,
-				label: selectedSymbol.name,
-				x: point.x,
-				y: point.y,
-				fontSize: symbolSize,
-				color
-			}
-		];
+		const stamp = {
+			id: crypto.randomUUID(),
+			symbol: selectedSymbol.glyph,
+			label: selectedSymbol.name,
+			x: point.x,
+			y: point.y,
+			fontSize: symbolSize,
+			color
+		};
+		stamps[number] = [...(stamps[number] || []), stamp];
 		recentSymbols = [selectedSymbol.id, ...recentSymbols.filter((id) => id !== selectedSymbol.id)].slice(0, 10);
 		persistPrefs();
-		checkpoint(number);
 		if (canvas) redraw(number, canvas);
+		checkpoint(number);
 	}
 
 	function placeSymbolOnPage() {
-		placeSymbolAt(page, { x: 0.5, y: 0.42 }, leftInk);
+		const canvas = leftInk ?? rightInk;
+		placeSymbolAt(page, { x: 0.5, y: 0.4 }, canvas);
 	}
 
 	function begin(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {
@@ -594,10 +593,24 @@
 		const existing = (notes[number] || []).find(
 			(note) => Math.hypot(note.x - point.x, note.y - point.y) < 0.04
 		);
-		const x = Math.min(0.72, Math.max(0.02, point.x));
-		const y = Math.min(0.88, Math.max(0.06, point.y));
+		const x = Math.min(0.92, Math.max(0.04, point.x));
+		const y = Math.min(0.92, Math.max(0.04, point.y));
+		const canvas = number === visiblePages[0] ? leftInk : rightInk;
+		let screenX = 24;
+		let screenY = 120;
+		if (canvas) {
+			const rect = canvas.getBoundingClientRect();
+			screenX = rect.left + x * rect.width;
+			screenY = rect.top + y * rect.height;
+			// Prefer editor above the tap; flip below if near top
+			if (screenY < 100) screenY += 28;
+			else screenY -= 12;
+			// Keep fully on screen
+			screenX = Math.min(window.innerWidth - 300, Math.max(12, screenX - 20));
+			screenY = Math.min(window.innerHeight - 80, Math.max(12, screenY));
+		}
 		textDraft = existing?.text || '';
-		textEditor = { page: number, x, y, text: textDraft, id: existing?.id };
+		textEditor = { page: number, x, y, text: textDraft, id: existing?.id, screenX, screenY };
 		void tick().then(() => {
 			const el = document.querySelector<HTMLInputElement>('[data-score-text-input]');
 			el?.focus();
@@ -620,10 +633,10 @@
 					...(notes[editor.page] || []),
 					{ id: crypto.randomUUID(), text, x: editor.x, y: editor.y, fontSize: textSize, color }
 				];
+			const canvas = editor.page === visiblePages[0] ? leftInk : rightInk;
+			if (canvas) redraw(editor.page, canvas);
 			checkpoint(editor.page);
 		}
-		const canvas = editor.page === visiblePages[0] ? leftInk : rightInk;
-		if (canvas) redraw(editor.page, canvas);
 	}
 	function cancelText() {
 		textEditor = null;
@@ -790,11 +803,15 @@
 		context.restore();
 	}
 
+	/** Deep plain copy — Svelte 5 $state proxies cannot be structuredClone'd. */
+	function cloneData<T>(value: T): T {
+		return $state.snapshot(value) as T;
+	}
 	function snapshot(number: number): Snapshot {
 		return {
-			strokes: structuredClone(strokes[number] || []),
-			stamps: structuredClone(stamps[number] || []),
-			notes: structuredClone(notes[number] || [])
+			strokes: cloneData(strokes[number] || []),
+			stamps: cloneData(stamps[number] || []),
+			notes: cloneData(notes[number] || [])
 		};
 	}
 	function ensureHistory(number: number) {
@@ -813,9 +830,9 @@
 		scheduleSave(number);
 	}
 	function applySnapshot(number: number, state: Snapshot) {
-		strokes[number] = structuredClone(state.strokes);
-		stamps[number] = structuredClone(state.stamps);
-		notes[number] = structuredClone(state.notes);
+		strokes[number] = cloneData(state.strokes);
+		stamps[number] = cloneData(state.stamps);
+		notes[number] = cloneData(state.notes);
 		redraw(number, number === visiblePages[0] ? leftInk : rightInk);
 		scheduleSave(number);
 	}
@@ -1056,32 +1073,6 @@
 					onpointermove={move}
 					onpointerup={end}
 					onpointercancel={end}></canvas>
-				{#if textEditor && textEditor.page === visiblePages[0]}
-					<div
-						class="text-editor"
-						class:near-bottom={textEditor.y > 0.7}
-						style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}
-						onpointerdown={(e) => e.stopPropagation()}
-					>
-						<span class="text-editor-label">Note</span>
-						<input
-							data-score-text-input
-							bind:value={textDraft}
-							placeholder="Write a note…"
-							onkeydown={(e) => {
-								if (e.key === 'Enter') {
-									e.preventDefault();
-									commitText();
-								} else if (e.key === 'Escape') {
-									e.preventDefault();
-									cancelText();
-								}
-							}}
-						/>
-						<button class="text-editor-save" title="Save" onclick={commitText}><Check size={15} /></button>
-						<button title="Cancel" onclick={cancelText}><X size={15} /></button>
-					</div>
-				{/if}
 			</div>
 			{#if dual && visiblePages.length > 1}
 				<div class="page-shell">
@@ -1094,32 +1085,6 @@
 						onpointermove={move}
 						onpointerup={end}
 						onpointercancel={end}></canvas>
-					{#if textEditor && textEditor.page === visiblePages[1]}
-						<div
-						class="text-editor"
-						class:near-bottom={textEditor.y > 0.7}
-						style={`left:${textEditor.x * 100}%;top:${textEditor.y * 100}%`}
-						onpointerdown={(e) => e.stopPropagation()}
-					>
-						<span class="text-editor-label">Note</span>
-						<input
-							data-score-text-input
-							bind:value={textDraft}
-							placeholder="Write a note…"
-							onkeydown={(e) => {
-								if (e.key === 'Enter') {
-									e.preventDefault();
-									commitText();
-								} else if (e.key === 'Escape') {
-									e.preventDefault();
-									cancelText();
-								}
-							}}
-						/>
-						<button class="text-editor-save" title="Save" onclick={commitText}><Check size={15} /></button>
-						<button title="Cancel" onclick={cancelText}><X size={15} /></button>
-					</div>
-					{/if}
 				</div>
 			{/if}
 		</div>
@@ -1139,6 +1104,33 @@
 
 	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor }></button>
 	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor }></button>
+
+	
+	{#if textEditor}
+		<div
+			class="text-editor-floating"
+			style={`left:${textEditor.screenX ?? 24}px;top:${textEditor.screenY ?? 120}px`}
+			onpointerdown={(e) => e.stopPropagation()}
+		>
+			<span class="text-editor-label">Note</span>
+			<input
+				data-score-text-input
+				bind:value={textDraft}
+				placeholder="Write a note…"
+				onkeydown={(e) => {
+					if (e.key === 'Enter') {
+						e.preventDefault();
+						commitText();
+					} else if (e.key === 'Escape') {
+						e.preventDefault();
+						cancelText();
+					}
+				}}
+			/>
+			<button type="button" class="text-editor-save" title="Save" onclick={commitText}><Check size={15} /></button>
+			<button type="button" title="Cancel" onclick={cancelText}><X size={15} /></button>
+		</div>
+	{/if}
 
 	{#if !reading && !controls}
 		<button class="annotation-toggle" title="Annotation tools" aria-label="Open annotation tools" onclick={toggleControls}><Pencil size={18} /></button>
@@ -1205,48 +1197,80 @@
 	{/if}
 
 	{#if !reading && controls && tool === 'symbol'}
-		<section class="symbol-palette">
-			<div class="palette-toolbar">
-				<input class="palette-search" bind:value={symbolSearch} placeholder="Search…" aria-label="Search symbols" />
-				<label class="palette-size" title="Symbol size">
-					<span>{symbolSize}</span>
-					<input type="range" min="18" max="72" bind:value={symbolSize} />
-				</label>
-				<button type="button" class="palette-place" title="Place on page" onclick={placeSymbolOnPage}>Place</button>
-			</div>
+		<section class="symbol-sheet" role="dialog" aria-label="Musical symbols">
+			<header class="symbol-sheet-head">
+				<div class="symbol-sheet-title">
+					<strong>Symbols</strong>
+					<span>Tap to stamp · drag to move</span>
+				</div>
+				<button type="button" class="icon-button" title="Close symbols" aria-label="Close symbols" onclick={() => choose('pen')}><X size={17} /></button>
+			</header>
+
 			{#if recentSymbolObjects.length}
-				<div class="recent-row">
+				<div class="symbol-recents" aria-label="Recent symbols">
 					{#each recentSymbolObjects as symbol}
 						<button
 							type="button"
+							class="symbol-chip"
 							class:selected={selectedSymbol.id === symbol.id}
 							title={symbol.name}
 							onclick={() => {
 								selectedSymbol = symbol;
 								placeSymbolOnPage();
-							}}><span>{symbol.glyph}</span></button>
+							}}
+						><span class="glyph">{symbol.glyph}</span></button>
 					{/each}
 				</div>
 			{/if}
-			<div class="category-row">
+
+			<nav class="symbol-cats" aria-label="Symbol categories">
 				{#each MUSIC_SYMBOL_CATEGORIES as category}
-					<button type="button" class:active={symbolCategory === category} onclick={() => (symbolCategory = category)}>{category}</button>
-				{/each}
-			</div>
-			<div class="symbol-grid">
-				{#each filteredSymbols as symbol}
 					<button
 						type="button"
+						class:active={symbolCategory === category}
+						onclick={() => {
+							symbolCategory = category;
+							symbolSearch = '';
+						}}
+					>{category}</button>
+				{/each}
+			</nav>
+
+			<div class="symbol-search-row">
+				<input bind:value={symbolSearch} placeholder="Search symbols…" aria-label="Search symbols" />
+				<label class="symbol-size-control" title="Size">
+					<span>{symbolSize}px</span>
+					<input type="range" min="20" max="64" bind:value={symbolSize} />
+				</label>
+			</div>
+
+			<div class="symbol-tray">
+				{#each filteredSymbols as symbol (symbol.id)}
+					<button
+						type="button"
+						class="symbol-tile"
 						class:selected={selectedSymbol.id === symbol.id}
-						class="symbol-button"
-						title="{symbol.name} — tap to place"
+						title={symbol.name}
 						onclick={() => {
 							selectedSymbol = symbol;
 							placeSymbolOnPage();
-						}}><span>{symbol.glyph}</span></button>
+						}}
+					>
+						<span class="glyph">{symbol.glyph}</span>
+						<span class="name">{symbol.name}</span>
+					</button>
+				{:else}
+					<p class="symbol-empty">No symbols match “{symbolSearch}”</p>
 				{/each}
 			</div>
-			<p class="palette-hint">Tap a symbol to place · drag on the score to move · or tap the page after selecting</p>
+
+			<footer class="symbol-sheet-foot">
+				<span class="symbol-selected-preview" title={selectedSymbol.name}>
+					<span class="glyph">{selectedSymbol.glyph}</span>
+					{selectedSymbol.name}
+				</span>
+				<button type="button" class="symbol-stamp-btn" onclick={placeSymbolOnPage}>Stamp on page</button>
+			</footer>
 		</section>
 	{/if}
 
@@ -1808,43 +1832,117 @@
 		backdrop-filter: blur(16px);
 		z-index: 40;
 	}
-	.symbol-palette {
+	.symbol-sheet {
 		position: absolute;
-		z-index: 45;
+		z-index: 46;
 		left: 50%;
-		bottom: 72px;
+		bottom: 64px;
 		transform: translateX(-50%);
-		width: min(520px, calc(100% - 16px));
-		max-height: min(42vh, 360px);
+		width: min(440px, calc(100% - 12px));
+		max-height: min(48vh, 420px);
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
 		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 16px;
-		background: rgba(22, 22, 19, 0.97);
-		box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-		backdrop-filter: blur(18px);
+		border-radius: 18px;
+		background: rgba(16, 16, 14, 0.98);
+		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(20px);
 	}
-	.palette-toolbar {
+	.symbol-sheet-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		padding: 12px 12px 8px;
+	}
+	.symbol-sheet-title {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.symbol-sheet-title strong {
+		font-size: 14px;
+		font-weight: 650;
+	}
+	.symbol-sheet-title span {
+		font-size: 11px;
+		color: #7a7a72;
+	}
+	.symbol-recents {
+		display: flex;
+		gap: 6px;
+		padding: 0 12px 8px;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	.symbol-recents::-webkit-scrollbar { display: none; }
+	.symbol-chip {
+		flex-shrink: 0;
+		width: 44px;
+		height: 44px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 12px;
+		background: rgba(255, 255, 255, 0.04);
+		color: #f4f4f0;
+		cursor: pointer;
+		display: grid;
+		place-items: center;
+	}
+	.symbol-chip .glyph {
+		font: 24px/1 Leland, serif;
+	}
+	.symbol-chip.selected,
+	.symbol-chip:hover {
+		border-color: rgba(147, 197, 253, 0.5);
+		background: rgba(37, 99, 235, 0.2);
+	}
+	.symbol-cats {
+		display: flex;
+		gap: 4px;
+		padding: 0 12px 8px;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	.symbol-cats::-webkit-scrollbar { display: none; }
+	.symbol-cats button {
+		flex-shrink: 0;
+		height: 30px;
+		padding: 0 12px;
+		border: 0;
+		border-radius: 999px;
+		background: transparent;
+		color: #8a8a82;
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+	}
+	.symbol-cats button.active {
+		background: #f4f4f0;
+		color: #11110f;
+	}
+	.symbol-search-row {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 10px 12px 8px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+		padding: 0 12px 8px;
 	}
-	.palette-search {
+	.symbol-search-row input[type='text'],
+	.symbol-search-row input:not([type]),
+	.symbol-search-row > input {
 		flex: 1;
 		min-width: 0;
-		height: 34px;
+		height: 36px;
 		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 9px;
-		background: #0d0d0b;
+		border-radius: 10px;
+		background: #0a0a09;
 		color: #fff;
-		padding: 0 10px;
+		padding: 0 12px;
 		font-size: 13px;
 		outline: none;
 	}
-	.palette-size {
+	.symbol-size-control {
 		display: flex;
 		align-items: center;
 		gap: 6px;
@@ -1852,110 +1950,116 @@
 		font-size: 11px;
 		white-space: nowrap;
 	}
-	.palette-size input { width: 64px; }
-	.palette-place {
-		height: 34px;
-		padding: 0 12px;
-		border: 0;
-		border-radius: 9px;
-		background: rgba(37, 99, 235, 0.25);
-		color: #93c5fd;
-		font-size: 12px;
-		font-weight: 600;
-		cursor: pointer;
+	.symbol-size-control input[type='range'] {
+		width: 72px;
 	}
-	.palette-place:hover {
-		background: rgba(37, 99, 235, 0.4);
-		color: #dbeafe;
-	}
-	.recent-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 8px 12px 0;
-		overflow-x: auto;
-	}
-	.recent-row button {
-		width: 40px;
-		height: 40px;
-		border: 1px solid transparent;
-		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.04);
-		color: #f4f4f0;
-		font: 22px/1 Leland, serif;
-		cursor: pointer;
-	}
-	.recent-row button.selected,
-	.recent-row button:hover {
-		border-color: rgba(255, 255, 255, 0.2);
-		background: rgba(255, 255, 255, 0.1);
-	}
-	.category-row {
-		display: flex;
-		gap: 4px;
-		padding: 8px 12px;
-		overflow-x: auto;
-		scrollbar-width: none;
-	}
-	.category-row::-webkit-scrollbar { display: none; }
-	.category-row button {
-		flex-shrink: 0;
-		height: 28px;
-		padding: 0 10px;
-		border: 0;
-		border-radius: 999px;
-		background: transparent;
-		color: #8a8a82;
-		font-size: 11px;
-		font-weight: 500;
-		cursor: pointer;
-	}
-	.category-row button.active {
-		background: rgba(255, 255, 255, 0.1);
-		color: #fff;
-	}
-	.symbol-grid {
+	.symbol-tray {
 		flex: 1;
+		min-height: 120px;
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
 		gap: 6px;
 		padding: 4px 12px 8px;
 		overflow: auto;
 		align-content: start;
 	}
-	.symbol-button {
-		height: 48px;
+	.symbol-tile {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 4px;
+		min-height: 64px;
+		padding: 8px 4px;
 		border: 1px solid transparent;
 		border-radius: 12px;
 		background: rgba(255, 255, 255, 0.03);
 		color: #f4f4f0;
-		font: 26px/1 Leland, serif;
 		cursor: pointer;
-		display: grid;
-		place-items: center;
 	}
-	.symbol-button small { display: none; }
-	.symbol-button.selected,
-	.symbol-button:hover {
-		border-color: rgba(147, 197, 253, 0.45);
-		background: rgba(37, 99, 235, 0.18);
+	.symbol-tile .glyph {
+		font: 28px/1 Leland, serif;
 	}
-	.palette-hint {
-		margin: 0;
-		padding: 6px 12px 10px;
-		color: #6f6f68;
-		font-size: 10px;
+	.symbol-tile .name {
+		font-size: 9px;
+		color: #8a8a82;
 		text-align: center;
+		line-height: 1.2;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.symbol-tile.selected,
+	.symbol-tile:hover {
+		border-color: rgba(147, 197, 253, 0.45);
+		background: rgba(37, 99, 235, 0.16);
+	}
+	.symbol-tile.selected .name,
+	.symbol-tile:hover .name {
+		color: #c8d9f5;
+	}
+	.symbol-empty {
+		grid-column: 1 / -1;
+		margin: 16px 0;
+		text-align: center;
+		color: #7a7a72;
+		font-size: 13px;
+	}
+	.symbol-sheet-foot {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		padding: 10px 12px 12px;
+		border-top: 1px solid rgba(255, 255, 255, 0.07);
+	}
+	.symbol-selected-preview {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 0;
+		color: #c8c8c0;
+		font-size: 12px;
+	}
+	.symbol-selected-preview .glyph {
+		font: 22px/1 Leland, serif;
+		color: #fff;
+	}
+	.symbol-stamp-btn {
+		flex-shrink: 0;
+		height: 36px;
+		padding: 0 14px;
+		border: 0;
+		border-radius: 10px;
+		background: #2563eb;
+		color: #fff;
+		font-size: 13px;
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.symbol-stamp-btn:hover {
+		background: #3b82f6;
+	}
+	@media (max-width: 900px) {
+		.symbol-sheet {
+			bottom: 58px;
+			max-height: min(52vh, 380px);
+			border-radius: 16px 16px 12px 12px;
+		}
+		.symbol-tile .name {
+			font-size: 8px;
+		}
 	}
 
-	.text-editor {
-		position: absolute;
-		z-index: 80;
-		transform: translate(0, -110%);
+	.text-editor-floating {
+		position: fixed;
+		z-index: 200;
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		min-width: min(260px, 70vw);
+		min-width: min(280px, calc(100vw - 24px));
+		max-width: calc(100vw - 24px);
 		padding: 8px 10px;
 		border: 1px solid rgba(255, 255, 255, 0.14);
 		border-radius: 14px;
@@ -1963,9 +2067,6 @@
 		box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
 		backdrop-filter: blur(16px);
 		pointer-events: auto;
-	}
-	.text-editor.near-bottom {
-		transform: translate(0, 12%);
 	}
 	.text-editor-label {
 		font-size: 10px;
@@ -1975,10 +2076,9 @@
 		color: #8a8a82;
 		flex-shrink: 0;
 	}
-	.text-editor input {
+	.text-editor-floating input {
 		flex: 1;
 		min-width: 0;
-		width: 160px;
 		border: 0;
 		outline: 0;
 		background: rgba(255, 255, 255, 0.06);
@@ -1987,7 +2087,7 @@
 		font-size: 14px;
 		border-radius: 8px;
 	}
-	.text-editor button {
+	.text-editor-floating button {
 		width: 34px;
 		height: 34px;
 		border: 0;
@@ -1999,15 +2099,15 @@
 		place-items: center;
 		flex-shrink: 0;
 	}
-	.text-editor button.text-editor-save {
+	.text-editor-floating button.text-editor-save {
 		background: rgba(34, 197, 94, 0.18);
 		color: #86efac;
 	}
-	.text-editor button:hover {
+	.text-editor-floating button:hover {
 		background: rgba(255, 255, 255, 0.08);
 		color: #fff;
 	}
-	.text-editor button.text-editor-save:hover {
+	.text-editor-floating button.text-editor-save:hover {
 		background: rgba(34, 197, 94, 0.32);
 		color: #bbf7d0;
 	}
@@ -2264,7 +2364,7 @@
 		.workspace {
 			padding: 14px;
 		}
-		.symbol-palette {
+		.symbol-sheet {
 			max-height: 64vh;
 		}
 		.palette-header input {
@@ -2285,7 +2385,7 @@
 		.bottombar,
 		.annotation-bar,
 		.annotation-toggle,
-		.symbol-palette,
+		.symbol-sheet,
 		.search-panel,
 		.settings-card,
 		.loading,
