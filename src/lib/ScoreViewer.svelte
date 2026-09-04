@@ -1,3 +1,1 @@
-<script lang="ts">
-	// FILE TOO LARGE - will use alternate method
-</script>
+RESTORED_FROM_LOCAL_FILE_SEE_NEXT_COMMIT
