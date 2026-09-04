@@ -1,24 +1,22 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import {
-		Check,
 		Clock3,
-		Download,
-		FileText,
 		FolderOpen,
 		FolderPlus,
 		Grid2X2,
 		List,
-		MoreHorizontal,
 		Music2,
-		Printer,
 		RefreshCw,
-		Search,
-		Star,
-		Tag,
-		Trash2,
-		X
+		Star
 	} from '@lucide/svelte';
+	import SearchField from './ui/SearchField.svelte';
+	import Notice from './ui/Notice.svelte';
+	import ScoreCard from './ui/ScoreCard.svelte';
+	import ScoreListItem from './ui/ScoreListItem.svelte';
+	import TagDialog from './ui/TagDialog.svelte';
+	import ComposerPortrait from './ui/ComposerPortrait.svelte';
+	import IconButton from './ui/IconButton.svelte';
 	import { db } from './db';
 	import {
 		chooseAndAddFolder,
@@ -44,9 +42,7 @@
 	let view = $state<'grid' | 'list'>('grid'),
 		menuScoreId = $state<string | null>(null),
 		metadata = $state<ScoreItem | null>(null);
-	let tagDraft = $state(''),
-		editingTags = $state<string[]>([]),
-		syncing = $state(false),
+	let syncing = $state(false),
 		notice = $state(''),
 		error = $state('');
 	let openingId = $state<string | null>(null),
@@ -151,29 +147,6 @@
 		event?.stopPropagation();
 		closeMenu();
 		metadata = score;
-		editingTags = [...(score.tags ?? [])];
-		tagDraft = '';
-	}
-	function addTag(value = tagDraft) {
-		const tag = value.trim().replace(/,+$/, '').trim();
-		if (!tag) return;
-		if (
-			!editingTags.some(
-				(existing) => existing.toLowerCase() === tag.toLowerCase()
-			)
-		)
-			editingTags = [...editingTags, tag];
-		tagDraft = '';
-	}
-	function handleTagInput(event: KeyboardEvent) {
-		if (event.key === 'Enter' || event.key === ',') {
-			event.preventDefault();
-			addTag();
-		} else if (event.key === 'Backspace' && !tagDraft && editingTags.length)
-			editingTags = editingTags.slice(0, -1);
-	}
-	function removeTag(tag: string) {
-		editingTags = editingTags.filter((item) => item !== tag);
 	}
 	
 	function downloadScoreFile(score: ScoreItem, event?: MouseEvent) {
@@ -208,7 +181,6 @@
 				try { win.print(); } catch {}
 			});
 		} else {
-			// Popup blocked — fall back to same-tab print of a temp frame
 			const frame = document.createElement('iframe');
 			frame.style.display = 'none';
 			frame.src = href;
@@ -221,13 +193,13 @@
 		if (score.pdfBlob && !score.pdfUrl) setTimeout(() => URL.revokeObjectURL(href), 5000);
 	}
 
-	async function saveMetadata() {
+	async function saveMetadata(tags: string[]) {
 		if (!metadata) return;
-		const tags = editingTags.map((tag) => tag.trim()).filter(Boolean);
+		const next = tags.map((tag) => tag.trim()).filter(Boolean);
 		try {
-			await db.scores.update(metadata.id, { tags });
+			await db.scores.update(metadata.id, { tags: next });
 			scores = scores.map((item) =>
-				item.id === metadata!.id ? { ...item, tags } : item
+				item.id === metadata!.id ? { ...item, tags: next } : item
 			);
 			metadata = null;
 		} catch (e) {
@@ -294,15 +266,6 @@
 		} finally {
 			backfillRunning = false;
 		}
-	}
-	function initials(name: string) {
-		return name
-			.split(/\s+/)
-			.filter(Boolean)
-			.slice(0, 2)
-			.map((part) => part[0])
-			.join('')
-			.toUpperCase();
 	}
 	onMount(() => {
 		let disposed = false;
@@ -391,18 +354,6 @@
 					? 'Recently opened'
 					: 'All scores'
 	);
-	const tagSuggestions = $derived(
-		allTags
-			.filter(
-				(tag) =>
-					!editingTags.some(
-						(existing) => existing.toLowerCase() === tag.toLowerCase()
-					) &&
-					(!tagDraft.trim() ||
-						tag.toLowerCase().includes(tagDraft.trim().toLowerCase()))
-			)
-			.slice(0, 8)
-	);
 </script>
 
 <svelte:window
@@ -420,38 +371,25 @@
 			<div class="brand-mark"><Music2 size={19} /></div>
 			<strong>Sonora</strong>
 		</div>
-		<div class="search">
-			<Search size={17} /><input
-				bind:value={search}
-				placeholder="Search your scores"
-				aria-label="Search scores" />{#if search}<button
-					onclick={(event) => {
-						event.stopPropagation();
-						search = '';
-					}}
-					aria-label="Clear search"><X size={15} /></button
-				>{/if}
-		</div>
+		<SearchField bind:value={search} placeholder="Search your scores" ariaLabel="Search scores" />
 		<div class="header-actions">
 			<button class="folder-button" onclick={chooseFolder}
 				><FolderPlus size={17} /><span
 					>{folder ? 'Change folder' : 'Choose folder'}</span
 				></button
-			><button
-				class="icon-button"
-				onclick={sync}
-				aria-label="Refresh library"
+			><IconButton
 				title="Refresh library"
-				><RefreshCw size={18} class={syncing ? 'spinning' : ''} /></button>
+				ariaLabel="Refresh library"
+				onclick={sync}
+			><RefreshCw size={18} class={syncing ? 'spinning' : ''} /></IconButton>
 		</div>
 	</header>
-	{#if error}<div class="notice error">
-			<span>{error}</span><button
-				onclick={() => (error = '')}
-				aria-label="Dismiss"><X size={15} /></button>
-		</div>{/if}{#if notice}<div class="notice">
-			<Check size={15} />{notice}
-		</div>{/if}
+	{#if error}
+		<Notice variant="error" dismissible ondismiss={() => (error = '')}>{error}</Notice>
+	{/if}
+	{#if notice}
+		<Notice variant="success">{notice}</Notice>
+	{/if}
 	<div class="body">
 		<aside class="sidebar">
 			<nav aria-label="Library filters">
@@ -493,14 +431,7 @@
 								composer = name;
 								filter = 'all';
 							}}
-							><div class="portrait">
-								{#if portrait}<img
-										src={portrait}
-										alt=""
-										loading="lazy"
-										onerror={(event) => { (event.currentTarget as HTMLImageElement).style.display = 'none'; }} />{/if}<span
-									>{initials(name)}</span>
-							</div>
+							><ComposerPortrait {name} src={portrait} />
 							<span>{name}</span><b>{count}</b></button
 						>{/each}
 				</section>{/if}
@@ -531,237 +462,64 @@
 					</div>
 				</div>
 			</div>
-			{#if !folder && !scores.length}<div class="empty">
-					<div class="empty-icon"><FolderOpen size={30} /></div>
-					<h2>Your score library</h2>
-					<p>Choose one folder where Sonora will keep all of your scores.</p>
-					<button class="primary" onclick={chooseFolder}
-						><FolderPlus size={17} />Choose score folder</button>
-				</div>{:else if filtered.length === 0}<div class="empty">
-					<div class="empty-icon"><Search size={28} /></div>
-					<h2>No scores found</h2>
+			{#if !folder}
+				<div class="empty">
+					<h2>Choose a score folder</h2>
+					<p>Point Sonora at the folder where you keep your PDF scores to get started.</p>
+					<button class="folder-button" onclick={chooseFolder}
+						><FolderPlus size={17} /><span>Choose folder</span></button>
+				</div>
+			{:else if !filtered.length}
+				<div class="empty">
+					<h2>No scores match</h2>
 					<p>Try another search or filter, or refresh the library.</p>
-				</div>{:else if view === 'list'}<div class="score-list">
-					{#each filtered as score (score.id)}<div
-							class="list-row"
-							class:opening={openingId === score.id}
-							role="button"
-							tabindex="0"
-							onclick={() => openScore(score)}
-							onkeydown={(event) => {
-								if (event.key === 'Enter' || event.key === ' ') {
-									event.preventDefault();
-									void openScore(score);
-								}
-							}}>
-							<div class="list-cover">
-								{#if score.thumbnailUrl}<img
-										src={score.thumbnailUrl}
-										alt="" />{:else}<FileText size={22} />{/if}
-							</div>
-							<div class="list-info">
-								<strong title={score.title}>{score.title}</strong><span
-									>{score.composer}</span
-								>{#if score.tags?.length}<div class="tags">
-										{#each score.tags.slice(0, 3) as tag}<span>{tag}</span
-											>{/each}{#if score.tags.length > 3}<small
-												>+{score.tags.length - 3}</small
-											>{/if}
-									</div>{/if}
-							</div>
-							<div class="list-meta">
-								<span
-									>{score.totalPages || 1}
-									{score.totalPages === 1 ? 'page' : 'pages'}</span
-								>{#if score.lastOpenedAt}<span>Recent</span>{/if}
-							</div>
-							<div class="list-actions">
-								<button
-									class="action-button favorite"
-									class:marked={score.favorite}
-									onclick={(event) => toggleFavorite(score, event)}
-									aria-label={score.favorite
-										? 'Remove from favorites'
-										: 'Add to favorites'}
-									aria-pressed={score.favorite}
-									title={score.favorite
-										? 'Remove from favorites'
-										: 'Add to favorites'}
-									><Star
-										size={16}
-										fill={score.favorite ? 'currentColor' : 'none'} /></button
-								><div class="menu-wrap">
-										<button
-											class="action-button"
-											class:active={menuScoreId === score.id}
-											onclick={(event) => toggleMenu(score, event)}
-											aria-label="More actions"
-											aria-expanded={menuScoreId === score.id}
-											><MoreHorizontal size={17} /></button
-										>{#if menuScoreId === score.id}<div
-												class="score-menu"
-												role="menu">
-												<button
-													role="menuitem"
-													onclick={(event) => editMetadata(score, event)}
-													><Tag size={15} />Edit tags</button
-												><button
-													role="menuitem"
-													onclick={(event) => downloadScoreFile(score, event)}
-													><Download size={15} />Download PDF</button
-												><button
-													role="menuitem"
-													onclick={(event) => printScoreFile(score, event)}
-													><Printer size={15} />Print</button
-												><button
-													class="danger"
-													role="menuitem"
-													onclick={(event) => deleteScore(score, event)}
-													><Trash2 size={15} />Remove from library</button>
-											</div>{/if}
-									</div>
-							</div>
-						</div>{/each}
-				</div>{:else}<div class="score-grid">
-					{#each filtered as score (score.id)}<div
-							class="card"
-							class:opening={openingId === score.id}>
-							<button
-								class="score-open"
-								onclick={() => void openScore(score)}
-								aria-label={`Open ${score.title}`}
-								><div class="cover">
-									{#if score.thumbnailUrl}<img
-											src={score.thumbnailUrl}
-											alt=""
-											loading="eager"
-											decoding="async" />{:else}<div class="no-cover">
-											<FileText size={25} /><span
-												>{score.totalPages
-													? `${score.totalPages} pages`
-													: 'Preparing preview'}</span>
-										</div>{/if}
-								</div>
-								<div class="info">
-									<h3 title={score.title}>{score.title}</h3>
-									<p>{score.composer}</p>
-									{#if score.tags?.length}<div class="tags">
-											{#each score.tags.slice(0, 2) as tag}<span>{tag}</span
-												>{/each}{#if score.tags.length > 2}<small
-													>+{score.tags.length - 2}</small
-												>{/if}
-										</div>{/if}
-								</div></button
-							>
-							<div class="card-actions">
-								<button
-									class="action-button favorite"
-									class:marked={score.favorite}
-									onclick={(event) => toggleFavorite(score, event)}
-									aria-label={score.favorite
-										? 'Remove from favorites'
-										: 'Add to favorites'}
-									aria-pressed={score.favorite}
-									title={score.favorite
-										? 'Remove from favorites'
-										: 'Add to favorites'}
-									><Star
-										size={16}
-										fill={score.favorite ? 'currentColor' : 'none'} /></button
-								><div class="menu-wrap">
-										<button
-											class="action-button"
-											class:active={menuScoreId === score.id}
-											onclick={(event) => toggleMenu(score, event)}
-											aria-label="More actions"
-											aria-expanded={menuScoreId === score.id}
-											title="More actions"><MoreHorizontal size={17} /></button
-										>{#if menuScoreId === score.id}<div
-												class="score-menu"
-												role="menu">
-												<button
-													role="menuitem"
-													onclick={(event) => editMetadata(score, event)}
-													><Tag size={15} />Edit tags</button
-												><button
-													role="menuitem"
-													onclick={(event) => downloadScoreFile(score, event)}
-													><Download size={15} />Download PDF</button
-												><button
-													role="menuitem"
-													onclick={(event) => printScoreFile(score, event)}
-													><Printer size={15} />Print</button
-												><button
-													class="danger"
-													role="menuitem"
-													onclick={(event) => deleteScore(score, event)}
-													><Trash2 size={15} />Remove from library</button>
-											</div>{/if}
-									</div>
-							</div>
-						</div>{/each}
-				</div>{/if}
+				</div>
+			{:else if view === 'list'}
+				<div class="score-list">
+					{#each filtered as score (score.id)}
+						<ScoreListItem
+							{score}
+							opening={openingId === score.id}
+							menuOpen={menuScoreId === score.id}
+							onOpen={(s) => void openScore(s)}
+							onToggleFavorite={toggleFavorite}
+							onToggleMenu={toggleMenu}
+							onEditTags={editMetadata}
+							onDownload={downloadScoreFile}
+							onPrint={printScoreFile}
+							onDelete={deleteScore}
+						/>
+					{/each}
+				</div>
+			{:else}
+				<div class="score-grid">
+					{#each filtered as score (score.id)}
+						<ScoreCard
+							{score}
+							opening={openingId === score.id}
+							menuOpen={menuScoreId === score.id}
+							onOpen={(s) => void openScore(s)}
+							onToggleFavorite={toggleFavorite}
+							onToggleMenu={toggleMenu}
+							onEditTags={editMetadata}
+							onDownload={downloadScoreFile}
+							onPrint={printScoreFile}
+							onDelete={deleteScore}
+						/>
+					{/each}
+				</div>
+			{/if}
 		</main>
 	</div>
-	{#if metadata}<div
-			class="dialog-backdrop"
-			role="presentation"
-			onclick={(event) => {
-				if (event.currentTarget === event.target) metadata = null;
-			}}>
-			<div
-				class="tag-dialog"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="tag-dialog-title">
-				<header>
-					<div>
-						<h2 id="tag-dialog-title">Edit tags</h2>
-						<p>{metadata.title}</p>
-					</div>
-					<button
-						class="close-button"
-						onclick={() => (metadata = null)}
-						aria-label="Close"><X size={18} /></button>
-				</header>
-				<div class="tag-editor">
-					<label for="tag-input">Tags</label>
-					<div class="tag-input-wrap" class:has-tags={editingTags.length > 0}>
-						{#each editingTags as tag}<span class="edit-tag"
-								>{tag}<button
-									onclick={() => removeTag(tag)}
-									aria-label={`Remove ${tag}`}><X size={12} /></button
-								></span
-							>{/each}<input
-							id="tag-input"
-							bind:value={tagDraft}
-							onkeydown={handleTagInput}
-							onblur={() => addTag()}
-							placeholder={editingTags.length
-								? 'Add another tag…'
-								: 'Type a tag and press Enter…'} />
-					</div>
-					{#if tagSuggestions.length}<div class="suggestions">
-							<span>Suggestions</span>{#each tagSuggestions as tag}<button
-									onclick={() => addTag(tag)}>{tag}</button
-								>{/each}
-						</div>{/if}
-					<div class="tag-help">
-						<Tag size={14} /><span
-							>Press Enter or type a comma to add a tag.</span
-						>{#if editingTags.length}<button onclick={() => (editingTags = [])}
-								>Clear all</button
-							>{/if}
-					</div>
-				</div>
-				<footer>
-					<button class="secondary" onclick={() => (metadata = null)}
-						>Cancel</button
-					><button class="primary" onclick={saveMetadata}
-						><Check size={16} />Save changes</button>
-				</footer>
-			</div>
-		</div>{/if}
+	{#if metadata}
+		<TagDialog
+			title={metadata.title}
+			tags={metadata.tags ?? []}
+			suggestions={allTags}
+			onSave={(tags) => void saveMetadata(tags)}
+			onClose={() => (metadata = null)}
+		/>
+	{/if}
 </div>
 
 <style>
@@ -806,48 +564,6 @@
 		background: #1d1d19;
 		color: #d8d8d0;
 	}
-	.search {
-		height: 40px;
-		display: flex;
-		align-items: center;
-		gap: 9px;
-		padding: 0 11px;
-		border: 1px solid #30302b;
-		border-radius: 11px;
-		background: #1b1b18;
-		color: #77776f;
-	}
-	.search:focus-within {
-		border-color: #57574f;
-		background: #1d1d19;
-	}
-	.search input {
-		min-width: 0;
-		flex: 1;
-		border: 0;
-		outline: 0;
-		background: transparent;
-		color: #e7e7df;
-		font-size: 13px;
-	}
-	.search input::placeholder {
-		color: #66665f;
-	}
-	.search button {
-		width: 26px;
-		height: 26px;
-		display: grid;
-		place-items: center;
-		border: 0;
-		border-radius: 7px;
-		background: transparent;
-		color: #77776f;
-		cursor: pointer;
-	}
-	.search button:hover {
-		background: #292923;
-		color: #ddd;
-	}
 	.header-actions {
 		display: flex;
 		justify-content: flex-end;
@@ -873,45 +589,8 @@
 	.primary:hover {
 		background: #f0f0e8;
 	}
-	.icon-button,
-	.close-button {
-		display: grid;
-		place-items: center;
-		width: 38px;
-		height: 38px;
-		border: 1px solid #30302b;
-		border-radius: 10px;
-		background: #1b1b18;
-		color: #a2a29a;
-		cursor: pointer;
-	}
-	.icon-button:hover,
-	.close-button:hover {
-		background: #24241f;
-		color: #eee;
-	}
-	.notice {
-		margin: 10px auto 0;
-		display: flex;
-		align-items: center;
-		gap: 7px;
-		padding: 8px 11px;
-		border: 1px solid #34342e;
-		border-radius: 9px;
-		background: #1c1c18;
-		color: #bdbdb5;
-		font-size: 12px;
-	}
-	.notice.error {
-		border-color: #593b32;
-		color: #e5b7a8;
-	}
-	.notice button {
-		margin-left: 8px;
-		border: 0;
-		background: transparent;
-		color: inherit;
-		cursor: pointer;
+	:global(.spinning) {
+		animation: spin 0.9s linear infinite;
 	}
 	.body {
 		min-height: 0;
@@ -922,40 +601,26 @@
 	.sidebar {
 		min-height: 0;
 		overflow: auto;
-		padding: 22px 14px;
+		padding: 18px 14px 28px;
 		border-right: 1px solid #282824;
-		background: #141411;
+		background: #131311;
 	}
-	.sidebar nav,
-	.sidebar section {
+	.sidebar nav {
 		display: flex;
 		flex-direction: column;
-		gap: 3px;
-	}
-	.sidebar section {
-		margin-top: 25px;
-	}
-	.sidebar h2 {
-		margin: 0 10px 8px;
-		color: #62625b;
-		font-size: 10px;
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-weight: 700;
+		gap: 4px;
 	}
 	.sidebar nav button,
 	.sidebar section button {
-		min-width: 0;
-		width: 100%;
 		display: flex;
 		align-items: center;
 		gap: 10px;
+		width: 100%;
+		padding: 9px 10px;
 		border: 0;
-		border-radius: 9px;
-		padding: 8px 10px;
+		border-radius: 10px;
 		background: transparent;
-		color: #8f8f87;
-		text-align: left;
+		color: #8a8a82;
 		font-size: 12px;
 		cursor: pointer;
 	}
@@ -1006,27 +671,19 @@
 		font-size: 10px;
 		color: #5f5f58;
 	}
-	.portrait {
-		position: relative;
-		flex: 0 0 28px;
-		width: 28px;
-		height: 28px;
-		display: grid;
-		place-items: center;
-		overflow: hidden;
-		border: 1px solid #30302b;
-		border-radius: 8px;
-		background: #20201c;
-		color: #77776e;
-		font-size: 9px;
-		font-weight: 700;
+	.sidebar section {
+		margin-top: 24px;
 	}
-	.portrait img {
-		position: absolute;
-		inset: 0;
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
+	.sidebar h2 {
+		margin: 0 0 10px 8px;
+		color: #5f5f58;
+		font-size: 10px;
+		font-weight: 650;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+	.sidebar section button {
+		margin-bottom: 2px;
 	}
 	.main {
 		min-width: 0;
@@ -1098,483 +755,32 @@
 	}
 	.score-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-		gap: 24px 18px;
-	}
-	.card {
-		position: relative;
-		min-width: 0;
-	}
-	.card.opening {
-		opacity: 0.55;
-	}
-	.score-open {
-		display: block;
-		width: 100%;
-		padding: 0;
-		border: 0;
-		background: transparent;
-		color: inherit;
-		text-align: left;
-		cursor: pointer;
-	}
-	.cover {
-		position: relative;
-		aspect-ratio: 3/4;
-		overflow: hidden;
-		border: 1px solid #2d2d28;
-		border-radius: 14px;
-		background: #191916;
-		box-shadow: 0 7px 20px #0005;
-	}
-	.cover img {
-		width: 100%;
-		height: 100%;
-		display: block;
-		object-fit: cover;
-		object-position: top;
-		background: #fff;
-		transition: transform 0.18s ease;
-	}
-	.card:hover .cover img {
-		transform: scale(1.012);
-	}
-	.no-cover {
-		width: 100%;
-		height: 100%;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 8px;
-		color: #5f5f58;
-		font-size: 10px;
-	}
-	.info {
-		padding: 10px 2px 0;
-	}
-	.info h3 {
-		margin: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: #d7d7cf;
-		font-size: 12px;
-		font-weight: 600;
-	}
-	.info p {
-		margin: 4px 0 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: #696961;
-		font-size: 10px;
-	}
-	.tags {
-		display: flex;
-		gap: 4px;
-		margin-top: 7px;
-		overflow: hidden;
-	}
-	.tags span,
-	.tags small {
-		flex: 0 0 auto;
-		max-width: 85px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		padding: 3px 6px;
-		border: 1px solid #2c2c27;
-		border-radius: 5px;
-		background: #1a1a17;
-		color: #73736b;
-		font-size: 9px;
-	}
-	.tags small {
-		border: 0;
-		padding: 3px 2px;
-		background: transparent;
-		color: #55554e;
-	}
-	.card-actions {
-		position: absolute;
-		top: 7px;
-		right: 7px;
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		padding: 3px;
-		border: 1px solid #34342e;
-		opacity: 0;
-		transform: translateY(-2px);
-		transition:
-			opacity 0.14s ease,
-			transform 0.14s ease;
-		color: #b8b8b0;
-		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
-    	border: 1px solid rgba(255, 255, 255, 0.08);
-    	border-radius: 7px;
-    	background: rgba(25, 25, 22, 0.78);
-    	backdrop-filter: blur(18px);
-
-	}
-	.card:hover .card-actions,
-	.card:focus-within .card-actions,
-	.card-actions:has(.favorite.marked) {
-		opacity: 1;
-		transform: none;
-	}
-	.action-button {
-		width: 30px;
-		height: 30px;
-		display: grid;
-		place-items: center;
-		border: 0;
-		border-radius: 7px;
-		background: transparent;
-		color: #85857d;
-		cursor: pointer;
-	}
-	.action-button:hover,
-	.action-button.active {
-		background: #292923;
-		color: #e6e6de;
-	}
-	.action-button.favorite:hover,
-	.action-button.favorite.marked {
-		color: #e1b94b;
-	}
-	.action-button.favorite.marked:hover {
-		background: #2b281d;
-	}
-	.menu-wrap {
-		position: relative;
-	}
-	.score-menu {
-		position: absolute;
-		z-index: 50;
-		top: calc(100% + 6px);
-		right: 0;
-		width: 174px;
-		padding: 4px;
-		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
-    	border: 1px solid rgba(255, 255, 255, 0.08);
-    	border-radius: 7px;
-    	background: rgba(25, 25, 22, 0.78);
-    	backdrop-filter: blur(18px);
-	}
-	.score-menu button {
-		width: 100%;
-		display: flex;
-		align-items: center;
-		gap: 9px;
-		padding: 8px 9px;
-		border: 0;
-		border-radius: 7px;
-		background: transparent;
-		color: #aaa9a1;
-		text-align: left;
-		font-size: 11px;
-		cursor: pointer;
-	}
-	.score-menu button:hover {
-		background: #292923;
-		color: #eee;
-	}
-	.score-menu button.danger:hover {
-		background: #32211d;
-		color: #e5aa98;
+		grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+		gap: 28px 18px;
 	}
 	.score-list {
 		display: flex;
 		flex-direction: column;
-		border: 1px solid #292923;
-		border-radius: 12px;
-		overflow: visible;
-		background: #171714;
-	}
-	.list-row {
-		position: relative;
-		min-width: 0;
-		display: grid;
-		grid-template-columns: 46px minmax(0, 1fr) auto auto;
-		align-items: center;
-		gap: 14px;
-		padding: 9px 11px;
-		border-bottom: 1px solid #282824;
-		cursor: pointer;
-	}
-	.list-row:last-child {
-		border-bottom: 0;
-	}
-	.list-row:hover,
-	.list-row:focus-visible {
-		background: #1d1d19;
-		outline: 0;
-	}
-	.list-row.opening {
-		opacity: 0.55;
-	}
-	.list-cover {
-		width: 46px;
-		height: 58px;
-		display: grid;
-		place-items: center;
-		overflow: hidden;
-		border: 1px solid #2d2d28;
-		border-radius: 6px;
-		background: #10100e;
-		color: #55554e;
-	}
-	.list-cover img {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		object-position: top;
-	}
-	.list-info {
-		min-width: 0;
-	}
-	.list-info strong,
-	.list-info > span {
-		display: block;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.list-info strong {
-		color: #d8d8d0;
-		font-size: 12px;
-		font-weight: 600;
-	}
-	.list-info > span {
-		margin-top: 4px;
-		color: #686860;
-		font-size: 10px;
-	}
-	.list-meta {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-end;
 		gap: 4px;
-		color: #5f5f58;
-		font-size: 9px;
-		white-space: nowrap;
-	}
-	.list-actions {
-		display: flex;
-		align-items: center;
-		gap: 3px;
 	}
 	.empty {
-		min-height: 360px;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 8px;
-		border: 1px dashed #34342e;
-		border-radius: 14px;
-		color: #67675f;
+		max-width: 420px;
+		margin: 48px auto 0;
 		text-align: center;
-	}
-	.empty-icon {
-		width: 58px;
-		height: 58px;
-		display: grid;
-		place-items: center;
-		margin-bottom: 4px;
-		border: 1px solid #30302b;
-		border-radius: 15px;
-		background: #1a1a17;
-		color: #77776e;
+		color: #77776f;
 	}
 	.empty h2 {
-		margin: 0;
-		color: #c5c5bd;
-		font-size: 16px;
+		margin: 0 0 8px;
+		color: #d5d5cd;
+		font-size: 18px;
+		font-weight: 650;
 	}
 	.empty p {
-		max-width: 360px;
-		margin: 0 0 10px;
-		color: #66665f;
-		font-size: 11px;
+		margin: 0 0 18px;
+		font-size: 13px;
+		line-height: 1.45;
 	}
-	.dialog-backdrop {
-		position: fixed;
-		inset: 0;
-		z-index: 100;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 20px;
-		background: #0009;
-		backdrop-filter: blur(5px);
-	}
-	.tag-dialog {
-		width: min(500px, 100%);
-		border: 1px solid #3a3a34;
-		border-radius: 15px;
-		background: #1a1a17;
-		box-shadow: 0 24px 70px #000b;
-		overflow: hidden;
-	}
-	.tag-dialog > header {
-		height: auto;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 16px;
-		padding: 18px 18px 15px;
-		border-bottom: 1px solid #2d2d28;
-		background: #1c1c19;
-	}
-	.tag-dialog header h2 {
-		margin: 0;
-		color: #e4e4dc;
-		font-size: 15px;
-	}
-	.tag-dialog header p {
-		margin: 5px 0 0;
-		max-width: 360px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: #66665f;
-		font-size: 10px;
-	}
-	.tag-editor {
-		padding: 18px;
-	}
-	.tag-editor > label {
-		display: block;
-		margin-bottom: 7px;
-		color: #9d9d95;
-		font-size: 11px;
-		font-weight: 600;
-	}
-	.tag-input-wrap {
-		min-height: 46px;
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 6px;
-		padding: 7px 9px;
-		border: 1px solid #35352f;
-		border-radius: 10px;
-		background: #11110f;
-	}
-	.tag-input-wrap:focus-within {
-		border-color: #5b5b52;
-		box-shadow: 0 0 0 2px #ffffff08;
-	}
-	.tag-input-wrap input {
-		flex: 1 1 120px;
-		min-width: 100px;
-		border: 0;
-		outline: 0;
-		background: transparent;
-		color: #ddd;
-		font-size: 11px;
-	}
-	.tag-input-wrap input::placeholder {
-		color: #55554e;
-	}
-	.edit-tag {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		max-width: 170px;
-		padding: 5px 7px;
-		border: 1px solid #3a3931;
-		border-radius: 6px;
-		background: #25251f;
-		color: #c0c0b7;
-		font-size: 10px;
-	}
-	.edit-tag button {
-		display: grid;
-		place-items: center;
-		padding: 1px;
-		border: 0;
-		border-radius: 4px;
-		background: transparent;
-		color: #77776f;
-		cursor: pointer;
-	}
-	.edit-tag button:hover {
-		background: #35352f;
-		color: #eee;
-	}
-	.suggestions {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 5px;
-		margin-top: 10px;
-	}
-	.suggestions > span {
-		margin-right: 3px;
-		color: #55554e;
-		font-size: 9px;
-	}
-	.suggestions button {
-		padding: 5px 7px;
-		border: 1px solid #2e2e29;
-		border-radius: 6px;
-		background: #1d1d19;
-		color: #77776f;
-		font-size: 9px;
-		cursor: pointer;
-	}
-	.suggestions button:hover {
-		border-color: #45453d;
-		color: #c7c7bf;
-	}
-	.tag-help {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		margin-top: 14px;
-		color: #5f5f58;
-		font-size: 9px;
-	}
-	.tag-help button {
-		margin-left: auto;
-		border: 0;
-		background: transparent;
-		color: #77776f;
-		font-size: 9px;
-		cursor: pointer;
-	}
-	.tag-help button:hover {
-		color: #d5d5cd;
-	}
-	.tag-dialog > footer {
-		display: flex;
-		justify-content: flex-end;
-		gap: 8px;
-		padding: 13px 18px;
-		border-top: 1px solid #2d2d28;
-		background: #181815;
-	}
-	.secondary {
-		display: inline-flex;
-		align-items: center;
-		gap: 7px;
-		border: 1px solid #33332e;
-		border-radius: 9px;
-		padding: 8px 12px;
-		background: #22221e;
-		color: #9d9d95;
-		font-size: 11px;
-		cursor: pointer;
-	}
-	.secondary:hover {
-		background: #2a2a25;
-		color: #ddd;
-	}
-	@keyframes spin {
+	animation: spin {
 		to {
 			transform: rotate(360deg);
 		}
@@ -1627,30 +833,6 @@
 		.score-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 			gap: 20px 11px;
-		}
-		.list-row {
-			grid-template-columns: 42px minmax(0, 1fr) auto;
-			gap: 10px;
-		}
-		.list-meta {
-			display: none;
-		}
-		.list-cover {
-			width: 42px;
-			height: 54px;
-		}
-		.list-actions .action-button {
-			width: 28px;
-			height: 28px;
-		}
-		.list-info .tags {
-			display: none;
-		}
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.card-actions,
-		.cover img {
-			transition: none;
 		}
 	}
 </style>
