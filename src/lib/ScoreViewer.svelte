@@ -75,10 +75,12 @@
 	let color = $state('#111827');
 	let width = $state(3);
 	let selectedSymbol = $state(MUSIC_SYMBOLS[0]);
-	let symbolCategory = $state<(typeof MUSIC_SYMBOL_CATEGORIES)[number]>('Clefs');
+	let symbolCategory = $state<'Recent' | (typeof MUSIC_SYMBOL_CATEGORIES)[number]>('Recent');
 	let symbolSearch = $state('');
 	let symbolSize = $state(34);
 	let recentSymbols = $state<string[]>([]);
+	let cursorScreen = $state<{ x: number; y: number } | null>(null);
+	let loupeCanvas = $state<HTMLCanvasElement | null>(null);
 	let textSize = $state(18);
 	let textEditor = $state<TextEditor | null>(null);
 	let textDraft = $state('');
@@ -144,18 +146,21 @@
 	const visiblePages = $derived(
 		pdf ? (dual ? [page, Math.min(pdf.numPages, page + 1)] : [page]) : [page]
 	);
-	const filteredSymbols = $derived(
-		MUSIC_SYMBOLS.filter(
-			(s) =>
-				s.category === symbolCategory &&
-				(!symbolSearch.trim() || s.name.toLowerCase().includes(symbolSearch.toLowerCase()))
-		)
-	);
 	const recentSymbolObjects = $derived(
 		recentSymbols
 			.map((id) => MUSIC_SYMBOLS.find((s) => s.id === id))
 			.filter((s): s is (typeof MUSIC_SYMBOLS)[number] => !!s)
 	);
+	const filteredSymbols = $derived.by(() => {
+		const q = symbolSearch.trim().toLowerCase();
+		if (q) {
+			return MUSIC_SYMBOLS.filter((s) => s.name.toLowerCase().includes(q));
+		}
+		if (symbolCategory === 'Recent') {
+			return recentSymbolObjects.length ? recentSymbolObjects : MUSIC_SYMBOLS.slice(0, 24);
+		}
+		return MUSIC_SYMBOLS.filter((s) => s.category === symbolCategory);
+	});
 	const canUndo = $derived((historyIndex[page] ?? 0) > 0);
 	const canRedo = $derived((historyIndex[page] ?? 0) < (histories[page]?.length ?? 1) - 1);
 
@@ -218,8 +223,8 @@
 			} else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
 				event.preventDefault();
 				previous();
-			} else if (event.key === '+' || event.key === '=') setZoom(zoom + 0.1);
-			else if (event.key === '-') setZoom(zoom - 0.1);
+			} else if (event.key === '+' || event.key === '=') setZoom(zoom + 0.08);
+			else if (event.key === '-') setZoom(zoom - 0.08);
 			else if (event.key.toLowerCase() === 'f') {
 				event.preventDefault();
 				reading ? exitReading() : enterReading();
@@ -509,6 +514,10 @@
 			textEditor = null;
 			textDraft = '';
 		}
+		if (nextTool !== 'eraser' && nextTool !== 'symbol') cursorScreen = null;
+		if (nextTool === 'symbol' && symbolCategory !== 'Recent' && !symbolSearch.trim()) {
+			// keep current category
+		}
 	}
 
 	function hitAnnotation(number: number, point: Point, radius = 0.04): { kind: 'stamp' | 'note'; id: string } | null {
@@ -643,7 +652,102 @@
 		textDraft = '';
 	}
 
+	function updateCursorOverlay(event: PointerEvent, canvas?: HTMLCanvasElement | null) {
+		if (tool !== 'eraser' && tool !== 'symbol') {
+			cursorScreen = null;
+			return;
+		}
+		cursorScreen = { x: event.clientX, y: event.clientY };
+		if (tool === 'symbol' && canvas) {
+			requestAnimationFrame(() => paintLoupe(event, canvas));
+		}
+	}
+
+	function paintLoupe(event: PointerEvent, sourceCanvas: HTMLCanvasElement) {
+		const loupe = loupeCanvas;
+		if (!loupe || !cursorScreen) return;
+		const ctx = loupe.getContext('2d');
+		if (!ctx) return;
+		const size = 120;
+		if (loupe.width !== size) {
+			loupe.width = size;
+			loupe.height = size;
+		}
+		const rect = sourceCanvas.getBoundingClientRect();
+		const sx = ((event.clientX - rect.left) / rect.width) * sourceCanvas.width;
+		const sy = ((event.clientY - rect.top) / rect.height) * sourceCanvas.height;
+		const srcR = 28 * (sourceCanvas.width / Math.max(1, rect.width));
+		ctx.clearRect(0, 0, size, size);
+		ctx.save();
+		ctx.beginPath();
+		ctx.arc(size / 2, size / 2, size / 2 - 1, 0, Math.PI * 2);
+		ctx.clip();
+		// Prefer PDF underlay if available
+		const pdfUnder =
+			sourceCanvas === leftInk ? leftPdf : sourceCanvas === rightInk ? rightPdf : null;
+		const under = pdfUnder && pdfUnder.width ? pdfUnder : sourceCanvas;
+		try {
+			ctx.drawImage(
+				under,
+				sx - srcR,
+				sy - srcR,
+				srcR * 2,
+				srcR * 2,
+				0,
+				0,
+				size,
+				size
+			);
+		} catch {
+			/* cross-origin / empty */
+		}
+		// Overlay ink layer when under is PDF
+		if (under !== sourceCanvas && sourceCanvas.width) {
+			try {
+				ctx.drawImage(
+					sourceCanvas,
+					sx - srcR,
+					sy - srcR,
+					srcR * 2,
+					srcR * 2,
+					0,
+					0,
+					size,
+					size
+				);
+			} catch {}
+		}
+		// Placement crosshair + symbol preview
+		ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+		ctx.lineWidth = 1.25;
+		ctx.beginPath();
+		ctx.moveTo(size / 2 - 10, size / 2);
+		ctx.lineTo(size / 2 + 10, size / 2);
+		ctx.moveTo(size / 2, size / 2 - 10);
+		ctx.lineTo(size / 2, size / 2 + 10);
+		ctx.stroke();
+		ctx.font = `${Math.round(symbolSize * 1.35)}px Leland, serif`;
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillStyle = color;
+		ctx.globalAlpha = 0.92;
+		ctx.fillText(selectedSymbol.glyph, size / 2, size / 2);
+		ctx.restore();
+		// Outer ring
+		ctx.beginPath();
+		ctx.arc(size / 2, size / 2, size / 2 - 0.75, 0, Math.PI * 2);
+		ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+		ctx.lineWidth = 2;
+		ctx.stroke();
+	}
+
 	function move(event: PointerEvent) {
+		const targetCanvas =
+			draggingAnnot?.canvas ||
+			drawing?.canvas ||
+			(event.currentTarget instanceof HTMLCanvasElement ? event.currentTarget : null);
+		updateCursorOverlay(event, targetCanvas);
+
 		if (draggingAnnot) {
 			const point = position(event, draggingAnnot.canvas);
 			const x = Math.min(0.98, Math.max(0.02, point.x));
@@ -696,16 +800,39 @@
 		redraw(active.page, active.canvas);
 		checkpoint(active.page);
 	}
+
+	function onInkPointerLeave() {
+		if (!drawing && !draggingAnnot) cursorScreen = null;
+	}
+	function distPointToSegment(p: Point, a: Point, b: Point): number {
+		const dx = b.x - a.x;
+		const dy = b.y - a.y;
+		const len2 = dx * dx + dy * dy;
+		if (len2 < 1e-12) return Math.hypot(p.x - a.x, p.y - a.y);
+		let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+		t = Math.max(0, Math.min(1, t));
+		return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+	}
+
+	function strokeHitsEraser(stroke: Stroke, point: Point, radius: number): boolean {
+		const pts = stroke.points;
+		if (!pts.length) return false;
+		// Point hits (works for freehand samples and endpoints)
+		for (const candidate of pts) {
+			if (Math.hypot(candidate.x - point.x, candidate.y - point.y) < radius) return true;
+		}
+		// Segment hits — critical for line / arrow (often only 2 points)
+		for (let i = 1; i < pts.length; i++) {
+			if (distPointToSegment(point, pts[i - 1], pts[i]) < radius) return true;
+		}
+		return false;
+	}
+
 	function erase(point: Point, number: number, canvas: HTMLCanvasElement | null, save = true) {
-		const radius = Math.max(0.01, width / 700);
+		const radius = Math.max(0.012, width / 700);
 		let changed = false;
 		const before = strokes[number] || [];
-		const after = before.filter(
-			(stroke) =>
-				!stroke.points.some(
-					(candidate) => Math.hypot(candidate.x - point.x, candidate.y - point.y) < radius
-				)
-		);
+		const after = before.filter((stroke) => !strokeHitsEraser(stroke, point, radius));
 		if (after.length !== before.length) {
 			strokes[number] = after;
 			changed = true;
@@ -875,11 +1002,13 @@
 		);
 	}
 	function setZoom(value: number) {
-		zoom = Math.max(0.4, Math.min(2.5, Number(value.toFixed(2))));
+		const next = Math.max(0.35, Math.min(3, Number(value.toFixed(3))));
+		if (Math.abs(next - zoom) < 0.001) return;
+		zoom = next;
 		persistPrefs();
 		clearTimeout(zoomTimer);
-		// Debounce expensive re-render so continuous zoom (wheel / buttons) feels responsive
-		zoomTimer = setTimeout(() => void render({ quiet: hasPainted }), 90);
+		// Short debounce keeps wheel zoom fluid while avoiding per-frame PDF re-renders
+		zoomTimer = setTimeout(() => void render({ quiet: hasPainted }), 48);
 	}
 	function setFit(value: Fit) {
 		fit = value;
@@ -947,7 +1076,12 @@
 	function onWheel(event: WheelEvent) {
 		if (!(event.ctrlKey || event.metaKey)) return;
 		event.preventDefault();
-		setZoom(zoom + (event.deltaY > 0 ? -0.1 : 0.1));
+		// Pixel-mode deltas scale smoothly; fall back for line/page mode
+		const step =
+			event.deltaMode === 0
+				? Math.min(0.18, Math.max(0.02, Math.abs(event.deltaY) * 0.0018))
+				: 0.08;
+		setZoom(zoom + (event.deltaY > 0 ? -step : step));
 	}
 	async function searchPdf() {
 		if (!pdf || !searchText.trim()) return;
@@ -1030,9 +1164,9 @@
 			<div class="footer-section">
 				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Scan size={16} /></button>
 				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><StretchHorizontal size={17} /></button>
-				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.1)}><ZoomOut size={17} /></button>
+				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.08)}><ZoomOut size={17} /></button>
 				<span>{Math.round(zoom * 100)}%</span>
-				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.1)}><ZoomIn size={17} /></button>
+				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.08)}><ZoomIn size={17} /></button>
 			</div>
 			<div class="footer-section">
 				<button
@@ -1068,11 +1202,14 @@
 				<canvas
 					class="ink-canvas"
 					class:interactive={!reading}
+					class:eraser-mode={tool === 'eraser'}
+					class:symbol-mode={tool === 'symbol'}
 					bind:this={leftInk}
 					onpointerdown={(event) => begin(event, visiblePages[0], leftInk!)}
 					onpointermove={move}
 					onpointerup={end}
-					onpointercancel={end}></canvas>
+					onpointercancel={end}
+					onpointerleave={onInkPointerLeave}></canvas>
 			</div>
 			{#if dual && visiblePages.length > 1}
 				<div class="page-shell">
@@ -1080,11 +1217,14 @@
 					<canvas
 						class="ink-canvas"
 						class:interactive={!reading}
+						class:eraser-mode={tool === 'eraser'}
+						class:symbol-mode={tool === 'symbol'}
 						bind:this={rightInk}
 						onpointerdown={(event) => begin(event, visiblePages[1], rightInk!)}
 						onpointermove={move}
 						onpointerup={end}
-						onpointercancel={end}></canvas>
+						onpointercancel={end}
+						onpointerleave={onInkPointerLeave}></canvas>
 				</div>
 			{/if}
 		</div>
@@ -1138,13 +1278,13 @@
 	{#if !reading && controls}
 		<aside class="annotation-bar">
 			<div class="tool-group">
-				<button class:active={tool === 'pen'} class="tool-button" title="Pen (P)" onclick={() => choose('pen')}><PenTool size={18} /><span>Pen</span></button>
-				<button class:active={tool === 'highlighter'} class="tool-button" title="Highlighter (H)" onclick={() => choose('highlighter')}><Highlighter size={18} /><span>Highlight</span></button>
-				<button class:active={tool === 'line'} class="tool-button" title="Line" onclick={() => choose('line')}><Minus size={18} /><span>Line</span></button>
-				<button class:active={tool === 'arrow'} class="tool-button" title="Arrow" onclick={() => choose('arrow')}><ArrowUpRight size={18} /><span>Arrow</span></button>
-				<button class:active={tool === 'eraser'} class="tool-button" title="Eraser (E)" onclick={() => choose('eraser')}><Eraser size={18} /><span>Erase</span></button>
-				<button class:active={tool === 'symbol'} class="tool-button" title="Symbols (S)" onclick={() => choose('symbol')}><Music2 size={18} /><span>Symbols</span></button>
-				<button class:active={tool === 'text'} class="tool-button" title="Text (T)" onclick={() => choose('text')}><Type size={18} /><span>Text</span></button>
+				<button class:active={tool === 'pen'} class="tool-button" data-tool="pen" title="Pen (P)" onclick={() => choose('pen')}><PenTool size={18} /><span>Pen</span></button>
+				<button class:active={tool === 'highlighter'} class="tool-button" data-tool="highlighter" title="Highlighter (H)" onclick={() => choose('highlighter')}><Highlighter size={18} /><span>Highlight</span></button>
+				<button class:active={tool === 'line'} class="tool-button" data-tool="line" title="Line" onclick={() => choose('line')}><Minus size={18} /><span>Line</span></button>
+				<button class:active={tool === 'arrow'} class="tool-button" data-tool="arrow" title="Arrow" onclick={() => choose('arrow')}><ArrowUpRight size={18} /><span>Arrow</span></button>
+				<button class:active={tool === 'eraser'} class="tool-button" data-tool="eraser" title="Eraser (E)" onclick={() => choose('eraser')}><Eraser size={18} /><span>Erase</span></button>
+				<button class:active={tool === 'symbol'} class="tool-button" data-tool="symbol" title="Symbols (S)" onclick={() => choose('symbol')}><Music2 size={18} /><span>Symbols</span></button>
+				<button class:active={tool === 'text'} class="tool-button" data-tool="text" title="Text (T)" onclick={() => choose('text')}><Type size={18} /><span>Text</span></button>
 			</div>
 			<div class="divider"></div>
 			<div class="tool-group compact">
@@ -1201,40 +1341,10 @@
 			<header class="symbol-sheet-head">
 				<div class="symbol-sheet-title">
 					<strong>Symbols</strong>
-					<span>Tap to stamp · drag to move</span>
+					<span>Click page to place · drag to move</span>
 				</div>
 				<button type="button" class="icon-button" title="Close symbols" aria-label="Close symbols" onclick={() => choose('pen')}><X size={17} /></button>
 			</header>
-
-			{#if recentSymbolObjects.length}
-				<div class="symbol-recents" aria-label="Recent symbols">
-					{#each recentSymbolObjects as symbol}
-						<button
-							type="button"
-							class="symbol-chip"
-							class:selected={selectedSymbol.id === symbol.id}
-							title={symbol.name}
-							onclick={() => {
-								selectedSymbol = symbol;
-								placeSymbolOnPage();
-							}}
-						><span class="glyph">{symbol.glyph}</span></button>
-					{/each}
-				</div>
-			{/if}
-
-			<nav class="symbol-cats" aria-label="Symbol categories">
-				{#each MUSIC_SYMBOL_CATEGORIES as category}
-					<button
-						type="button"
-						class:active={symbolCategory === category}
-						onclick={() => {
-							symbolCategory = category;
-							symbolSearch = '';
-						}}
-					>{category}</button>
-				{/each}
-			</nav>
 
 			<div class="symbol-search-row">
 				<input bind:value={symbolSearch} placeholder="Search symbols…" aria-label="Search symbols" />
@@ -1243,6 +1353,27 @@
 					<input type="range" min="20" max="64" bind:value={symbolSize} />
 				</label>
 			</div>
+
+			<nav class="symbol-cats" aria-label="Symbol tags">
+				<button
+					type="button"
+					class:active={symbolCategory === 'Recent' && !symbolSearch.trim()}
+					onclick={() => {
+						symbolCategory = 'Recent';
+						symbolSearch = '';
+					}}
+				>Recent</button>
+				{#each MUSIC_SYMBOL_CATEGORIES as category}
+					<button
+						type="button"
+						class:active={symbolCategory === category && !symbolSearch.trim()}
+						onclick={() => {
+							symbolCategory = category;
+							symbolSearch = '';
+						}}
+					>{category}</button>
+				{/each}
+			</nav>
 
 			<div class="symbol-tray">
 				{#each filteredSymbols as symbol (symbol.id)}
@@ -1253,14 +1384,13 @@
 						title={symbol.name}
 						onclick={() => {
 							selectedSymbol = symbol;
-							placeSymbolOnPage();
 						}}
 					>
 						<span class="glyph">{symbol.glyph}</span>
 						<span class="name">{symbol.name}</span>
 					</button>
 				{:else}
-					<p class="symbol-empty">No symbols match “{symbolSearch}”</p>
+					<p class="symbol-empty">{symbolSearch.trim() ? `No symbols match “${symbolSearch}”` : 'No recent symbols yet — pick one below'}</p>
 				{/each}
 			</div>
 
@@ -1274,6 +1404,23 @@
 		</section>
 	{/if}
 
+
+	{#if cursorScreen && tool === 'eraser' && !reading}
+		<div
+			class="eraser-cursor"
+			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px;--eraser-size:${Math.max(14, width * 1.8)}px`}
+			aria-hidden="true"
+		></div>
+	{/if}
+	{#if cursorScreen && tool === 'symbol' && !reading}
+		<div
+			class="symbol-loupe"
+			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px`}
+			aria-hidden="true"
+		>
+			<canvas bind:this={loupeCanvas} width="120" height="120"></canvas>
+		</div>
+	{/if}
 
 	{#if settingsOpen && !reading}
 		<div class="settings-backdrop" role="presentation" onclick={() => { settingsOpen = false; persistPrefs(); }}></div>
@@ -1484,11 +1631,22 @@
 	.icon-button:hover,
 	.tool-button:hover,
 	.text-button:hover,
-	.icon-button.active,
-	.tool-button.active {
+	.icon-button.active {
 		background: rgba(255, 255, 255, 0.08);
 		color: #fff;
 	}
+	.tool-button.active {
+		color: #fff;
+		background: color-mix(in srgb, var(--tool-accent, #3b82f6) 28%, transparent);
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tool-accent, #3b82f6) 55%, transparent);
+	}
+	.tool-button[data-tool='pen'] { --tool-accent: #f59e0b; }
+	.tool-button[data-tool='highlighter'] { --tool-accent: #eab308; }
+	.tool-button[data-tool='line'] { --tool-accent: #38bdf8; }
+	.tool-button[data-tool='arrow'] { --tool-accent: #22d3ee; }
+	.tool-button[data-tool='eraser'] { --tool-accent: #f87171; }
+	.tool-button[data-tool='symbol'] { --tool-accent: #a78bfa; }
+	.tool-button[data-tool='text'] { --tool-accent: #4ade80; }
 	.icon-button:disabled {
 		opacity: 0.3;
 		cursor: not-allowed;
@@ -1602,6 +1760,47 @@
 	.ink-canvas.interactive {
 		pointer-events: auto;
 		cursor: crosshair;
+	}
+	.ink-canvas.interactive.eraser-mode {
+		cursor: none;
+	}
+	.ink-canvas.interactive.symbol-mode {
+		cursor: none;
+	}
+	.eraser-cursor {
+		position: fixed;
+		z-index: 80;
+		width: var(--eraser-size, 24px);
+		height: var(--eraser-size, 24px);
+		margin-left: calc(var(--eraser-size, 24px) / -2);
+		margin-top: calc(var(--eraser-size, 24px) / -2);
+		border-radius: 50%;
+		border: 1.5px solid rgba(248, 113, 113, 0.95);
+		background: rgba(248, 113, 113, 0.12);
+		box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), inset 0 0 8px rgba(248, 113, 113, 0.25);
+		pointer-events: none;
+		mix-blend-mode: normal;
+	}
+	.symbol-loupe {
+		position: fixed;
+		z-index: 80;
+		width: 120px;
+		height: 120px;
+		margin-left: -60px;
+		margin-top: -150px; /* sit above the cursor */
+		border-radius: 50%;
+		overflow: hidden;
+		pointer-events: none;
+		box-shadow:
+			0 0 0 2px rgba(167, 139, 250, 0.85),
+			0 12px 28px rgba(0, 0, 0, 0.55),
+			0 0 0 1px rgba(0, 0, 0, 0.4);
+		background: #0a0a09;
+	}
+	.symbol-loupe canvas {
+		display: block;
+		width: 120px;
+		height: 120px;
 	}
 	.page-hit {
 		position: absolute;
