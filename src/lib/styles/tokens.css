@@ -1,73 +1,171 @@
-/* Sonora design tokens — shared across library + viewer */
+/* Sonora design tokens — dark by default, light via [data-theme='light'] */
+
 :root {
-	/* Surfaces */
-	--sonora-bg: #11110f;
-	--sonora-bg-elevated: #1c1c19;
-	--sonora-bg-panel: rgba(25, 25, 22, 0.78);
-	--sonora-bg-panel-solid: rgba(25, 25, 22, 0.96);
-	--sonora-bg-deep: #0a0a09;
-	--sonora-bg-workspace: radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%);
+	/* Surfaces — deep ink with warm undertone */
+	--sonora-bg: #0c0c0e;
+	--sonora-bg-elevated: #16161a;
+	--sonora-bg-panel: rgba(22, 22, 28, 0.82);
+	--sonora-bg-panel-solid: rgba(18, 18, 24, 0.96);
+	--sonora-bg-deep: #060608;
+	--sonora-bg-hover: rgba(255, 255, 255, 0.06);
+	--sonora-bg-active: rgba(255, 255, 255, 0.1);
+	--sonora-bg-workspace: radial-gradient(
+		ellipse 120% 80% at 50% -10%,
+		#1a1528 0%,
+		#0e0e12 42%,
+		#0a0a0c 100%
+	);
+	--sonora-bg-header: color-mix(in srgb, var(--sonora-bg-elevated) 88%, transparent);
+	--sonora-bg-sidebar: color-mix(in srgb, var(--sonora-bg) 92%, #12101a);
 
 	/* Text */
-	--sonora-text: #f4f4f0;
-	--sonora-text-secondary: #c8c8c0;
-	--sonora-text-muted: #8a8a82;
-	--sonora-text-faint: #77776f;
+	--sonora-text: #f3f2f7;
+	--sonora-text-secondary: #c4c2ce;
+	--sonora-text-muted: #8b8998;
+	--sonora-text-faint: #6a6878;
+	--sonora-text-inverse: #0c0c0e;
 
 	/* Borders */
-	--sonora-border: rgba(255, 255, 255, 0.08);
+	--sonora-border: rgba(255, 255, 255, 0.07);
 	--sonora-border-strong: rgba(255, 255, 255, 0.14);
+	--sonora-border-focus: color-mix(in srgb, var(--sonora-accent) 55%, transparent);
 
-	/* Accents */
-	--sonora-accent: #2563eb;
-	--sonora-accent-soft: rgba(37, 99, 235, 0.2);
-	--sonora-danger: #f87171;
-	--sonora-success: #4ade80;
+	/* Accent — luminous indigo */
+	--sonora-accent: #7c6cff;
+	--sonora-accent-hover: #958aff;
+	--sonora-accent-soft: rgba(124, 108, 255, 0.18);
+	--sonora-accent-glow: 0 0 24px rgba(124, 108, 255, 0.35);
+	--sonora-accent-contrast: #ffffff;
+
+	/* Semantic */
+	--sonora-danger: #ff6b7a;
+	--sonora-danger-soft: rgba(255, 107, 122, 0.14);
+	--sonora-success: #3dd68c;
+	--sonora-success-soft: rgba(61, 214, 140, 0.14);
+	--sonora-warning: #f5b942;
+	--sonora-warning-soft: rgba(245, 185, 66, 0.14);
 
 	/* Tool accents (viewer) */
 	--sonora-tool-pen: #f59e0b;
 	--sonora-tool-highlighter: #eab308;
 	--sonora-tool-line: #38bdf8;
 	--sonora-tool-arrow: #22d3ee;
-	--sonora-tool-eraser: #f87171;
+	--sonora-tool-eraser: #ff6b7a;
 	--sonora-tool-symbol: #a78bfa;
-	--sonora-tool-text: #4ade80;
+	--sonora-tool-text: #3dd68c;
 
 	/* Geometry */
+	--sonora-radius-xs: 6px;
 	--sonora-radius-sm: 9px;
 	--sonora-radius-md: 12px;
-	--sonora-radius-lg: 14px;
-	--sonora-radius-xl: 18px;
+	--sonora-radius-lg: 16px;
+	--sonora-radius-xl: 20px;
+	--sonora-radius-2xl: 28px;
 	--sonora-radius-pill: 999px;
 
 	/* Controls */
 	--sonora-control-size: 36px;
-	--sonora-control-size-sm: 34px;
+	--sonora-control-size-sm: 32px;
+	--sonora-control-size-lg: 42px;
 	--sonora-touch-target: 40px;
 	--sonora-gap: 5px;
 	--sonora-gap-md: 8px;
 	--sonora-gap-lg: 12px;
+	--sonora-gap-xl: 20px;
 
 	/* Type */
-	--sonora-font: Inter, ui-sans-serif, system-ui, sans-serif;
+	--sonora-font: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
 	--sonora-font-music: Leland, serif;
 	--sonora-text-xs: 10px;
-	--sonora-text-sm: 11px;
+	--sonora-text-sm: 11.5px;
 	--sonora-text-md: 13px;
-	--sonora-text-lg: 14px;
+	--sonora-text-lg: 14.5px;
+	--sonora-text-xl: 18px;
+	--sonora-text-2xl: 24px;
+	--sonora-tracking-tight: -0.025em;
+	--sonora-tracking-wide: 0.04em;
 
 	/* Elevation */
-	--sonora-shadow-sm: 0 12px 30px rgba(0, 0, 0, 0.35);
-	--sonora-shadow-md: 0 18px 50px rgba(0, 0, 0, 0.42);
-	--sonora-shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
+	--sonora-shadow-xs: 0 2px 8px rgba(0, 0, 0, 0.25);
+	--sonora-shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.32);
+	--sonora-shadow-md: 0 16px 48px rgba(0, 0, 0, 0.42);
+	--sonora-shadow-lg: 0 28px 64px rgba(0, 0, 0, 0.55);
+	--sonora-shadow-glow: 0 0 0 1px var(--sonora-border-strong), var(--sonora-accent-glow);
 
 	/* Motion */
-	--sonora-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-	--sonora-duration: 160ms;
-	--sonora-duration-med: 220ms;
+	--sonora-ease: cubic-bezier(0.22, 1, 0.36, 1);
+	--sonora-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+	--sonora-ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+	--sonora-duration: 180ms;
+	--sonora-duration-med: 280ms;
+	--sonora-duration-slow: 420ms;
 
 	/* Blur */
-	--sonora-blur: blur(18px);
+	--sonora-blur: blur(20px);
+	--sonora-blur-sm: blur(10px);
+
+	/* Scrollbar */
+	--sonora-scrollbar-size: 8px;
+	--sonora-scrollbar-track: transparent;
+	--sonora-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+	--sonora-scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
+
+	/* Toast / notice */
+	--sonora-toast-bg: rgba(22, 22, 30, 0.94);
+
+	color-scheme: dark;
+}
+
+/* Light theme */
+[data-theme='light'] {
+	--sonora-bg: #f4f3f8;
+	--sonora-bg-elevated: #ffffff;
+	--sonora-bg-panel: rgba(255, 255, 255, 0.86);
+	--sonora-bg-panel-solid: rgba(255, 255, 255, 0.98);
+	--sonora-bg-deep: #e8e6f0;
+	--sonora-bg-hover: rgba(20, 16, 40, 0.05);
+	--sonora-bg-active: rgba(20, 16, 40, 0.09);
+	--sonora-bg-workspace: radial-gradient(
+		ellipse 120% 80% at 50% -10%,
+		#ebe8f8 0%,
+		#f4f3f8 48%,
+		#f0eef5 100%
+	);
+	--sonora-bg-header: rgba(255, 255, 255, 0.82);
+	--sonora-bg-sidebar: #f0eef6;
+
+	--sonora-text: #14121c;
+	--sonora-text-secondary: #3d3a4a;
+	--sonora-text-muted: #6b687c;
+	--sonora-text-faint: #8e8b9c;
+	--sonora-text-inverse: #f3f2f7;
+
+	--sonora-border: rgba(20, 18, 32, 0.08);
+	--sonora-border-strong: rgba(20, 18, 32, 0.14);
+
+	--sonora-accent: #5b4cf0;
+	--sonora-accent-hover: #4a3de0;
+	--sonora-accent-soft: rgba(91, 76, 240, 0.12);
+	--sonora-accent-glow: 0 0 20px rgba(91, 76, 240, 0.22);
+
+	--sonora-danger: #e03d52;
+	--sonora-danger-soft: rgba(224, 61, 82, 0.1);
+	--sonora-success: #1faa66;
+	--sonora-success-soft: rgba(31, 170, 102, 0.1);
+	--sonora-warning: #d4940a;
+	--sonora-warning-soft: rgba(212, 148, 10, 0.1);
+
+	--sonora-shadow-xs: 0 2px 8px rgba(20, 16, 40, 0.06);
+	--sonora-shadow-sm: 0 8px 24px rgba(20, 16, 40, 0.08);
+	--sonora-shadow-md: 0 16px 40px rgba(20, 16, 40, 0.12);
+	--sonora-shadow-lg: 0 24px 56px rgba(20, 16, 40, 0.16);
+
+	--sonora-scrollbar-thumb: rgba(20, 18, 32, 0.15);
+	--sonora-scrollbar-thumb-hover: rgba(20, 18, 32, 0.28);
+
+	--sonora-toast-bg: rgba(255, 255, 255, 0.96);
+
+	color-scheme: light;
 }
 
 @media (max-width: 900px) {
@@ -80,5 +178,6 @@
 	:root {
 		--sonora-duration: 0ms;
 		--sonora-duration-med: 0ms;
+		--sonora-duration-slow: 0ms;
 	}
 }
