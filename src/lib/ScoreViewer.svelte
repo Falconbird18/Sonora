@@ -61,10 +61,14 @@
 	let autoLayout = $state(true);
 	let keepAwake = $state(true);
 	let wakeLockActive = $state(false);
+	/** @deprecated layout zoom is applied via CSS transform using `zoom` */
 	let visualScale = $state(1);
 	let renderedZoom = 1;
 	let zoomRaf = 0;
 	let zoomPending: number | null = null;
+	let zoomFocusX = 0;
+	let zoomFocusY = 0;
+	let needsCenter = true;
 	let zoomTimer: ReturnType<typeof setTimeout> | undefined;
 	let pageTransition = $state(false);
 	let loading = $state(false);
@@ -240,6 +244,7 @@
 			zoom = typeof saved.zoom === 'number' ? saved.zoom : 1;
 			renderedZoom = zoom;
 			visualScale = 1;
+			needsCenter = true;
 			if (typeof saved.fit === 'string') fit = saved.fit === 'width' ? 'width' : 'page';
 			recentSymbols = Array.isArray(saved.recentSymbols) ? saved.recentSymbols : [];
 			if (typeof saved.page === 'number' && saved.page > 0) {
@@ -487,15 +492,18 @@
 			dual ? (host.clientWidth - 92) / 2 : host.clientWidth - 58
 		);
 		const availableHeight = Math.max(280, host.clientHeight - 72);
-		const desired =
-			(fit === 'width'
+		// Layout size is always the un-zoomed fit size; zoom is applied via CSS transform.
+		const fitScale =
+			fit === 'width'
 				? availableWidth / base.width
-				: Math.min(availableWidth / base.width, availableHeight / base.height)) * zoom;
+				: Math.min(availableWidth / base.width, availableHeight / base.height);
 		const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
 		const area = Math.max(1, base.width * base.height);
 		const safeScale = Math.sqrt(MAX_CANVAS_PIXELS / (area * dpr * dpr));
-		const scale = Math.max(0.18, Math.min(2.4, desired, safeScale));
-		return paintPage(pdfPage, number, index, scale, dpr, current);
+		// Bitmap resolution tracks the logical zoom so it stays sharp after settle.
+		const renderScale = Math.max(0.18, Math.min(2.4, fitScale * zoom, safeScale));
+		const layoutScale = Math.max(0.18, Math.min(2.4, fitScale));
+		return paintPage(pdfPage, number, index, layoutScale, renderScale, dpr, current);
 	}
 
 	type PageBitmap = {
@@ -512,15 +520,18 @@
 		pdfPage: PdfPageProxy,
 		number: number,
 		index: number,
-		scale: number,
+		layoutScale: number,
+		renderScale: number,
 		dpr: number,
 		current: number
 	): Promise<PageBitmap | null> {
-		const viewport = pdfPage.getViewport({ scale });
-		const widthPx = Math.ceil(viewport.width);
-		const heightPx = Math.ceil(viewport.height);
-		const canvasW = Math.ceil(widthPx * dpr);
-		const canvasH = Math.ceil(heightPx * dpr);
+		// CSS size stays at fit (layoutScale) so zoom is purely a CSS transform — no layout jump on settle.
+		const layoutViewport = pdfPage.getViewport({ scale: layoutScale });
+		const widthPx = Math.ceil(layoutViewport.width);
+		const heightPx = Math.ceil(layoutViewport.height);
+		const renderViewport = pdfPage.getViewport({ scale: renderScale });
+		const canvasW = Math.ceil(renderViewport.width * dpr);
+		const canvasH = Math.ceil(renderViewport.height * dpr);
 		if (canvasW * canvasH > MAX_CANVAS_PIXELS) throw new Error('Canvas exceeds safe pixel budget');
 
 		// Fully rasterize offscreen — never touch the live canvas until every page is ready.
@@ -531,11 +542,11 @@
 		if (!context) throw new Error('2D context unavailable');
 		context.setTransform(dpr, 0, 0, dpr, 0, 0);
 		context.fillStyle = '#fff';
-		context.fillRect(0, 0, widthPx, heightPx);
+		context.fillRect(0, 0, renderViewport.width, renderViewport.height);
 		const task = pdfPage.render({
 			canvas: offscreen,
 			canvasContext: context,
-			viewport
+			viewport: renderViewport
 		});
 		tasks.push(task);
 		await task.promise;
@@ -544,8 +555,8 @@
 	}
 
 	function commitPageBitmaps(bitmaps: PageBitmap[]) {
-		// Single synchronous turn: swap every page + drop CSS scale together so the
-		// browser never paints a blank canvas or a double-scaled frame.
+		// Single synchronous turn: swap every page. Layout CSS size is zoom-independent,
+		// so this never shifts the view — only sharpness updates.
 		for (const bmp of bitmaps) {
 			const pdfCanvas = bmp.index === 0 ? leftPdf : rightPdf;
 			const inkCanvas = bmp.index === 0 ? leftInk : rightInk;
@@ -568,7 +579,25 @@
 		}
 		renderedZoom = zoom;
 		visualScale = 1;
+		if (needsCenter) {
+			centerPages();
+			needsCenter = false;
+		}
 		schedulePrefetch();
+	}
+
+	/** Center the score in the workspace (used on open / fit / page jumps). */
+	function centerPages() {
+		if (!host) return;
+		const leftW = leftPdf ? Number.parseFloat(leftPdf.style.width) || leftPdf.clientWidth : 0;
+		const leftH = leftPdf ? Number.parseFloat(leftPdf.style.height) || leftPdf.clientHeight : 0;
+		const rightW =
+			dual && rightPdf ? Number.parseFloat(rightPdf.style.width) || rightPdf.clientWidth : 0;
+		const gap = dual && rightW ? 20 : 0;
+		const contentW = leftW + gap + rightW;
+		const contentH = leftH;
+		panX = (host.clientWidth - contentW * zoom) / 2;
+		panY = Math.max(12, (host.clientHeight - contentH * zoom) / 2);
 	}
 
 	function schedulePrefetch() {
@@ -1092,11 +1121,27 @@
 			JSON.stringify({ bookmarked, zoom, fit, recentSymbols, page })
 		);
 	}
-	function setZoom(value: number, opts: { immediate?: boolean } = {}) {
+	function setZoom(
+		value: number,
+		opts: { immediate?: boolean; focusX?: number; focusY?: number } = {}
+	) {
 		const next = Math.max(0.35, Math.min(3, Number(value.toFixed(3))));
-		if (Math.abs(next - zoom) < 0.0005 && !opts.immediate) return;
+		const prev = zoom;
+		if (Math.abs(next - prev) < 0.0005 && !opts.immediate) return;
+
+		// Keep the focal point fixed in the workspace (cursor for wheel, center otherwise).
+		// transform: translate(pan) scale(zoom) with origin 0 0
+		//   workspace = pan + local * zoom  ⇒  local = (workspace - pan) / zoom
+		const fx = opts.focusX ?? (host ? host.clientWidth / 2 : 0);
+		const fy = opts.focusY ?? (host ? host.clientHeight / 2 : 0);
+		if (prev > 0.0001) {
+			const localX = (fx - panX) / prev;
+			const localY = (fy - panY) / prev;
+			panX = fx - localX * next;
+			panY = fy - localY * next;
+		}
 		zoom = next;
-		visualScale = next / Math.max(0.001, renderedZoom);
+		visualScale = 1; // zoom is applied directly via CSS transform
 		persistPrefs();
 		clearTimeout(zoomTimer);
 		const delay = opts.immediate ? 0 : 180;
@@ -1104,26 +1149,16 @@
 	}
 	async function commitZoomRender() {
 		if (closed) return;
-		const target = zoom;
-		// Hold the CSS scale until render finishes swapping bitmaps; render() then
-		// sets visualScale = 1 in the same turn as the final canvas drawImage.
+		// Re-rasterize at the new zoom for sharpness. Layout CSS size is unchanged,
+		// so the view position does not jump.
 		await render({ quiet: hasPainted });
-		if (closed) return;
-		// Ensure we end aligned even if zoom moved again during the await
-		if (Math.abs(zoom - target) < 0.0005) {
-			renderedZoom = target;
-			visualScale = 1;
-		} else {
-			// User kept zooming — keep smooth CSS scale relative to what we just painted
-			renderedZoom = target;
-			visualScale = zoom / Math.max(0.001, renderedZoom);
-		}
 	}
 	function setFit(value: Fit) {
 		fit = value;
 		zoom = 1;
 		visualScale = 1;
 		renderedZoom = 1;
+		needsCenter = true;
 		resetPan();
 		persistPrefs();
 		void render({ quiet: hasPainted });
@@ -1203,6 +1238,7 @@
 		stopPanMomentum();
 		panX = 0;
 		panY = 0;
+		needsCenter = true;
 	}
 
 	function startPanMomentum() {
@@ -1279,11 +1315,16 @@
 				event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * 40 : event.deltaY;
 			const factor = Math.exp(-pixelDelta * 0.0016);
 			zoomPending = Math.max(0.35, Math.min(3, zoom * factor));
+			if (host) {
+				const rect = host.getBoundingClientRect();
+				zoomFocusX = event.clientX - rect.left;
+				zoomFocusY = event.clientY - rect.top;
+			}
 			if (!zoomRaf) {
 				zoomRaf = requestAnimationFrame(() => {
 					zoomRaf = 0;
 					if (zoomPending != null) {
-						setZoom(zoomPending);
+						setZoom(zoomPending, { focusX: zoomFocusX, focusY: zoomFocusY });
 						zoomPending = null;
 					}
 				});
@@ -1422,7 +1463,7 @@
 			class="pages"
 			class:dual
 			class:transitioning={pageTransition}
-			style={`transform: translate3d(${panX}px, ${panY}px, 0) scale(${visualScale}); transform-origin: center center`}
+			style={`transform: translate3d(${panX}px, ${panY}px, 0) scale(${zoom}); transform-origin: 0 0`}
 		>
 			<div class="page-shell">
 				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
@@ -1476,8 +1517,11 @@
 	{#if textEditor}
 		<div
 			class="text-editor-floating"
+			role="dialog"
+			aria-labelledby="text-editor-title"
 			style={`left:${textEditor.screenX ?? 24}px;top:${textEditor.screenY ?? 120}px`}
 			onpointerdown={(e) => e.stopPropagation()}
+			tabindex="-1"
 		>
 			<span class="text-editor-label">Note</span>
 			<input
@@ -1830,15 +1874,17 @@
 	.workspace::-webkit-scrollbar { display: none; }
 
 	.pages {
+		position: absolute;
+		left: 0;
+		top: 0;
 		display: flex;
 		align-items: flex-start;
 		justify-content: center;
 		gap: 20px;
 		min-width: max-content;
-		margin: auto;
 		will-change: transform;
-		transform: translate3d(0, 0, 0);
-		/* no transition while dragging — applied only when we want settle */
+		backface-visibility: hidden;
+		transform-origin: 0 0;
 	}
 	.pages.dual {
 		gap: 0;
@@ -2415,150 +2461,6 @@
 		font-size: 9px;
 		white-space: nowrap;
 	}
-	.settings-backdrop {
-		position: absolute;
-		inset: 0;
-		z-index: 54;
-		background: rgba(0, 0, 0, 0.35);
-		backdrop-filter: blur(2px);
-		animation: settings-in 160ms cubic-bezier(.2,.8,.2,1);
-	}
-	.settings-card {
-		position: absolute;
-		z-index: 55;
-		top: 56px;
-		right: 12px;
-		width: min(320px, calc(100vw - 24px));
-		max-height: calc(100% - 80px);
-		overflow: auto;
-		display: flex;
-		flex-direction: column;
-		gap: 0;
-		padding: 0;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 16px;
-		background: #1c1c19;
-		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
-		font-size: 12px;
-		animation: settings-in 180ms cubic-bezier(.2,.8,.2,1);
-	}
-	.settings-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 14px 14px 10px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-	}
-	.settings-header strong {
-		font-size: 13px;
-		font-weight: 600;
-		letter-spacing: 0.01em;
-	}
-	.settings-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px;
-		padding: 0 4px 8px;
-	}
-	.settings-actions .text-button {
-		background: rgba(255, 255, 255, 0.06);
-	}
-	.settings-section {
-		padding: 12px 14px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-	}
-	.settings-section h3 {
-		margin: 0 0 10px;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: #8a8a82;
-	}
-	.settings-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		margin-bottom: 10px;
-		color: #d4d4cc;
-	}
-	.settings-row:last-child {
-		margin-bottom: 0;
-	}
-	.settings-row.disabled {
-		opacity: 0.45;
-		pointer-events: none;
-	}
-	.settings-row .label-title {
-		display: block;
-		font-size: 12px;
-		font-weight: 500;
-		color: #f0f0ea;
-	}
-	.settings-row .label-desc {
-		display: block;
-		margin-top: 2px;
-		font-size: 10px;
-		line-height: 1.35;
-		color: #8a8a82;
-	}
-	.settings-row input[type='checkbox'] {
-		width: 18px;
-		height: 18px;
-		accent-color: #c2410c;
-		flex-shrink: 0;
-	}
-	.settings-row input[type='range'] {
-		flex: 1;
-		min-width: 0;
-		accent-color: #c2410c;
-	}
-	.settings-row .range-value {
-		min-width: 34px;
-		text-align: right;
-		font-variant-numeric: tabular-nums;
-		color: #aaa9a0;
-		font-size: 11px;
-	}
-	.shortcut-list {
-		margin: 0;
-		padding: 0;
-		list-style: none;
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		color: #aaa9a0;
-		font-size: 11px;
-	}
-	.shortcut-list kbd {
-		display: inline-block;
-		min-width: 1.4em;
-		padding: 1px 5px;
-		border-radius: 4px;
-		border: 1px solid rgba(255, 255, 255, 0.12);
-		background: rgba(255, 255, 255, 0.06);
-		font-size: 10px;
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		color: #e8e8e0;
-		text-align: center;
-	}
-	.settings-footer {
-		padding: 12px 14px 14px;
-		display: flex;
-		justify-content: flex-end;
-	}
-	.settings-footer .text-button.primary {
-		background: #c2410c;
-		color: #fff;
-		border: none;
-		padding: 8px 16px;
-		border-radius: 8px;
-		font-weight: 600;
-	}
-	.settings-footer .text-button.primary:hover {
-		background: #d97706;
-	}
 	.reading-exit {
 		position: absolute;
 		z-index: 70;
@@ -2648,7 +2550,6 @@
 		.annotation-toggle,
 		.symbol-sheet,
 		.search-panel,
-		.settings-card,
 		.loading,
 		.error,
 		.page-hit,

@@ -17,7 +17,7 @@
 		onClose
 	}: Props = $props();
 
-	let editingTags = $state<string[]>([...tags]);
+	let editingTags = $derived<string[]>([...tags]);
 	let tagDraft = $state('');
 
 	const filteredSuggestions = $derived(
