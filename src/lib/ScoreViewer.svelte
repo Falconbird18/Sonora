@@ -454,11 +454,16 @@
 			} else if (host.clientWidth < 720) {
 				dual = false;
 			}
+			const bitmaps: PageBitmap[] = [];
 			for (let index = 0; index < visiblePages.length; index++) {
-				await renderPage(visiblePages[index], index, current);
+				const bmp = await renderPage(visiblePages[index], index, current);
 				if (current !== generation) return;
+				if (bmp) bitmaps.push(bmp);
 			}
-			if (current === generation) { hasPainted = true; renderedZoom = zoom; visualScale = 1; }
+			if (current === generation && bitmaps.length) {
+				hasPainted = true;
+				commitPageBitmaps(bitmaps);
+			}
 		} catch (reason) {
 			if (
 				!(reason instanceof Error && reason.name === 'RenderingCancelledException') &&
@@ -472,10 +477,10 @@
 		}
 	}
 
-	async function renderPage(number: number, index: number, current: number) {
-		if (!pdf || !host) return;
+		async function renderPage(number: number, index: number, current: number): Promise<PageBitmap | null> {
+		if (!pdf || !host) return null;
 		const pdfPage = await pdf.getPage(number);
-		if (current !== generation) return;
+		if (current !== generation) return null;
 		const base = pdfPage.getViewport({ scale: 1 });
 		const availableWidth = Math.max(
 			280,
@@ -490,8 +495,18 @@
 		const area = Math.max(1, base.width * base.height);
 		const safeScale = Math.sqrt(MAX_CANVAS_PIXELS / (area * dpr * dpr));
 		const scale = Math.max(0.18, Math.min(2.4, desired, safeScale));
-		await paintPage(pdfPage, number, index, scale, dpr, current);
+		return paintPage(pdfPage, number, index, scale, dpr, current);
 	}
+
+	type PageBitmap = {
+		index: number;
+		number: number;
+		widthPx: number;
+		heightPx: number;
+		canvasW: number;
+		canvasH: number;
+		offscreen: HTMLCanvasElement;
+	};
 
 	async function paintPage(
 		pdfPage: PdfPageProxy,
@@ -500,34 +515,60 @@
 		scale: number,
 		dpr: number,
 		current: number
-	) {
+	): Promise<PageBitmap | null> {
 		const viewport = pdfPage.getViewport({ scale });
 		const widthPx = Math.ceil(viewport.width);
 		const heightPx = Math.ceil(viewport.height);
 		const canvasW = Math.ceil(widthPx * dpr);
 		const canvasH = Math.ceil(heightPx * dpr);
 		if (canvasW * canvasH > MAX_CANVAS_PIXELS) throw new Error('Canvas exceeds safe pixel budget');
-		const pdfCanvas = index === 0 ? leftPdf : rightPdf;
-		const inkCanvas = index === 0 ? leftInk : rightInk;
-		if (!pdfCanvas || !inkCanvas) return;
-		for (const canvas of [pdfCanvas, inkCanvas]) {
-			canvas.width = canvasW;
-			canvas.height = canvasH;
-			canvas.style.width = `${widthPx}px`;
-			canvas.style.height = `${heightPx}px`;
-		}
-		const context = pdfCanvas.getContext('2d', { alpha: false });
+
+		// Fully rasterize offscreen — never touch the live canvas until every page is ready.
+		const offscreen = document.createElement('canvas');
+		offscreen.width = canvasW;
+		offscreen.height = canvasH;
+		const context = offscreen.getContext('2d', { alpha: false });
 		if (!context) throw new Error('2D context unavailable');
 		context.setTransform(dpr, 0, 0, dpr, 0, 0);
 		context.fillStyle = '#fff';
 		context.fillRect(0, 0, widthPx, heightPx);
-		const task = pdfPage.render({ canvas: pdfCanvas, canvasContext: context, viewport });
+		const task = pdfPage.render({
+			canvas: offscreen,
+			canvasContext: context,
+			viewport
+		});
 		tasks.push(task);
 		await task.promise;
-		if (current === generation) {
-			redraw(number, inkCanvas);
-			schedulePrefetch();
+		if (current !== generation || closed) return null;
+		return { index, number, widthPx, heightPx, canvasW, canvasH, offscreen };
+	}
+
+	function commitPageBitmaps(bitmaps: PageBitmap[]) {
+		// Single synchronous turn: swap every page + drop CSS scale together so the
+		// browser never paints a blank canvas or a double-scaled frame.
+		for (const bmp of bitmaps) {
+			const pdfCanvas = bmp.index === 0 ? leftPdf : rightPdf;
+			const inkCanvas = bmp.index === 0 ? leftInk : rightInk;
+			if (!pdfCanvas || !inkCanvas) continue;
+
+			pdfCanvas.width = bmp.canvasW;
+			pdfCanvas.height = bmp.canvasH;
+			pdfCanvas.style.width = `${bmp.widthPx}px`;
+			pdfCanvas.style.height = `${bmp.heightPx}px`;
+			const displayCtx = pdfCanvas.getContext('2d', { alpha: false });
+			if (!displayCtx) continue;
+			displayCtx.setTransform(1, 0, 0, 1, 0, 0);
+			displayCtx.drawImage(bmp.offscreen, 0, 0);
+
+			inkCanvas.width = bmp.canvasW;
+			inkCanvas.height = bmp.canvasH;
+			inkCanvas.style.width = `${bmp.widthPx}px`;
+			inkCanvas.style.height = `${bmp.heightPx}px`;
+			redraw(bmp.number, inkCanvas);
 		}
+		renderedZoom = zoom;
+		visualScale = 1;
+		schedulePrefetch();
 	}
 
 	function schedulePrefetch() {
@@ -1058,16 +1099,25 @@
 		visualScale = next / Math.max(0.001, renderedZoom);
 		persistPrefs();
 		clearTimeout(zoomTimer);
-		const delay = opts.immediate ? 0 : 140;
+		const delay = opts.immediate ? 0 : 180;
 		zoomTimer = setTimeout(() => void commitZoomRender(), delay);
 	}
 	async function commitZoomRender() {
 		if (closed) return;
 		const target = zoom;
+		// Hold the CSS scale until render finishes swapping bitmaps; render() then
+		// sets visualScale = 1 in the same turn as the final canvas drawImage.
 		await render({ quiet: hasPainted });
 		if (closed) return;
-		renderedZoom = target;
-		visualScale = zoom / Math.max(0.001, renderedZoom);
+		// Ensure we end aligned even if zoom moved again during the await
+		if (Math.abs(zoom - target) < 0.0005) {
+			renderedZoom = target;
+			visualScale = 1;
+		} else {
+			// User kept zooming — keep smooth CSS scale relative to what we just painted
+			renderedZoom = target;
+			visualScale = zoom / Math.max(0.001, renderedZoom);
+		}
 	}
 	function setFit(value: Fit) {
 		fit = value;
