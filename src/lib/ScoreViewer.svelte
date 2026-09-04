@@ -1166,7 +1166,8 @@
 	function next() {
 		if (!pdf) return;
 		pageTransition = true;
-		resetPan();
+		stopPanMomentum();
+		needsCenter = true;
 		page = Math.min(pdf.numPages, dual ? Math.min(pdf.numPages, page + 2) : page + 1);
 		pageInput = String(page);
 		ensureHistory(page);
@@ -1176,8 +1177,10 @@
 		});
 	}
 	function previous() {
+		if (!pdf) return;
 		pageTransition = true;
-		resetPan();
+		stopPanMomentum();
+		needsCenter = true;
 		page = Math.max(1, dual ? page - 2 : page - 1);
 		pageInput = String(page);
 		ensureHistory(page);
@@ -1188,7 +1191,11 @@
 	}
 	function goToPage() {
 		const value = Math.max(1, Math.min(pdf?.numPages || 1, Number.parseInt(pageInput, 10) || 1));
-		page = dual && value % 2 === 0 ? value - 1 : value;
+		const nextPage = dual && value % 2 === 0 ? value - 1 : value;
+		if (nextPage === page) return;
+		stopPanMomentum();
+		needsCenter = true;
+		page = nextPage;
 		pageInput = String(page);
 		ensureHistory(page);
 		persistPrefs();
@@ -1510,8 +1517,8 @@
 		{/if}
 	</main>
 
-	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor }></button>
-	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor }></button>
+	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor || annotating}></button>
+	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor || annotating}></button>
 
 
 	{#if textEditor}
@@ -1890,8 +1897,8 @@
 		gap: 0;
 	}
 	.pages.transitioning .page-shell {
-		opacity: 0.55;
-		transition: opacity 120ms ease;
+		opacity: 0.72;
+		transition: opacity 90ms ease;
 	}
 	.pages.dual .page-shell { box-shadow: 0 18px 55px rgba(0,0,0,.42); }
 	/* Realistic inner-page gutter gradients (book-like) */
@@ -2091,6 +2098,11 @@
     	border-radius: 14px;
     	background: rgba(25, 25, 22, 0.78);
     	backdrop-filter: blur(18px);
+		/* Let strokes / stamps start under the bar; only chrome captures clicks */
+		pointer-events: none;
+	}
+	.annotation-bar > * {
+		pointer-events: auto;
 	}
 	.tool-button {
 		min-width: 48px;
@@ -2231,6 +2243,11 @@
 		background: rgba(16, 16, 14, 0.98);
 		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
 		backdrop-filter: blur(20px);
+		/* Allow placing symbols on the score under the sheet chrome */
+		pointer-events: none;
+	}
+	.symbol-sheet > * {
+		pointer-events: auto;
 	}
 	.symbol-sheet-head {
 		display: flex;
