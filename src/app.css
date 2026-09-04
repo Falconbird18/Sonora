@@ -1,17 +1,39 @@
-html, body, #app { -webkit-tap-highlight-color: transparent; }
+@import './lib/styles/tokens.css';
 
-button, input, select { font: inherit; }
-button { touch-action: manipulation; }
-
-@media (pointer: coarse) {
-	button { min-height: 40px; }
-	input, select { min-height: 40px; }
+html,
+body,
+#app {
+	-webkit-tap-highlight-color: transparent;
+	background: var(--sonora-bg);
+	color: var(--sonora-text);
+	font-family: var(--sonora-font);
 }
 
-@media (max-width: 900px) {
-	:root { --sonora-touch-target: 44px; }
+button,
+input,
+select {
+	font: inherit;
+}
+button {
+	touch-action: manipulation;
+}
+
+@media (pointer: coarse) {
+	button {
+		min-height: var(--sonora-touch-target);
+	}
+	input,
+	select {
+		min-height: var(--sonora-touch-target);
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
-	*, *::before, *::after { scroll-behavior: auto !important; }
+	*,
+	*::before,
+	*::after {
+		scroll-behavior: auto !important;
+		animation-duration: 0.01ms !important;
+		transition-duration: 0.01ms !important;
+	}
 }

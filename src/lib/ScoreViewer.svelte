@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { loadAnnotations, saveAnnotation, flushAnnotationSaves, requestPersistentStorage } from './annotationStore';
@@ -44,7 +43,7 @@
 	} from '@lucide/svelte';
 	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
 
-	type Tool = 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';
+	type Tool = 'pan' | 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';
 	type Fit = 'page' | 'width';
 	type Snapshot = { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] };
 	type TextEditor = { page: number; x: number; y: number; text: string; id?: string; screenX?: number; screenY?: number };
@@ -72,7 +71,8 @@
 	let settingsOpen = $state(false);
 	let bookmarked = $state(false);
 	let annotationsVisible = $state(true);
-	let tool = $state<Tool>('pen');
+	let tool = $state<Tool>('pan');
+	let annotating = $derived(controls && tool !== 'pan' && !reading);
 	let color = $state('#111827');
 	let width = $state(3);
 	let selectedSymbol = $state(MUSIC_SYMBOLS[0]);
@@ -82,6 +82,20 @@
 	let recentSymbols = $state<string[]>([]);
 	let cursorScreen = $state<{ x: number; y: number } | null>(null);
 	let loupeCanvas = $state<HTMLCanvasElement | null>(null);
+	/** View pan offset in CSS pixels (transform-based for smooth dragging). */
+	let panX = $state(0);
+	let panY = $state(0);
+	type PanDrag = {
+		pointerId: number;
+		lastX: number;
+		lastY: number;
+		lastT: number;
+	};
+
+	let panDrag = $state<PanDrag | null>(null);
+	let panVx = 0;
+	let panVy = 0;
+	let panMomentumRaf = 0;
 	let textSize = $state(18);
 	let textEditor = $state<TextEditor | null>(null);
 	let textDraft = $state('');
@@ -229,11 +243,11 @@
 			else if (event.key.toLowerCase() === 'f') {
 				event.preventDefault();
 				reading ? exitReading() : enterReading();
-			} else if (event.key.toLowerCase() === 'p') choose('pen');
-			else if (event.key.toLowerCase() === 'h') choose('highlighter');
-			else if (event.key.toLowerCase() === 'e') choose('eraser');
-			else if (event.key.toLowerCase() === 's') choose('symbol');
-			else if (event.key.toLowerCase() === 't') choose('text');
+			} else if (event.key.toLowerCase() === 'p') { controls = true; choose('pen'); }
+			else if (event.key.toLowerCase() === 'h') { controls = true; choose('highlighter'); }
+			else if (event.key.toLowerCase() === 'e') { controls = true; choose('eraser'); }
+			else if (event.key.toLowerCase() === 's') { controls = true; choose('symbol'); }
+			else if (event.key.toLowerCase() === 't') { controls = true; choose('text'); }
 			else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
 				event.preventDefault();
 				undo();
@@ -246,7 +260,7 @@
 					searchOpen = false;
 					controls = false;
 					if (reading) exitReading();
-					choose('pen');
+					choose('pan');
 				} else {
 					void leave();
 				}
@@ -275,6 +289,7 @@
 			clearTimeout(resizeTimer);
 			clearTimeout(prefetchTimer);
 			clearTimeout(zoomTimer);
+			stopPanMomentum();
 			cancelRender();
 			void releaseWakeLock();
 			// Flush annotations before marking closed / tearing down canvases.
@@ -556,7 +571,7 @@
 	}
 
 	function begin(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {
-		if (reading) return;
+		if (reading || !annotating) return;
 		if (textEditor) {
 			commitText();
 			return;
@@ -719,7 +734,7 @@
 			} catch {}
 		}
 		// Placement crosshair + symbol preview
-		ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+		ctx.strokeStyle = 'rgba(255,255,255,1)';
 		ctx.lineWidth = 1.25;
 		ctx.beginPath();
 		ctx.moveTo(size / 2 - 10, size / 2);
@@ -737,7 +752,7 @@
 		// Outer ring
 		ctx.beginPath();
 		ctx.arc(size / 2, size / 2, size / 2 - 0.75, 0, Math.PI * 2);
-		ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+		ctx.strokeStyle = 'rgba(255,255,255,1)';
 		ctx.lineWidth = 2;
 		ctx.stroke();
 	}
@@ -1014,12 +1029,14 @@
 	function setFit(value: Fit) {
 		fit = value;
 		zoom = 1;
+		resetPan();
 		persistPrefs();
 		void render({ quiet: hasPainted });
 	}
 	function next() {
 		if (!pdf) return;
 		pageTransition = true;
+		resetPan();
 		page = Math.min(pdf.numPages, dual ? Math.min(pdf.numPages, page + 2) : page + 1);
 		pageInput = String(page);
 		ensureHistory(page);
@@ -1030,6 +1047,7 @@
 	}
 	function previous() {
 		pageTransition = true;
+		resetPan();
 		page = Math.max(1, dual ? page - 2 : page - 1);
 		pageInput = String(page);
 		ensureHistory(page);
@@ -1061,6 +1079,8 @@
 		if (!controls) {
 			settingsOpen = false;
 			colorPickerOpen = false;
+			choose('pan');
+		} else if (tool === 'pan') {
 			choose('pen');
 		}
 	}
@@ -1069,20 +1089,109 @@
 		controls = false;
 		settingsOpen = false;
 		searchOpen = false;
-		choose('pen');
+		choose('pan');
 	}
 	function exitReading() {
 		reading = false;
 	}
+
+	function stopPanMomentum() {
+		if (panMomentumRaf) {
+			cancelAnimationFrame(panMomentumRaf);
+			panMomentumRaf = 0;
+		}
+		panVx = 0;
+		panVy = 0;
+	}
+
+	function resetPan() {
+		stopPanMomentum();
+		panX = 0;
+		panY = 0;
+	}
+
+	function startPanMomentum() {
+		stopPanMomentum();
+		const friction = 0.94;
+		const minV = 0.12;
+		const tick = () => {
+			panVx *= friction;
+			panVy *= friction;
+			if (Math.hypot(panVx, panVy) < minV) {
+				panMomentumRaf = 0;
+				panVx = 0;
+				panVy = 0;
+				return;
+			}
+			panX += panVx;
+			panY += panVy;
+			panMomentumRaf = requestAnimationFrame(tick);
+		};
+		panMomentumRaf = requestAnimationFrame(tick);
+	}
+
+	function onWorkspacePointerDown(event: PointerEvent) {
+		if (annotating || reading || textEditor) return;
+		if (event.button !== 0 && event.pointerType === 'mouse') return;
+		stopPanMomentum();
+		panDrag = {
+			pointerId: event.pointerId,
+			lastX: event.clientX,
+			lastY: event.clientY,
+			lastT: performance.now()
+		};
+		panVx = 0;
+		panVy = 0;
+		try {
+			(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+		} catch {}
+	}
+
+	function onWorkspacePointerMove(event: PointerEvent) {
+		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
+		const now = performance.now();
+		const dt = Math.max(8, now - panDrag.lastT);
+		const dx = event.clientX - panDrag.lastX;
+		const dy = event.clientY - panDrag.lastY;
+		panX += dx;
+		panY += dy;
+		// velocity in px per frame (~16ms)
+		const scale = 16 / dt;
+		panVx = dx * scale;
+		panVy = dy * scale;
+		panDrag.lastX = event.clientX;
+		panDrag.lastY = event.clientY;
+		panDrag.lastT = now;
+	}
+
+	function onWorkspacePointerUp(event: PointerEvent) {
+		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
+		panDrag = null;
+		try {
+			(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+		} catch {}
+		if (Math.hypot(panVx, panVy) > 0.8) startPanMomentum();
+		else {
+			panVx = 0;
+			panVy = 0;
+		}
+	}
+
 	function onWheel(event: WheelEvent) {
-		if (!(event.ctrlKey || event.metaKey)) return;
 		event.preventDefault();
-		// Pixel-mode deltas scale smoothly; fall back for line/page mode
-		const step =
-			event.deltaMode === 0
-				? Math.min(0.18, Math.max(0.02, Math.abs(event.deltaY) * 0.0018))
-				: 0.08;
-		setZoom(zoom + (event.deltaY > 0 ? -step : step));
+		if (event.ctrlKey || event.metaKey) {
+			const step =
+				event.deltaMode === 0
+					? Math.min(0.18, Math.max(0.02, Math.abs(event.deltaY) * 0.0018))
+					: 0.08;
+			setZoom(zoom + (event.deltaY > 0 ? -step : step));
+			return;
+		}
+		// Trackpad / mouse wheel pans the view (buttery, no layout thrash)
+		stopPanMomentum();
+		const factor = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 40 : 1;
+		panX -= event.deltaX * factor;
+		panY -= event.deltaY * factor;
 	}
 	async function searchPdf() {
 		if (!pdf || !searchText.trim()) return;
@@ -1196,13 +1305,28 @@
 			<button class="icon-button" aria-label="Close search" onclick={() => (searchOpen = false)}><X size={17} /></button>
 		</div>{/if}
 
-	<main class="workspace" class:fit-page={fit === 'page'} onwheel={onWheel}>
-		<div class="pages" class:dual class:transitioning={pageTransition}>
+	<main
+		class="workspace"
+		class:fit-page={fit === 'page'}
+		class:is-panning={!!panDrag}
+		class:is-annotating={annotating}
+		onwheel={onWheel}
+		onpointerdown={onWorkspacePointerDown}
+		onpointermove={onWorkspacePointerMove}
+		onpointerup={onWorkspacePointerUp}
+		onpointercancel={onWorkspacePointerUp}
+	>
+		<div
+			class="pages"
+			class:dual
+			class:transitioning={pageTransition}
+			style={`transform: translate3d(${panX}px, ${panY}px, 0)`}
+		>
 			<div class="page-shell">
 				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
 				<canvas
 					class="ink-canvas"
-					class:interactive={!reading}
+					class:interactive={annotating}
 					class:eraser-mode={tool === 'eraser'}
 					class:symbol-mode={tool === 'symbol'}
 					bind:this={leftInk}
@@ -1217,7 +1341,7 @@
 					<canvas class="pdf-canvas" bind:this={rightPdf}></canvas>
 					<canvas
 						class="ink-canvas"
-						class:interactive={!reading}
+						class:interactive={annotating}
 						class:eraser-mode={tool === 'eraser'}
 						class:symbol-mode={tool === 'symbol'}
 						bind:this={rightInk}
@@ -1246,7 +1370,7 @@
 	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor }></button>
 	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor }></button>
 
-	
+
 	{#if textEditor}
 		<div
 			class="text-editor-floating"
@@ -1338,13 +1462,13 @@
 	{/if}
 
 	{#if !reading && controls && tool === 'symbol'}
-		<section class="symbol-sheet" role="dialog" aria-label="Musical symbols">
+		<div class="symbol-sheet" role="dialog" aria-label="Musical symbols">
 			<header class="symbol-sheet-head">
 				<div class="symbol-sheet-title">
 					<strong>Symbols</strong>
 					<span>Click page to place · drag to move</span>
 				</div>
-				<button type="button" class="icon-button" title="Close symbols" aria-label="Close symbols" onclick={() => choose('pen')}><X size={17} /></button>
+				<button type="button" class="icon-button" title="Close symbols" aria-label="Close symbols" onclick={() => choose('pan')}><X size={17} /></button>
 			</header>
 
 			<div class="symbol-search-row">
@@ -1394,15 +1518,7 @@
 					<p class="symbol-empty">{symbolSearch.trim() ? `No symbols match “${symbolSearch}”` : 'No recent symbols yet — pick one below'}</p>
 				{/each}
 			</div>
-
-			<footer class="symbol-sheet-foot">
-				<span class="symbol-selected-preview" title={selectedSymbol.name}>
-					<span class="glyph">{selectedSymbol.glyph}</span>
-					{selectedSymbol.name}
-				</span>
-				<button type="button" class="symbol-stamp-btn" onclick={placeSymbolOnPage}>Stamp on page</button>
-			</footer>
-		</section>
+		</div>
 	{/if}
 
 
@@ -1537,9 +1653,9 @@
 		height: 100%;
 		min-height: 0;
 		overflow: hidden;
-		background: #11110f;
-		color: #f4f4f0;
-		font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+		background: var(--sonora-bg, #11110f);
+		color: var(--sonora-text, #f4f4f0);
+		font-family: var(--sonora-font, Inter, ui-sans-serif, system-ui, sans-serif);
 	}
 	.topbar {
 		position: relative;
@@ -1676,21 +1792,26 @@
 	.workspace {
 		position: absolute;
 		inset: 56px 0 8px;
-		overflow: auto;
+		overflow: hidden; /* pan via transform — avoids janky overflow scroll */
 		scrollbar-width: none;
 		-ms-overflow-style: none;
 		display: flex;
 		justify-content: center;
 		align-items: flex-start;
 		padding: 28px;
-		background: radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%);
-		scroll-behavior: smooth;
-		overscroll-behavior: contain;
-		-webkit-overflow-scrolling: touch;
+		background: var(--sonora-bg-workspace, radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%));
+		overscroll-behavior: none;
+		touch-action: none;
+		cursor: grab;
+		user-select: none;
+	}
+	.workspace.is-panning {
+		cursor: grabbing;
+	}
+	.workspace.is-annotating {
+		cursor: default;
 	}
 	.workspace.fit-page {
-		/* Fit-to-page: lock scrolling so the page stays fully framed */
-		overflow: hidden;
 		align-items: center;
 	}
 	.workspace::-webkit-scrollbar { display: none; }
@@ -1702,6 +1823,9 @@
 		gap: 20px;
 		min-width: max-content;
 		margin: auto;
+		will-change: transform;
+		transform: translate3d(0, 0, 0);
+		/* no transition while dragging — applied only when we want settle */
 	}
 	.pages.dual {
 		gap: 0;
@@ -1836,7 +1960,6 @@
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 8px;
 		padding: 14px 18px;
 		font-size: 12px;
 		color: #b8b8b0;
@@ -2004,6 +2127,7 @@
 	.more-swatch {
 		display: grid;
 		place-items: center;
+		align-items: center;
 		background: rgba(255, 255, 255, 0.08);
 		border: 1px dashed rgba(255, 255, 255, 0.28);
 	}
@@ -2016,6 +2140,7 @@
 		line-height: 1;
 		color: #c8c8c0;
 		font-weight: 600;
+		transform: translate(0px,-1px);
 	}
 	.color-popup {
 		position: absolute;
@@ -2035,9 +2160,8 @@
 	.symbol-sheet {
 		position: absolute;
 		z-index: 46;
-		left: 50%;
-		bottom: 64px;
-		transform: translateX(-50%);
+		right: 8px;
+		bottom: 80px;
 		width: min(440px, calc(100% - 12px));
 		max-height: min(48vh, 420px);
 		display: flex;
@@ -2070,34 +2194,6 @@
 		font-size: 11px;
 		color: #7a7a72;
 	}
-	.symbol-recents {
-		display: flex;
-		gap: 6px;
-		padding: 0 12px 8px;
-		overflow-x: auto;
-		scrollbar-width: none;
-	}
-	.symbol-recents::-webkit-scrollbar { display: none; }
-	.symbol-chip {
-		flex-shrink: 0;
-		width: 44px;
-		height: 44px;
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 12px;
-		background: rgba(255, 255, 255, 0.04);
-		color: #f4f4f0;
-		cursor: pointer;
-		display: grid;
-		place-items: center;
-	}
-	.symbol-chip .glyph {
-		font: 24px/1 Leland, serif;
-	}
-	.symbol-chip.selected,
-	.symbol-chip:hover {
-		border-color: rgba(147, 197, 253, 0.5);
-		background: rgba(37, 99, 235, 0.2);
-	}
 	.symbol-cats {
 		display: flex;
 		gap: 4px;
@@ -2119,7 +2215,7 @@
 		cursor: pointer;
 	}
 	.symbol-cats button.active {
-		background: #f4f4f0;
+		background: var(--sonora-accent);
 		color: #11110f;
 	}
 	.symbol-search-row {
@@ -2128,7 +2224,6 @@
 		gap: 8px;
 		padding: 0 12px 8px;
 	}
-	.symbol-search-row input[type='text'],
 	.symbol-search-row input:not([type]),
 	.symbol-search-row > input {
 		flex: 1;
@@ -2205,41 +2300,6 @@
 		text-align: center;
 		color: #7a7a72;
 		font-size: 13px;
-	}
-	.symbol-sheet-foot {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 10px;
-		padding: 10px 12px 12px;
-		border-top: 1px solid rgba(255, 255, 255, 0.07);
-	}
-	.symbol-selected-preview {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		min-width: 0;
-		color: #c8c8c0;
-		font-size: 12px;
-	}
-	.symbol-selected-preview .glyph {
-		font: 22px/1 Leland, serif;
-		color: #fff;
-	}
-	.symbol-stamp-btn {
-		flex-shrink: 0;
-		height: 36px;
-		padding: 0 14px;
-		border: 0;
-		border-radius: 10px;
-		background: #2563eb;
-		color: #fff;
-		font-size: 13px;
-		font-weight: 600;
-		cursor: pointer;
-	}
-	.symbol-stamp-btn:hover {
-		background: #3b82f6;
 	}
 	@media (max-width: 900px) {
 		.symbol-sheet {
@@ -2486,12 +2546,6 @@
 	.settings-footer .text-button.primary:hover {
 		background: #d97706;
 	}
-	.hint {
-		margin: 0;
-		color: #77776f;
-		font-size: 10px;
-		line-height: 1.45;
-	}
 	.reading-exit {
 		position: absolute;
 		z-index: 70;
@@ -2567,17 +2621,11 @@
 		.symbol-sheet {
 			max-height: 64vh;
 		}
-		.palette-header input {
-			width: 120px;
-		}
 		.bottombar {
 			padding: 7px;
 		}
 		.footer-section .text-button {
 			display: none;
-		}
-		.text-editor input {
-			width: 145px;
 		}
 	}
 	@media print {
@@ -2614,6 +2662,3 @@
 		}
 	}
 </style>
-=======
-PLACEHOLDER_WILL_FIX
->>>>>>> a270ca231cbd53bcf366dd6097da1214177ddac7
