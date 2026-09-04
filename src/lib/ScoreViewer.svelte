@@ -95,7 +95,6 @@
 	let symbolSize = $state(34);
 	let recentSymbols = $state<string[]>([]);
 	let cursorScreen = $state<{ x: number; y: number } | null>(null);
-	let loupeCanvas = $state<HTMLCanvasElement | null>(null);
 	/** View pan offset in CSS pixels (transform-based for smooth dragging). */
 	let panX = $state(0);
 	let panY = $state(0);
@@ -787,88 +786,8 @@
 			cursorScreen = null;
 			return;
 		}
+		// Ghost / eraser ring tracks the pointer; placement is still click-to-stamp.
 		cursorScreen = { x: event.clientX, y: event.clientY };
-		if (tool === 'symbol' && canvas) {
-			requestAnimationFrame(() => paintLoupe(event, canvas));
-		}
-	}
-
-	function paintLoupe(event: PointerEvent, sourceCanvas: HTMLCanvasElement) {
-		const loupe = loupeCanvas;
-		if (!loupe || !cursorScreen) return;
-		const ctx = loupe.getContext('2d');
-		if (!ctx) return;
-		const size = 120;
-		if (loupe.width !== size) {
-			loupe.width = size;
-			loupe.height = size;
-		}
-		const rect = sourceCanvas.getBoundingClientRect();
-		const sx = ((event.clientX - rect.left) / rect.width) * sourceCanvas.width;
-		const sy = ((event.clientY - rect.top) / rect.height) * sourceCanvas.height;
-		const srcR = 28 * (sourceCanvas.width / Math.max(1, rect.width));
-		ctx.clearRect(0, 0, size, size);
-		ctx.save();
-		ctx.beginPath();
-		ctx.arc(size / 2, size / 2, size / 2 - 1, 0, Math.PI * 2);
-		ctx.clip();
-		// Prefer PDF underlay if available
-		const pdfUnder =
-			sourceCanvas === leftInk ? leftPdf : sourceCanvas === rightInk ? rightPdf : null;
-		const under = pdfUnder && pdfUnder.width ? pdfUnder : sourceCanvas;
-		try {
-			ctx.drawImage(
-				under,
-				sx - srcR,
-				sy - srcR,
-				srcR * 2,
-				srcR * 2,
-				0,
-				0,
-				size,
-				size
-			);
-		} catch {
-			/* cross-origin / empty */
-		}
-		// Overlay ink layer when under is PDF
-		if (under !== sourceCanvas && sourceCanvas.width) {
-			try {
-				ctx.drawImage(
-					sourceCanvas,
-					sx - srcR,
-					sy - srcR,
-					srcR * 2,
-					srcR * 2,
-					0,
-					0,
-					size,
-					size
-				);
-			} catch {}
-		}
-		// Placement crosshair + symbol preview
-		ctx.strokeStyle = 'rgba(255,255,255,1)';
-		ctx.lineWidth = 1.25;
-		ctx.beginPath();
-		ctx.moveTo(size / 2 - 10, size / 2);
-		ctx.lineTo(size / 2 + 10, size / 2);
-		ctx.moveTo(size / 2, size / 2 - 10);
-		ctx.lineTo(size / 2, size / 2 + 10);
-		ctx.stroke();
-		ctx.font = `${Math.round(symbolSize * 1.35)}px Leland, serif`;
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'middle';
-		ctx.fillStyle = color;
-		ctx.globalAlpha = 0.92;
-		ctx.fillText(selectedSymbol.glyph, size / 2, size / 2);
-		ctx.restore();
-		// Outer ring
-		ctx.beginPath();
-		ctx.arc(size / 2, size / 2, size / 2 - 0.75, 0, Math.PI * 2);
-		ctx.strokeStyle = 'rgba(255,255,255,1)';
-		ctx.lineWidth = 2;
-		ctx.stroke();
 	}
 
 	function move(event: PointerEvent) {
@@ -1713,11 +1632,12 @@
 	{/if}
 	{#if cursorScreen && tool === 'symbol' && !reading}
 		<div
-			class="symbol-loupe"
-			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px`}
+			class="symbol-ghost"
+			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px;--ghost-size:${symbolSize}px;--ghost-color:${color}`}
 			aria-hidden="true"
 		>
-			<canvas bind:this={loupeCanvas} width="120" height="120"></canvas>
+			<span class="symbol-ghost-ring"></span>
+			<span class="symbol-ghost-glyph">{selectedSymbol.glyph}</span>
 		</div>
 	{/if}
 
@@ -2001,26 +1921,45 @@
 		pointer-events: none;
 		mix-blend-mode: normal;
 	}
-	.symbol-loupe {
+	/* WYSIWYG symbol ghost — true size at cursor, click to stamp */
+	.symbol-ghost {
 		position: fixed;
 		z-index: 80;
-		width: 120px;
-		height: 120px;
-		margin-left: -60px;
-		margin-top: -150px; /* sit above the cursor */
-		border-radius: 50%;
-		overflow: hidden;
+		left: 0;
+		top: 0;
+		width: 0;
+		height: 0;
 		pointer-events: none;
-		box-shadow:
-			0 0 0 2px rgba(167, 139, 250, 0.85),
-			0 12px 28px rgba(0, 0, 0, 0.55),
-			0 0 0 1px rgba(0, 0, 0, 0.4);
-		background: #0a0a09;
+		transform: translate(0, 0);
 	}
-	.symbol-loupe canvas {
-		display: block;
-		width: 120px;
-		height: 120px;
+	.symbol-ghost-ring {
+		position: absolute;
+		left: 0;
+		top: 0;
+		width: 28px;
+		height: 28px;
+		margin-left: -14px;
+		margin-top: -14px;
+		border-radius: 50%;
+		border: 1.5px solid rgba(167, 139, 250, 0.75);
+		background: rgba(124, 58, 237, 0.08);
+		box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+	}
+	.symbol-ghost-glyph {
+		position: absolute;
+		left: 0;
+		top: 0;
+		transform: translate(-50%, -50%);
+		font-family: Leland, serif;
+		font-size: var(--ghost-size, 34px);
+		line-height: 1;
+		color: var(--ghost-color, #111827);
+		opacity: 0.55;
+		/* Soft outline so the ghost reads on dark/light score paper */
+		text-shadow:
+			0 0 2px rgba(255, 255, 255, 0.85),
+			0 1px 2px rgba(0, 0, 0, 0.2);
+		user-select: none;
 	}
 	.page-hit {
 		position: absolute;
@@ -2293,16 +2232,16 @@
 		cursor: pointer;
 	}
 
-	/* Collapsed symbol chip (after place) */
+	/* Collapsed symbol chip — sits under the tool rail */
 	.symbol-chip {
 		position: absolute;
-		left: calc(100% + 10px);
-		bottom: 0;
+		left: 0;
+		top: calc(100% + 8px);
 		display: flex;
 		align-items: center;
 		gap: 10px;
-		min-width: 180px;
-		max-width: min(260px, 48vw);
+		min-width: 168px;
+		max-width: min(240px, 52vw);
 		padding: 8px 12px 8px 10px;
 		border-radius: 14px;
 		border: 1px solid rgba(255, 255, 255, 0.1);
@@ -2693,9 +2632,10 @@
 			height: 4px;
 		}
 		.symbol-chip {
-			position: static;
-			left: auto;
-			bottom: auto;
+			position: absolute;
+			left: 0;
+			top: auto;
+			bottom: calc(100% + 8px); /* sit just above the bottom rail */
 		}
 		.symbol-drawer {
 			left: 8px;
