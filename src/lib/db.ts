@@ -31,6 +31,11 @@ export class MusicDatabase extends Dexie {
 			scores: 'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt',
 			annotations: 'id, scoreId, pageNum',
 			folders: 'id, name, addedAt, lastSyncedAt'
+    });
+    this.version(6).stores({
+  scores: 'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt, year, ensemble',
+  annotations: 'id, scoreId, pageNum',
+  folders: 'id, name, addedAt, lastSyncedAt'
 		});
 	}
 }

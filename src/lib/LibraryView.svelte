@@ -62,13 +62,15 @@
 		syncing = true;
 		error = '';
 		try {
-			const results = await syncAllFolders();
+			const results = await syncAllFolders(true);
 			const result = results[0];
 			notice = result
-				? result.added || result.updated || result.removed
-					? `${result.added + result.updated} updated · ${result.removed} removed`
-					: 'Library is up to date'
-				: 'Choose a score folder to begin';
+  ? 'skipped' in result && result.skipped
+    ? 'Library is up to date'
+    : result.added || result.updated || result.removed
+      ? `${result.added + result.updated} updated · ${result.removed} removed`
+      : 'Library is up to date'
+  : 'Choose a score folder to begin';
 			await refresh();
 			void backfillThumbnails();
 		} catch (e) {

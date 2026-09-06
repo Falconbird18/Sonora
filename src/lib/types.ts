@@ -1,25 +1,26 @@
 export interface ScoreItem {
-	id: string;
-	title: string;
-	composer: string;
-	/** PDF bytes (browser mode / rare fallback). Prefer pdfUrl on desktop. */
-	pdfBlob?: Blob;
-	/** Asset-protocol or blob URL for zero-copy open on desktop. */
-	pdfUrl?: string;
-	thumbnailUrl?: string;
-	thumbnailVersion?: number;
-	totalPages: number;
-	addedAt: number;
-	lastOpenedAt?: number;
-	favorite?: boolean;
-	tags?: string[];
-	collection?: string;
-	sourceFolderId?: string;
-	sourcePath?: string;
-	/** Absolute native path when available (desktop). */
-	nativePath?: string;
-	fileSize?: number;
-	fileModifiedAt?: number;
+  id: string;
+  title: string;
+  composer: string;
+  year?: number | null;          // year composed
+  ensemble?: string;             // e.g. "String Quartet", "Orchestra"
+  instruments?: string;          // free text or comma-separated
+  // ... existing fields unchanged ...
+  pdfBlob?: Blob;
+  pdfUrl?: string;
+  thumbnailUrl?: string;
+  thumbnailVersion?: number;
+  totalPages: number;
+  addedAt: number;
+  lastOpenedAt?: number;
+  favorite?: boolean;
+  tags?: string[];
+  collection?: string;
+  sourceFolderId?: string;
+  sourcePath?: string;
+  nativePath?: string;
+  fileSize?: number;
+  fileModifiedAt?: number;
 }
 
 export interface FolderSource {
