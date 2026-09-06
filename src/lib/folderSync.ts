@@ -97,9 +97,55 @@ function composerFromPath(path: string) {
 	return parts.length > 1 ? parts[parts.length - 2] : 'Unknown Composer';
 }
 
+/** Strip to structured-cloneable fields only (no Svelte proxies / extra junk). */
+function plainScore(input: ScoreItem): ScoreItem {
+	const out: ScoreItem = {
+		id: String(input.id),
+		title: String(input.title ?? ''),
+		composer: String(input.composer ?? 'Unknown Composer'),
+		totalPages: Number(input.totalPages) || 1,
+		addedAt: Number(input.addedAt) || Date.now()
+	};
+	if (input.year != null && !Number.isNaN(Number(input.year))) out.year = Number(input.year);
+	else out.year = null;
+	if (input.ensemble) out.ensemble = String(input.ensemble);
+	if (input.instruments) out.instruments = String(input.instruments);
+	if (input.pdfUrl) out.pdfUrl = String(input.pdfUrl);
+	if (input.thumbnailUrl) out.thumbnailUrl = String(input.thumbnailUrl);
+	if (input.thumbnailVersion != null) out.thumbnailVersion = Number(input.thumbnailVersion);
+	if (input.lastOpenedAt != null) out.lastOpenedAt = Number(input.lastOpenedAt);
+	out.favorite = !!input.favorite;
+	out.tags = Array.isArray(input.tags) ? input.tags.map(String) : [];
+	if (input.collection) out.collection = String(input.collection);
+	if (input.sourceFolderId) out.sourceFolderId = String(input.sourceFolderId);
+	if (input.sourcePath) out.sourcePath = String(input.sourcePath);
+	if (input.nativePath) out.nativePath = String(input.nativePath);
+	if (input.fileSize != null) out.fileSize = Number(input.fileSize);
+	if (input.fileModifiedAt != null) out.fileModifiedAt = Number(input.fileModifiedAt);
+	// Only persist real Blob/File instances — never proxies or odd objects
+	if (typeof Blob !== 'undefined' && input.pdfBlob instanceof Blob && input.pdfBlob.size > 0) {
+		out.pdfBlob = input.pdfBlob;
+	}
+	return out;
+}
+
+function plainFolder(folder: FolderSource): FolderSource {
+	const out: FolderSource = {
+		id: String(folder.id),
+		name: String(folder.name ?? 'Score Library'),
+		addedAt: Number(folder.addedAt) || Date.now(),
+		autoSync: folder.autoSync !== false
+	};
+	if (folder.nativePath) out.nativePath = String(folder.nativePath);
+	if (folder.lastSyncedAt != null) out.lastSyncedAt = Number(folder.lastSyncedAt);
+	// FileSystemDirectoryHandle is structured-cloneable in Chromium when permission is granted
+	if (folder.handle) out.handle = folder.handle;
+	return out;
+}
+
 /** Copy user-edited metadata from an old row onto a newly detected path. */
 function adoptMetadata(target: ScoreItem, source: ScoreItem): ScoreItem {
-	return {
+	return plainScore({
 		...target,
 		title: source.title,
 		composer: source.composer,
@@ -114,7 +160,7 @@ function adoptMetadata(target: ScoreItem, source: ScoreItem): ScoreItem {
 		totalPages: source.totalPages || target.totalPages,
 		addedAt: source.addedAt,
 		collection: source.collection
-	};
+	});
 }
 
 async function removeOldRoots() {
@@ -163,7 +209,7 @@ export async function chooseAndAddFolder() {
 		};
 	}
 	await removeOldRoots();
-	await db.folders.put(folder);
+	await db.folders.put(plainFolder(folder));
 	await syncFolder(folder);
 	return folder;
 }
@@ -198,24 +244,22 @@ async function syncNativeFolder(folder: FolderSource) {
 			!old || old.fileSize !== file.size || old.fileModifiedAt !== file.modified_at || !old.nativePath;
 		if (!changed && old) continue;
 
-		let next: ScoreItem = {
-			...(old || {}),
+		let next = plainScore({
 			id,
 			title: file.name.replace(/\.pdf$/i, ''),
 			composer:
 				old?.composer && old.composer !== 'Unknown Composer'
 					? old.composer
 					: composerFromPath(file.relative_path),
-			pdfBlob: undefined,
-			pdfUrl: undefined,
 			nativePath: file.path,
 			thumbnailUrl: old?.thumbnailUrl,
+			thumbnailVersion: old?.thumbnailVersion,
 			totalPages: old?.totalPages || 1,
 			addedAt: old?.addedAt || Date.now(),
 			lastOpenedAt: old?.lastOpenedAt || 0,
 			favorite: old?.favorite || false,
 			tags: old?.tags || [],
-			year: old?.year,
+			year: old?.year ?? null,
 			ensemble: old?.ensemble,
 			instruments: old?.instruments,
 			collection: old?.collection || 'Library',
@@ -223,9 +267,8 @@ async function syncNativeFolder(folder: FolderSource) {
 			sourcePath: file.relative_path,
 			fileSize: file.size,
 			fileModifiedAt: file.modified_at
-		};
+		});
 
-		// New path: try to match a removed score by size + mtime (folder/file rename).
 		if (!old) {
 			const match = removed.find(
 				(r) =>
@@ -253,7 +296,7 @@ async function syncNativeFolder(folder: FolderSource) {
 	}
 
 	await db.transaction('rw', db.scores, db.annotations, db.folders, async () => {
-		for (const next of toWrite) await db.scores.put(next);
+		for (const next of toWrite) await db.scores.put(plainScore(next));
 
 		for (const move of annotationMoves) {
 			await db.annotations.where('scoreId').equals(move.from).modify({ scoreId: move.to });
@@ -269,7 +312,9 @@ async function syncNativeFolder(folder: FolderSource) {
 			}
 		}
 
-		await db.folders.put({ ...folder, lastSyncedAt: Date.now(), autoSync: true });
+		await db.folders.put(
+			plainFolder({ ...folder, lastSyncedAt: Date.now(), autoSync: true })
+		);
 	});
 
 	const trulyRemoved = allowRemovals
@@ -293,7 +338,12 @@ async function syncBrowserFolder(folder: FolderSource) {
 
 	const changed = files.filter(({ file, path }) => {
 		const old = existingById.get(stableId(path));
-		return !old || old.fileSize !== file.size || old.fileModifiedAt !== file.lastModified || !old.thumbnailUrl;
+		return (
+			!old ||
+			old.fileSize !== file.size ||
+			old.fileModifiedAt !== file.lastModified ||
+			!old.thumbnailUrl
+		);
 	});
 
 	const results = await mapConcurrent(changed, METADATA_CONCURRENCY, async ({ file, path }) => {
@@ -306,22 +356,26 @@ async function syncBrowserFolder(folder: FolderSource) {
 			console.warn('PDF metadata failed', path, error);
 		}
 
-		let next: ScoreItem = {
-			...(old || {}),
+		// Prefer a plain Blob over the live File handle for IDB storage
+		const blob =
+			file instanceof Blob ? file.slice(0, file.size, file.type || 'application/pdf') : undefined;
+
+		let next = plainScore({
 			id,
 			title: file.name.replace(/\.pdf$/i, ''),
 			composer:
 				old?.composer && old.composer !== 'Unknown Composer'
 					? old.composer
 					: composerFromPath(path),
-			pdfBlob: file,
+			pdfBlob: blob,
 			thumbnailUrl: info?.thumbnailUrl || old?.thumbnailUrl,
+			thumbnailVersion: old?.thumbnailVersion,
 			totalPages: info?.totalPages || old?.totalPages || 1,
 			addedAt: old?.addedAt || Date.now(),
 			lastOpenedAt: old?.lastOpenedAt || 0,
 			favorite: old?.favorite || false,
 			tags: old?.tags || [],
-			year: old?.year,
+			year: old?.year ?? null,
 			ensemble: old?.ensemble,
 			instruments: old?.instruments,
 			collection: old?.collection || 'Library',
@@ -329,7 +383,7 @@ async function syncBrowserFolder(folder: FolderSource) {
 			sourcePath: path,
 			fileSize: file.size,
 			fileModifiedAt: file.lastModified
-		};
+		});
 
 		let matchedFrom: string | undefined;
 		if (!old) {
@@ -342,6 +396,8 @@ async function syncBrowserFolder(folder: FolderSource) {
 			if (match) {
 				claimedRemovals.add(match.id);
 				next = adoptMetadata(next, match);
+				// Keep the fresh blob after metadata adopt
+				if (blob) next.pdfBlob = blob;
 				matchedFrom = match.id;
 			}
 		}
@@ -351,7 +407,7 @@ async function syncBrowserFolder(folder: FolderSource) {
 
 	await db.transaction('rw', db.scores, db.annotations, db.folders, async () => {
 		for (const { next, matchedFrom } of results) {
-			await db.scores.put(next);
+			await db.scores.put(plainScore(next));
 			if (matchedFrom) {
 				await db.annotations.where('scoreId').equals(matchedFrom).modify({ scoreId: next.id });
 				await db.scores.delete(matchedFrom);
@@ -367,7 +423,9 @@ async function syncBrowserFolder(folder: FolderSource) {
 			}
 		}
 
-		await db.folders.put({ ...folder, lastSyncedAt: Date.now(), autoSync: true });
+		await db.folders.put(
+			plainFolder({ ...folder, lastSyncedAt: Date.now(), autoSync: true })
+		);
 	});
 
 	return {
@@ -396,7 +454,12 @@ export async function syncAllFolders(force = false) {
 			needsPathBackfill = true;
 		}
 	}
-	if (!force && !needsPathBackfill && folder.lastSyncedAt && Date.now() - folder.lastSyncedAt < SYNC_INTERVAL_MS) {
+	if (
+		!force &&
+		!needsPathBackfill &&
+		folder.lastSyncedAt &&
+		Date.now() - folder.lastSyncedAt < SYNC_INTERVAL_MS
+	) {
 		return [{ added: 0, updated: 0, removed: 0, skipped: true as const }];
 	}
 	return [await syncFolder(folder)];
