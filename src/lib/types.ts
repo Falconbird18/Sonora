@@ -1,26 +1,31 @@
 export interface ScoreItem {
-  id: string;
-  title: string;
-  composer: string;
-  year?: number | null;          // year composed
-  ensemble?: string;             // e.g. "String Quartet", "Orchestra"
-  instruments?: string;          // free text or comma-separated
-  // ... existing fields unchanged ...
-  pdfBlob?: Blob;
-  pdfUrl?: string;
-  thumbnailUrl?: string;
-  thumbnailVersion?: number;
-  totalPages: number;
-  addedAt: number;
-  lastOpenedAt?: number;
-  favorite?: boolean;
-  tags?: string[];
-  collection?: string;
-  sourceFolderId?: string;
-  sourcePath?: string;
-  nativePath?: string;
-  fileSize?: number;
-  fileModifiedAt?: number;
+	id: string;
+	title: string;
+	composer: string;
+	/** Year composed (optional). */
+	year?: number | null;
+	/** e.g. "String Quartet", "Orchestra", "Solo". */
+	ensemble?: string;
+	/** Free text or comma-separated instrument list. */
+	instruments?: string;
+	/** PDF bytes (browser mode / rare fallback). Prefer pdfUrl on desktop. */
+	pdfBlob?: Blob;
+	/** Asset-protocol or blob URL for zero-copy open on desktop. */
+	pdfUrl?: string;
+	thumbnailUrl?: string;
+	thumbnailVersion?: number;
+	totalPages: number;
+	addedAt: number;
+	lastOpenedAt?: number;
+	favorite?: boolean;
+	tags?: string[];
+	collection?: string;
+	sourceFolderId?: string;
+	sourcePath?: string;
+	/** Absolute native path when available (desktop). */
+	nativePath?: string;
+	fileSize?: number;
+	fileModifiedAt?: number;
 }
 
 export interface FolderSource {
@@ -76,4 +81,12 @@ export interface AnnotationRecord {
 	notes: TextNote[];
 }
 
-// viewer restoration workflow trigger
+/** Payload returned by the metadata edit dialog. */
+export interface ScoreMetadataUpdate {
+	title: string;
+	composer: string;
+	year?: number | null;
+	ensemble?: string;
+	instruments?: string;
+	tags: string[];
+}
