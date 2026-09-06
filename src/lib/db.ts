@@ -18,24 +18,28 @@ export class MusicDatabase extends Dexie {
 			folders: 'id, name, addedAt'
 		});
 		this.version(3).stores({
-			scores: 'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt',
+			scores:
+				'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt',
 			annotations: 'id, scoreId, pageNum',
 			folders: 'id, name, addedAt, lastSyncedAt'
 		});
 		this.version(4).stores({
-			scores: 'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt',
+			scores:
+				'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt',
 			annotations: 'id, scoreId, pageNum',
 			folders: 'id, name, addedAt, lastSyncedAt, parentId'
 		});
 		this.version(5).stores({
-			scores: 'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt',
+			scores:
+				'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt',
 			annotations: 'id, scoreId, pageNum',
 			folders: 'id, name, addedAt, lastSyncedAt'
-    });
-    this.version(6).stores({
-  scores: 'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt, year, ensemble',
-  annotations: 'id, scoreId, pageNum',
-  folders: 'id, name, addedAt, lastSyncedAt'
+		});
+		this.version(6).stores({
+			scores:
+				'id, title, composer, addedAt, lastOpenedAt, favorite, collection, sourceFolderId, sourcePath, fileModifiedAt, year, ensemble',
+			annotations: 'id, scoreId, pageNum',
+			folders: 'id, name, addedAt, lastSyncedAt'
 		});
 	}
 }
