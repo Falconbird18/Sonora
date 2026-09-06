@@ -30,7 +30,7 @@
 	import { getComposerPortrait } from './composerPortraits';
 	import { getPdfInfoFromSource } from './pdfUtils';
 	import { isTauri } from './paths';
-	import type { FolderSource, ScoreItem } from './types';
+	import type { FolderSource, ScoreItem, ScoreMetadataUpdate } from './types';
 
 	const THUMBNAIL_VERSION = 2;
 	let {
