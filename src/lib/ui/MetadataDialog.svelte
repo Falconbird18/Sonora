@@ -68,13 +68,14 @@
 
 	function submit() {
 		const yearNum = editYear.trim() ? Number.parseInt(editYear.trim(), 10) : null;
+		// Spread $state arrays into plain data — IndexedDB cannot clone Svelte proxies
 		onSave({
 			title: editTitle.trim() || title,
 			composer: editComposer.trim() || composer || 'Unknown Composer',
 			year: yearNum != null && !Number.isNaN(yearNum) ? yearNum : null,
 			ensemble: editEnsemble.trim() || undefined,
 			instruments: editInstruments.trim() || undefined,
-			tags: editingTags
+			tags: [...editingTags]
 		});
 	}
 </script>
