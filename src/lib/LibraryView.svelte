@@ -19,6 +19,7 @@
 	import ComposerPortrait from './ui/ComposerPortrait.svelte';
 	import IconButton from './ui/IconButton.svelte';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
+	import { saveScoreMetadata } from './scoreMeta';
 	import { settings } from './settingsStore';
 	import { db } from './db';
 	import {
@@ -209,20 +210,15 @@
 	async function saveMetadata(payload: ScoreMetadataUpdate) {
 		if (!metadata) return;
 		const id = metadata.id;
-		const updates = {
-			title: payload.title,
-			composer: payload.composer,
-			year: payload.year ?? null,
-			ensemble: payload.ensemble,
-			instruments: payload.instruments,
-			tags: payload.tags
-		};
-		await db.scores.update(id, updates);
-		scores = scores.map((item) =>
-			item.id === id ? { ...item, ...updates } : item
-		);
-		metadata = null;
-		// Disk rename (composer folder + filename) still needs a Tauri command — DB-only for now.
+		try {
+			const next = await saveScoreMetadata(id, payload);
+			scores = scores.map((item) =>
+				item.id === id ? { ...item, ...next } : item
+			);
+			metadata = null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not save metadata';
+		}
 	}
 	async function deleteScore(score: ScoreItem, event?: MouseEvent) {
 		event?.stopPropagation();
