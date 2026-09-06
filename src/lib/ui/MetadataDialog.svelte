@@ -26,13 +26,24 @@
 		onClose
 	}: Props = $props();
 
-	let editTitle = $state(title);
-	let editComposer = $state(composer);
-	let editYear = $state(year != null ? String(year) : '');
-	let editEnsemble = $state(ensemble);
-	let editInstruments = $state(instruments);
-	let editingTags = $state<string[]>([...tags]);
+	let editTitle = $state('');
+	let editComposer = $state('');
+	let editYear = $state('');
+	let editEnsemble = $state('');
+	let editInstruments = $state('');
+	let editingTags = $state<string[]>([]);
 	let tagDraft = $state('');
+
+	// Sync editor fields whenever the dialog is opened for a (new) score
+	$effect(() => {
+		editTitle = title;
+		editComposer = composer;
+		editYear = year != null ? String(year) : '';
+		editEnsemble = ensemble;
+		editInstruments = instruments;
+		editingTags = [...tags];
+		tagDraft = '';
+	});
 
 	const filteredSuggestions = $derived(
 		suggestions
@@ -68,7 +79,7 @@
 
 	function submit() {
 		const yearNum = editYear.trim() ? Number.parseInt(editYear.trim(), 10) : null;
-		// Spread $state arrays into plain data — IndexedDB cannot clone Svelte proxies
+		// Plain data only — IndexedDB cannot clone Svelte proxies
 		onSave({
 			title: editTitle.trim() || title,
 			composer: editComposer.trim() || composer || 'Unknown Composer',
