@@ -15,13 +15,17 @@
 	import Notice from './ui/Notice.svelte';
 	import ScoreCard from './ui/ScoreCard.svelte';
 	import ScoreListItem from './ui/ScoreListItem.svelte';
-	import TagDialog from './ui/TagDialog.svelte';
+	import MetadataDialog from './ui/MetadataDialog.svelte';
 	import ComposerPortrait from './ui/ComposerPortrait.svelte';
 	import IconButton from './ui/IconButton.svelte';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
 	import { settings } from './settingsStore';
 	import { db } from './db';
-	import { chooseAndAddFolder, resolveScoreSource, syncAllFolders } from './folderSync';
+	import {
+		chooseAndAddFolder,
+		resolveScoreSource,
+		syncAllFolders
+	} from './folderSync';
 	import { getComposerPortrait } from './composerPortraits';
 	import { getPdfInfoFromSource } from './pdfUtils';
 	import { isTauri } from './paths';
@@ -65,12 +69,12 @@
 			const results = await syncAllFolders(true);
 			const result = results[0];
 			notice = result
-  ? 'skipped' in result && result.skipped
-    ? 'Library is up to date'
-    : result.added || result.updated || result.removed
-      ? `${result.added + result.updated} updated · ${result.removed} removed`
-      : 'Library is up to date'
-  : 'Choose a score folder to begin';
+				? 'skipped' in result && result.skipped
+					? 'Library is up to date'
+					: result.added || result.updated || result.removed
+						? `${result.added + result.updated} updated · ${result.removed} removed`
+						: 'Library is up to date'
+				: 'Choose a score folder to begin';
 			await refresh();
 			void backfillThumbnails();
 		} catch (e) {
@@ -88,7 +92,8 @@
 			void backfillThumbnails();
 		} catch (e) {
 			if ((e as DOMException)?.name !== 'AbortError')
-				error = e instanceof Error ? e.message : 'Could not choose the score folder';
+				error =
+					e instanceof Error ? e.message : 'Could not choose the score folder';
 		}
 	}
 	function prepareScore(score: ScoreItem): ScoreItem {
@@ -111,7 +116,9 @@
 				!prepared.nativePath &&
 				!(prepared.pdfBlob && prepared.pdfBlob.size > 0)
 			)
-				throw new Error(`“${score.title}” has no PDF source. Try refreshing the library.`);
+				throw new Error(
+					`“${score.title}” has no PDF source. Try refreshing the library.`
+				);
 			const openedAt = Date.now();
 			void db.scores
 				.update(score.id, { lastOpenedAt: openedAt })
@@ -130,7 +137,9 @@
 		event.stopPropagation();
 		const favorite = !score.favorite;
 		await db.scores.update(score.id, { favorite });
-		scores = scores.map((item) => (item.id === score.id ? { ...item, favorite } : item));
+		scores = scores.map((item) =>
+			item.id === score.id ? { ...item, favorite } : item
+		);
 		if (favorite) closeMenu();
 	}
 	function toggleMenu(score: ScoreItem, event: MouseEvent) {
@@ -161,13 +170,15 @@
 		link.target = '_blank';
 		link.rel = 'noopener';
 		link.click();
-		if (score.pdfBlob && !score.pdfUrl) setTimeout(() => URL.revokeObjectURL(href), 1000);
+		if (score.pdfBlob && !score.pdfUrl)
+			setTimeout(() => URL.revokeObjectURL(href), 1000);
 	}
 
 	function printScoreFile(score: ScoreItem, event?: MouseEvent) {
 		event?.stopPropagation();
 		menuScoreId = null;
-		const href = score.pdfUrl || (score.pdfBlob ? URL.createObjectURL(score.pdfBlob) : '');
+		const href =
+			score.pdfUrl || (score.pdfBlob ? URL.createObjectURL(score.pdfBlob) : '');
 		if (!href) {
 			error = 'No PDF available to print for this score.';
 			return;
@@ -191,21 +202,27 @@
 				setTimeout(() => frame.remove(), 2000);
 			};
 		}
-		if (score.pdfBlob && !score.pdfUrl) setTimeout(() => URL.revokeObjectURL(href), 5000);
+		if (score.pdfBlob && !score.pdfUrl)
+			setTimeout(() => URL.revokeObjectURL(href), 5000);
 	}
 
-	async function saveMetadata(tags: string[]) {
+	async function saveMetadata(payload: ScoreMetadataUpdate) {
 		if (!metadata) return;
-		const next = tags.map((tag) => tag.trim()).filter(Boolean);
-		try {
-			await db.scores.update(metadata.id, { tags: next });
-			scores = scores.map((item) =>
-				item.id === metadata!.id ? { ...item, tags: next } : item
-			);
-			metadata = null;
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Could not save tags';
-		}
+		const id = metadata.id;
+		const updates = {
+			title: payload.title,
+			composer: payload.composer,
+			year: payload.year ?? null,
+			ensemble: payload.ensemble,
+			instruments: payload.instruments,
+			tags: payload.tags
+		};
+		await db.scores.update(id, updates);
+		scores = scores.map((item) =>
+			item.id === id ? { ...item, ...updates } : item
+		);
+		metadata = null;
+		// Disk rename (composer folder + filename) still needs a Tauri command — DB-only for now.
 	}
 	async function deleteScore(score: ScoreItem, event?: MouseEvent) {
 		event?.stopPropagation();
@@ -226,7 +243,8 @@
 		backfillRunning = true;
 		try {
 			const missing = scores.filter(
-				(score) => !score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
+				(score) =>
+					!score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
 			);
 			for (const score of missing.slice(0, 4)) {
 				if (paused) break;
@@ -258,7 +276,8 @@
 			if (
 				!paused &&
 				scores.some(
-					(score) => !score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
+					(score) =>
+						!score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
 				)
 			)
 				setTimeout(() => void backfillThumbnails(), 700);
@@ -276,7 +295,9 @@
 				try {
 					const value = JSON.parse(saved);
 					view = value.view === 'list' ? 'list' : 'grid';
-					sort = ['recent', 'title', 'composer'].includes(value.sort) ? value.sort : 'recent';
+					sort = ['recent', 'title', 'composer'].includes(value.sort)
+						? value.sort
+						: 'recent';
 				} catch {}
 			}
 			if (disposed) return;
@@ -295,7 +316,10 @@
 		};
 	});
 	$effect(() => {
-		localStorage.setItem('sonora-library-settings', JSON.stringify({ view, sort }));
+		localStorage.setItem(
+			'sonora-library-settings',
+			JSON.stringify({ view, sort })
+		);
 	});
 	$effect(() => {
 		if (!paused) void backfillThumbnails();
@@ -309,8 +333,8 @@
 		return counts;
 	});
 	const allTags = $derived(
-		Array.from(new Set(scores.flatMap((score) => score.tags ?? []))).sort((a, b) =>
-			a.localeCompare(b)
+		Array.from(new Set(scores.flatMap((score) => score.tags ?? []))).sort(
+			(a, b) => a.localeCompare(b)
 		)
 	);
 	const filtered = $derived(
@@ -334,7 +358,8 @@
 				sort === 'title'
 					? a.title.localeCompare(b.title)
 					: sort === 'composer'
-						? a.composer.localeCompare(b.composer) || a.title.localeCompare(b.title)
+						? a.composer.localeCompare(b.composer) ||
+							a.title.localeCompare(b.title)
 						: (b.lastOpenedAt || b.addedAt) - (a.lastOpenedAt || a.addedAt)
 			)
 	);
@@ -357,8 +382,7 @@
 			if (metadata) metadata = null;
 			if (settingsOpen) settingsOpen = false;
 		}
-	}}
-/>
+	}} />
 
 <div class="library" class:compact={$settings.compactLibrary}>
 	<header class="header">
@@ -366,23 +390,33 @@
 			<div class="brand-mark"><Music2 size={18} strokeWidth={2.1} /></div>
 			<strong>Sonora</strong>
 		</div>
-		<SearchField bind:value={search} placeholder="Search your scores" ariaLabel="Search scores" />
+		<SearchField
+			bind:value={search}
+			placeholder="Search your scores"
+			ariaLabel="Search scores" />
 		<div class="header-actions">
 			<button class="folder-button" onclick={chooseFolder}>
 				<FolderPlus size={17} strokeWidth={2} />
 				<span>{folder ? 'Change folder' : 'Choose folder'}</span>
 			</button>
-			<IconButton title="Refresh library" ariaLabel="Refresh library" onclick={sync}>
+			<IconButton
+				title="Refresh library"
+				ariaLabel="Refresh library"
+				onclick={sync}>
 				<RefreshCw size={18} class={syncing ? 'spinning' : ''} />
 			</IconButton>
-			<IconButton title="Settings" ariaLabel="Open settings" onclick={() => (settingsOpen = true)}>
+			<IconButton
+				title="Settings"
+				ariaLabel="Open settings"
+				onclick={() => (settingsOpen = true)}>
 				<Settings size={18} />
 			</IconButton>
 		</div>
 	</header>
 
 	{#if error}
-		<Notice variant="error" dismissible ondismiss={() => (error = '')}>{error}</Notice>
+		<Notice variant="error" dismissible ondismiss={() => (error = '')}
+			>{error}</Notice>
 	{/if}
 	{#if notice}
 		<Notice variant="success">{notice}</Notice>
@@ -396,8 +430,7 @@
 					onclick={() => {
 						filter = 'all';
 						composer = null;
-					}}
-				>
+					}}>
 					<Grid2X2 size={16} /><span>All scores</span><b>{scores.length}</b>
 				</button>
 				<button
@@ -405,22 +438,21 @@
 					onclick={() => {
 						filter = 'recent';
 						composer = null;
-					}}><Clock3 size={16} /><span>Recently opened</span></button
-				>
+					}}><Clock3 size={16} /><span>Recently opened</span></button>
 				<button
 					class:active={filter === 'favorites'}
 					onclick={() => {
 						filter = 'favorites';
 						composer = null;
-					}}><Star size={16} /><span>Favorites</span></button
-				>
+					}}><Star size={16} /><span>Favorites</span></button>
 			</nav>
 			{#if folder}
 				<div class="folder-summary">
 					<FolderOpen size={16} />
 					<div>
 						<strong>{folder.name}</strong>
-						<span>{scores.length} {scores.length === 1 ? 'score' : 'scores'}</span>
+						<span
+							>{scores.length} {scores.length === 1 ? 'score' : 'scores'}</span>
 					</div>
 				</div>
 			{/if}
@@ -436,8 +468,7 @@
 							onclick={() => {
 								composer = name;
 								filter = 'all';
-							}}
-						>
+							}}>
 							<ComposerPortrait {name} src={portrait} />
 							<span>{name}</span><b>{count}</b>
 						</button>
@@ -449,10 +480,15 @@
 			<div class="toolbar">
 				<div>
 					<h1>{currentTitle}</h1>
-					<span>{filtered.length} {filtered.length === 1 ? 'score' : 'scores'}</span>
+					<span
+						>{filtered.length}
+						{filtered.length === 1 ? 'score' : 'scores'}</span>
 				</div>
 				<div class="toolbar-actions">
-					<select class="sort-select" bind:value={sort} aria-label="Sort scores">
+					<select
+						class="sort-select"
+						bind:value={sort}
+						aria-label="Sort scores">
 						<option value="recent">Recently used</option>
 						<option value="title">Title</option>
 						<option value="composer">Composer</option>
@@ -461,13 +497,11 @@
 						<button
 							class:active={view === 'grid'}
 							onclick={() => (view = 'grid')}
-							aria-label="Grid view"><Grid2X2 size={16} /></button
-						>
+							aria-label="Grid view"><Grid2X2 size={16} /></button>
 						<button
 							class:active={view === 'list'}
 							onclick={() => (view = 'list')}
-							aria-label="List view"><List size={16} /></button
-						>
+							aria-label="List view"><List size={16} /></button>
 					</div>
 				</div>
 			</div>
@@ -475,7 +509,10 @@
 				<div class="empty">
 					<div class="empty-orb" aria-hidden="true"></div>
 					<h2>Choose a score folder</h2>
-					<p>Point Sonora at the folder where you keep your PDF scores to get started.</p>
+					<p>
+						Point Sonora at the folder where you keep your PDF scores to get
+						started.
+					</p>
 					<button class="folder-button" onclick={chooseFolder}>
 						<FolderPlus size={17} /><span>Choose folder</span>
 					</button>
@@ -498,8 +535,7 @@
 							onEditTags={editMetadata}
 							onDownload={downloadScoreFile}
 							onPrint={printScoreFile}
-							onDelete={deleteScore}
-						/>
+							onDelete={deleteScore} />
 					{/each}
 				</div>
 			{:else}
@@ -515,8 +551,7 @@
 							onEditTags={editMetadata}
 							onDownload={downloadScoreFile}
 							onPrint={printScoreFile}
-							onDelete={deleteScore}
-						/>
+							onDelete={deleteScore} />
 					{/each}
 				</div>
 			{/if}
@@ -524,13 +559,15 @@
 	</div>
 
 	{#if metadata}
-		<TagDialog
+		<MetadataDialog
 			title={metadata.title}
+			composer={metadata.composer}
+			year={metadata.year}
+			ensemble={metadata.ensemble}
+			instruments={metadata.instruments}
 			tags={metadata.tags ?? []}
-			suggestions={allTags}
-			onSave={(tags) => void saveMetadata(tags)}
-			onClose={() => (metadata = null)}
-		/>
+			onSave={(payload) => void saveMetadata(payload)}
+			onClose={() => (metadata = null)} />
 	{/if}
 
 	<SettingsPanel open={settingsOpen} onClose={() => (settingsOpen = false)} />
@@ -577,7 +614,11 @@
 		place-items: center;
 		border: 1px solid var(--sonora-border-strong);
 		border-radius: 11px;
-		background: linear-gradient(145deg, var(--sonora-accent-soft), var(--sonora-bg-elevated));
+		background: linear-gradient(
+			145deg,
+			var(--sonora-accent-soft),
+			var(--sonora-bg-elevated)
+		);
 		color: var(--sonora-accent);
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 	}
@@ -761,7 +802,11 @@
 		transition: border-color var(--sonora-duration) var(--sonora-ease);
 	}
 	.sort-select:hover {
-		border-color: color-mix(in srgb, var(--sonora-accent) 35%, var(--sonora-border-strong));
+		border-color: color-mix(
+			in srgb,
+			var(--sonora-accent) 35%,
+			var(--sonora-border-strong)
+		);
 	}
 	.sort-select:focus {
 		border-color: var(--sonora-border-focus);
@@ -824,7 +869,11 @@
 		height: 72px;
 		margin: 0 auto 18px;
 		border-radius: 50%;
-		background: radial-gradient(circle at 30% 30%, var(--sonora-accent-soft), transparent 70%);
+		background: radial-gradient(
+			circle at 30% 30%,
+			var(--sonora-accent-soft),
+			transparent 70%
+		);
 		border: 1px solid var(--sonora-border);
 		box-shadow: var(--sonora-accent-glow);
 	}
