@@ -26,14 +26,9 @@
 	const filteredSuggestions = $derived(suggestions.filter((tag) => !editingTags.some((x) => x.toLowerCase() === tag.toLowerCase()) && (!tagDraft.trim() || tag.toLowerCase().includes(tagDraft.trim().toLowerCase()))).slice(0, 8));
 	const composerInfo = $derived(selectedComposer ?? null);
 
-	function openComposerPicker() {
-		composerSearch = editComposer || selectedComposer?.name || '';
-		composerPickerOpen = true;
-	}
+	function openComposerPicker() { composerSearch = editComposer || selectedComposer?.name || ''; composerPickerOpen = true; }
 	function closeComposerPicker() { composerPickerOpen = false; }
-	function chooseComposer(value: ComposerRecord) {
-		selectedComposer = value; editComposer = value.name; composerSearch = value.name; composerPickerOpen = false;
-	}
+	function chooseComposer(value: ComposerRecord) { selectedComposer = value; editComposer = value.name; composerSearch = value.name; composerPickerOpen = false; }
 	function useCustomComposer() {
 		const value = composerSearch.trim();
 		if (!value) return;
@@ -62,7 +57,7 @@
 			<div class="field-row">
 				<label>Composer</label>
 				<button type="button" class="composer-card" class:empty={!composerInfo && !editComposer.trim()} onclick={openComposerPicker} aria-label="Change composer">
-					<div class="composer-card-main"><strong>{composerInfo?.name ?? editComposer.trim() || 'Unknown Composer'}</strong><Pencil size={14} /></div>
+					<div class="composer-card-main"><strong>{(composerInfo?.name ?? editComposer.trim()) || 'Unknown Composer'}</strong><Pencil size={14} /></div>
 					{#if composerInfo}
 						<span>{composerInfo.period}</span><span>{composerInfo.country}</span><span>{composerInfo.birthPlace} · {composerInfo.birthYear}–{composerInfo.deathYear}</span>
 					{:else}
