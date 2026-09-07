@@ -65,11 +65,16 @@ jobs:
 
           shopt -s nullglob
           for appimage in src-tauri/target/release/bundle/appimage/*.AppImage; do
+            # Resolve to absolute path *before* any cd, otherwise the relative
+            # path becomes invalid and we get "No such file or directory".
+            appimage=$(realpath "$appimage")
             echo "Processing $appimage ..."
+
             workdir=$(mktemp -d)
             cd "$workdir"
 
-            # Extract
+            # Extract (AppImage must be executable; realpath keeps the +x)
+            chmod +x "$appimage"
             "$appimage" --appimage-extract
 
             # Remove the libs that break EGL on modern Mesa / Wayland hosts.
