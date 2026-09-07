@@ -128,12 +128,13 @@ fn strip_html_tags(s: &str) -> String {
             _ => {}
         }
     }
-    out.replace(""", "\"")
-        .replace("&", "&")
-        .replace("<", "<")
-        .replace(">", ">")
-        .replace("&#39;", "'")
+out.replace("&quot;", "\"")
+    .replace("&#39;", "'")
+    .replace("&lt;", "<")
+    .replace("&gt;", ">")
+    .replace("&amp;", "&")  // Must be last!
 }
+
 
 /// Parse work-page wikitext (via MediaWiki action=parse) for PDF score files.
 /// This uses the public API only — no HTML scraping of rendered pages.
