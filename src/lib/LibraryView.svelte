@@ -383,7 +383,10 @@
 <div class="library" class:compact={$settings.compactLibrary}>
 	<header class="header">
 		<div class="brand">
-			<div class="brand-mark"><Music2 size={18} strokeWidth={2.1} /></div>
+			<img
+				src="../../../../../src-tauri/icons/app-icon.svg"
+				alt="Sonora logo"
+				class="brand-mark" />
 			<strong>Sonora</strong>
 		</div>
 		<SearchField
