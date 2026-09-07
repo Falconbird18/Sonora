@@ -1,5 +1,13 @@
 <script lang="ts">
-	import { Download, ExternalLink, Globe, Loader2, Music2, Search, X } from '@lucide/svelte';
+	import {
+		Download,
+		ExternalLink,
+		Globe,
+		Loader2,
+		Music2,
+		Search,
+		X
+	} from '@lucide/svelte';
 	import IconButton from './IconButton.svelte';
 	import TextButton from './TextButton.svelte';
 	import {
@@ -21,7 +29,10 @@
 	}: {
 		open?: boolean;
 		libraryRoot?: string | null;
-		onDownloaded?: (info: { filename: string; relativePath?: string | null }) => void;
+		onDownloaded?: (info: {
+			filename: string;
+			relativePath?: string | null;
+		}) => void;
 	} = $props();
 
 	let query = $state('');
@@ -73,10 +84,12 @@
 		try {
 			scores = await getWorkScores(hit.title);
 			if (!scores.length) {
-				notice = 'No PDF scores were found on this work page. You can still open it on IMSLP.';
+				notice =
+					'No PDF scores were found on this work page. You can still open it on IMSLP.';
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Could not load scores for this work';
+			error =
+				e instanceof Error ? e.message : 'Could not load scores for this work';
 		} finally {
 			loadingScores = false;
 		}
@@ -128,7 +141,12 @@
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 	<div class="backdrop" onclick={close} role="presentation"></div>
 
-	<div class="panel" role="dialog" aria-modal="true" aria-label="Search IMSLP" tabindex="-1">
+	<div
+		class="panel"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Search IMSLP"
+		tabindex="-1">
 		<header class="panel-header">
 			<div class="title-block">
 				<div class="mark"><Globe size={18} /></div>
@@ -157,7 +175,10 @@
 						onkeydown={onSearchKeydown}
 						aria-label="Search IMSLP" />
 				</div>
-				<TextButton variant="primary" onclick={() => void runSearch()} disabled={searching}>
+				<TextButton
+					variant="primary"
+					onclick={() => void runSearch()}
+					disabled={searching}>
 					{#if searching}
 						<Loader2 size={16} class="spin" /> Searching…
 					{:else}
@@ -177,45 +198,71 @@
 		<div class="body" class:split={!!selected}>
 			{#if selected}
 				<aside class="context">
-					<button type="button" class="back" onclick={backToResults}>← All results</button>
-					{@const parsed = parseWorkTitle(selected.title)}
-					<h2>{parsed.title}</h2>
-					<p class="composer">{parsed.composer}</p>
-					{#if snippetFor(selected)}
-						<p class="snippet">{snippetFor(selected)}</p>
-					{/if}
-					<a class="external" href={workPageUrl(selected.title)} target="_blank" rel="noopener noreferrer">
-						Open on IMSLP <ExternalLink size={14} />
-					</a>
-					{#if !libraryRoot}
-						<p class="hint">Choose a score folder in the library first so downloads can be saved.</p>
+					<button type="button" class="back" onclick={backToResults}
+						>← All results</button>
+					{#if true}
+						{@const parsed = parseWorkTitle(selected.title)}
+						<h2>{parsed.title}</h2>
+						<p class="composer">{parsed.composer}</p>
+						{#if snippetFor(selected)}
+							<p class="snippet">{snippetFor(selected)}</p>
+						{/if}
+						<a
+							class="external"
+							href={workPageUrl(selected.title)}
+							target="_blank"
+							rel="noopener noreferrer">
+							Open on IMSLP <ExternalLink size={14} />
+						</a>
+						{#if !libraryRoot}
+							<p class="hint">
+								Choose a score folder in the library first so downloads can be
+								saved.
+							</p>
+						{/if}
 					{/if}
 				</aside>
 
 				<section class="scores">
 					<div class="scores-head">
 						<h3>Available PDFs</h3>
-						<span>{scores.length} {scores.length === 1 ? 'file' : 'files'}</span>
+						<span
+							>{scores.length} {scores.length === 1 ? 'file' : 'files'}</span>
 					</div>
 					{#if loadingScores}
-						<div class="empty-state"><Loader2 size={22} class="spin" /><p>Loading scores…</p></div>
+						<div class="empty-state">
+							<Loader2 size={22} class="spin" />
+							<p>Loading scores…</p>
+						</div>
 					{:else if !scores.length}
-						<div class="empty-state"><Music2 size={22} /><p>No PDF scores found on this page.</p></div>
+						<div class="empty-state">
+							<Music2 size={22} />
+							<p>No PDF scores found on this page.</p>
+						</div>
 					{:else}
 						<div class="score-grid">
 							{#each scores as score (score.filename)}
 								<article class="score-card">
 									<div class="thumb">
 										{#if score.thumb_url}
-											<img src={score.thumb_url} alt="" loading="lazy" referrerpolicy="no-referrer" />
+											<img
+												src={score.thumb_url}
+												alt=""
+												loading="lazy"
+												referrerpolicy="no-referrer" />
 										{:else}
 											<div class="thumb-fallback"><Music2 size={28} /></div>
 										{/if}
 									</div>
 									<div class="score-meta">
-										<strong title={score.filename}>{displayFilename(score.filename)}</strong>
-										{#if score.description}<span class="desc">{score.description}</span>{/if}
-										{#if score.editor}<span class="editor">Editor: {score.editor}</span>{/if}
+										<strong title={score.filename}
+											>{displayFilename(score.filename)}</strong>
+										{#if score.description}<span class="desc"
+												>{score.description}</span
+											>{/if}
+										{#if score.editor}<span class="editor"
+												>Editor: {score.editor}</span
+											>{/if}
 									</div>
 									<button
 										type="button"
@@ -236,12 +283,18 @@
 			{:else}
 				<section class="results">
 					{#if searching}
-						<div class="empty-state"><Loader2 size={22} class="spin" /><p>Searching IMSLP…</p></div>
+						<div class="empty-state">
+							<Loader2 size={22} class="spin" />
+							<p>Searching IMSLP…</p>
+						</div>
 					{:else if !hits.length}
 						<div class="empty-state hero">
 							<div class="hero-orb" aria-hidden="true"></div>
 							<h2>Browse IMSLP inside Sonora</h2>
-							<p>Search for a work or composer, pick an edition, and save the PDF into your library folder.</p>
+							<p>
+								Search for a work or composer, pick an edition, and save the PDF
+								into your library folder.
+							</p>
 						</div>
 					{:else}
 						<div class="results-head">
@@ -251,12 +304,17 @@
 						<div class="hit-list">
 							{#each hits as hit (hit.title)}
 								{@const parsed = parseWorkTitle(hit.title)}
-								<button type="button" class="hit" onclick={() => void selectWork(hit)}>
+								<button
+									type="button"
+									class="hit"
+									onclick={() => void selectWork(hit)}>
 									<div class="hit-icon"><Music2 size={18} /></div>
 									<div class="hit-body">
 										<strong>{parsed.title}</strong>
 										<span class="composer">{parsed.composer}</span>
-										{#if snippetFor(hit)}<span class="snippet">{snippetFor(hit)}</span>{/if}
+										{#if snippetFor(hit)}<span class="snippet"
+												>{snippetFor(hit)}</span
+											>{/if}
 									</div>
 								</button>
 							{/each}
@@ -289,7 +347,9 @@
 		border: 1px solid var(--sonora-border-strong);
 		border-radius: 18px;
 		background: var(--sonora-bg-elevated);
-		box-shadow: var(--sonora-shadow-lg), 0 24px 80px rgba(0, 0, 0, 0.35);
+		box-shadow:
+			var(--sonora-shadow-lg),
+			0 24px 80px rgba(0, 0, 0, 0.35);
 		overflow: hidden;
 		color: var(--sonora-text);
 	}
@@ -303,146 +363,379 @@
 		border-bottom: 1px solid var(--sonora-border);
 		background: color-mix(in srgb, var(--sonora-bg-workspace) 70%, transparent);
 	}
-	.title-block { display: flex; align-items: center; gap: 12px; min-width: 0; }
+	.title-block {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		min-width: 0;
+	}
 	.mark {
-		width: 36px; height: 36px; display: grid; place-items: center;
-		border-radius: 11px; background: var(--sonora-accent-soft); color: var(--sonora-accent);
+		width: 36px;
+		height: 36px;
+		display: grid;
+		place-items: center;
+		border-radius: 11px;
+		background: var(--sonora-accent-soft);
+		color: var(--sonora-accent);
 		flex: 0 0 auto;
 	}
-	.title-block strong { display: block; font-size: 15px; font-weight: 700; }
-	.title-block span { display: block; font-size: 12px; color: var(--sonora-text-muted); }
-	.search-row { flex: 0 0 auto; display: flex; gap: 10px; padding: 14px 20px 0; }
-	.search-field { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; }
+	.title-block strong {
+		display: block;
+		font-size: 15px;
+		font-weight: 700;
+	}
+	.title-block span {
+		display: block;
+		font-size: 12px;
+		color: var(--sonora-text-muted);
+	}
+	.search-row {
+		flex: 0 0 auto;
+		display: flex;
+		gap: 10px;
+		padding: 14px 20px 0;
+	}
+	.search-field {
+		flex: 1;
+		min-width: 0;
+		position: relative;
+		display: flex;
+		align-items: center;
+	}
 	.search-field :global(.search-icon) {
-		position: absolute; left: 12px; color: var(--sonora-text-muted); pointer-events: none;
+		position: absolute;
+		left: 12px;
+		color: var(--sonora-text-muted);
+		pointer-events: none;
 	}
 	.search-field input {
-		width: 100%; height: 42px; padding: 0 14px 0 38px;
-		border: 1px solid var(--sonora-border-strong); border-radius: 12px;
-		background: var(--sonora-bg-workspace); color: var(--sonora-text); font-size: 14px;
+		width: 100%;
+		height: 42px;
+		padding: 0 14px 0 38px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: 12px;
+		background: var(--sonora-bg-workspace);
+		color: var(--sonora-text);
+		font-size: 14px;
 	}
 	.search-field input:focus {
 		outline: none;
-		border-color: color-mix(in srgb, var(--sonora-accent) 55%, var(--sonora-border-strong));
+		border-color: color-mix(
+			in srgb,
+			var(--sonora-accent) 55%,
+			var(--sonora-border-strong)
+		);
 		box-shadow: 0 0 0 3px var(--sonora-accent-soft);
 	}
 	.banner {
-		margin: 12px 20px 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.4;
+		margin: 12px 20px 0;
+		padding: 10px 12px;
+		border-radius: 10px;
+		font-size: 13px;
+		line-height: 1.4;
 	}
 	.banner.error {
-		background: color-mix(in srgb, #ff5c5c 14%, transparent); color: #ffb4b4;
+		background: color-mix(in srgb, #ff5c5c 14%, transparent);
+		color: #ffb4b4;
 		border: 1px solid color-mix(in srgb, #ff5c5c 35%, transparent);
 	}
 	.banner.ok {
-		background: color-mix(in srgb, #3ecf8e 12%, transparent); color: #b6f0d2;
+		background: color-mix(in srgb, #3ecf8e 12%, transparent);
+		color: #b6f0d2;
 		border: 1px solid color-mix(in srgb, #3ecf8e 30%, transparent);
 	}
 	.banner.warn {
-		background: color-mix(in srgb, #f0c14b 12%, transparent); color: #f5e0a0;
+		background: color-mix(in srgb, #f0c14b 12%, transparent);
+		color: #f5e0a0;
 		border: 1px solid color-mix(in srgb, #f0c14b 30%, transparent);
 	}
-	.body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; margin-top: 12px; }
-	.body.split { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); }
+	.body {
+		flex: 1;
+		min-height: 0;
+		display: grid;
+		grid-template-columns: 1fr;
+		margin-top: 12px;
+	}
+	.body.split {
+		grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+	}
 	.context {
-		overflow-y: auto; padding: 8px 18px 20px 20px; border-right: 1px solid var(--sonora-border);
+		overflow-y: auto;
+		padding: 8px 18px 20px 20px;
+		border-right: 1px solid var(--sonora-border);
 		background: color-mix(in srgb, var(--sonora-bg-workspace) 55%, transparent);
 	}
 	.back {
-		border: 0; background: transparent; color: var(--sonora-accent);
-		font-size: 13px; font-weight: 600; padding: 0; margin-bottom: 12px; cursor: pointer;
+		border: 0;
+		background: transparent;
+		color: var(--sonora-accent);
+		font-size: 13px;
+		font-weight: 600;
+		padding: 0;
+		margin-bottom: 12px;
+		cursor: pointer;
 	}
-	.context h2 { margin: 0 0 6px; font-size: 18px; font-weight: 700; line-height: 1.25; }
-	.composer { color: var(--sonora-text-muted); font-size: 13px; }
-	.snippet { margin: 10px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--sonora-text-muted); }
+	.context h2 {
+		margin: 0 0 6px;
+		font-size: 18px;
+		font-weight: 700;
+		line-height: 1.25;
+	}
+	.composer {
+		color: var(--sonora-text-muted);
+		font-size: 13px;
+	}
+	.snippet {
+		margin: 10px 0 0;
+		font-size: 12.5px;
+		line-height: 1.45;
+		color: var(--sonora-text-muted);
+	}
 	.external {
-		display: inline-flex; align-items: center; gap: 6px; margin-top: 14px;
-		font-size: 13px; color: var(--sonora-accent); text-decoration: none;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		margin-top: 14px;
+		font-size: 13px;
+		color: var(--sonora-accent);
+		text-decoration: none;
 	}
-	.external:hover { text-decoration: underline; }
-	.hint { margin-top: 16px; font-size: 12px; line-height: 1.4; color: var(--sonora-text-faint); }
-	.results, .scores { min-width: 0; overflow-y: auto; padding: 4px 20px 24px; }
-	.results-head, .scores-head {
-		display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px;
+	.external:hover {
+		text-decoration: underline;
 	}
-	.results-head h3, .scores-head h3 {
-		margin: 0; font-size: 13px; font-weight: 650; letter-spacing: 0.04em;
-		text-transform: uppercase; color: var(--sonora-text-faint);
+	.hint {
+		margin-top: 16px;
+		font-size: 12px;
+		line-height: 1.4;
+		color: var(--sonora-text-faint);
 	}
-	.results-head span, .scores-head span { font-size: 12px; color: var(--sonora-text-muted); }
-	.hit-list { display: flex; flex-direction: column; gap: 6px; }
+	.results,
+	.scores {
+		min-width: 0;
+		overflow-y: auto;
+		padding: 4px 20px 24px;
+	}
+	.results-head,
+	.scores-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 12px;
+		margin-bottom: 12px;
+	}
+	.results-head h3,
+	.scores-head h3 {
+		margin: 0;
+		font-size: 13px;
+		font-weight: 650;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--sonora-text-faint);
+	}
+	.results-head span,
+	.scores-head span {
+		font-size: 12px;
+		color: var(--sonora-text-muted);
+	}
+	.hit-list {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
 	.hit {
-		display: flex; gap: 12px; align-items: flex-start; width: 100%; padding: 12px;
-		border: 1px solid transparent; border-radius: 12px; background: transparent;
-		color: inherit; text-align: left; cursor: pointer;
+		display: flex;
+		gap: 12px;
+		align-items: flex-start;
+		width: 100%;
+		padding: 12px;
+		border: 1px solid transparent;
+		border-radius: 12px;
+		background: transparent;
+		color: inherit;
+		text-align: left;
+		cursor: pointer;
 	}
-	.hit:hover { background: var(--sonora-bg-hover); border-color: var(--sonora-border); }
+	.hit:hover {
+		background: var(--sonora-bg-hover);
+		border-color: var(--sonora-border);
+	}
 	.hit-icon {
-		width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px;
-		background: var(--sonora-bg-active); color: var(--sonora-text-muted); flex: 0 0 auto;
+		width: 36px;
+		height: 36px;
+		display: grid;
+		place-items: center;
+		border-radius: 10px;
+		background: var(--sonora-bg-active);
+		color: var(--sonora-text-muted);
+		flex: 0 0 auto;
 	}
-	.hit-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-	.hit-body strong { font-size: 14px; font-weight: 650; }
-	.hit-body .composer { font-size: 12.5px; }
+	.hit-body {
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.hit-body strong {
+		font-size: 14px;
+		font-weight: 650;
+	}
+	.hit-body .composer {
+		font-size: 12.5px;
+	}
 	.hit-body .snippet {
-		margin: 4px 0 0; display: -webkit-box; -webkit-line-clamp: 2;
-		-webkit-box-orient: vertical; overflow: hidden;
+		margin: 4px 0 0;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
 	}
 	.score-grid {
-		display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px;
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+		gap: 14px;
 	}
 	.score-card {
-		display: flex; flex-direction: column; gap: 10px; padding: 12px;
-		border: 1px solid var(--sonora-border); border-radius: 14px;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		padding: 12px;
+		border: 1px solid var(--sonora-border);
+		border-radius: 14px;
 		background: color-mix(in srgb, var(--sonora-bg-workspace) 65%, transparent);
 	}
 	.thumb {
-		aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden;
-		background: var(--sonora-bg-active); border: 1px solid var(--sonora-border);
+		aspect-ratio: 3 / 4;
+		border-radius: 10px;
+		overflow: hidden;
+		background: var(--sonora-bg-active);
+		border: 1px solid var(--sonora-border);
 	}
 	.thumb img {
-		width: 100%; height: 100%; object-fit: cover; object-position: top center; display: block;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		object-position: top center;
+		display: block;
 	}
 	.thumb-fallback {
-		width: 100%; height: 100%; display: grid; place-items: center; color: var(--sonora-text-faint);
+		width: 100%;
+		height: 100%;
+		display: grid;
+		place-items: center;
+		color: var(--sonora-text-faint);
 	}
-	.score-meta { display: flex; flex-direction: column; gap: 4px; min-height: 56px; }
+	.score-meta {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-height: 56px;
+	}
 	.score-meta strong {
-		font-size: 13px; font-weight: 650; line-height: 1.3;
-		display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+		font-size: 13px;
+		font-weight: 650;
+		line-height: 1.3;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
 	}
-	.desc, .editor {
-		font-size: 12px; color: var(--sonora-text-muted); line-height: 1.35;
-		display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+	.desc,
+	.editor {
+		font-size: 12px;
+		color: var(--sonora-text-muted);
+		line-height: 1.35;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
 	}
-	.editor { color: var(--sonora-text-faint); }
+	.editor {
+		color: var(--sonora-text-faint);
+	}
 	.add-btn {
-		height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-		border: 1px solid var(--sonora-border-strong); border-radius: 10px;
-		background: var(--sonora-bg-elevated); color: var(--sonora-text);
-		font-size: 12.5px; font-weight: 600; cursor: pointer;
+		height: 34px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 7px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: 10px;
+		background: var(--sonora-bg-elevated);
+		color: var(--sonora-text);
+		font-size: 12.5px;
+		font-weight: 600;
+		cursor: pointer;
 	}
 	.add-btn:hover:not(:disabled) {
 		background: var(--sonora-bg-hover);
-		border-color: color-mix(in srgb, var(--sonora-accent) 40%, var(--sonora-border-strong));
+		border-color: color-mix(
+			in srgb,
+			var(--sonora-accent) 40%,
+			var(--sonora-border-strong)
+		);
 	}
-	.add-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+	.add-btn:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
 	.empty-state {
-		display: grid; place-items: center; gap: 10px; min-height: 220px;
-		color: var(--sonora-text-muted); text-align: center; padding: 24px;
+		display: grid;
+		place-items: center;
+		gap: 10px;
+		min-height: 220px;
+		color: var(--sonora-text-muted);
+		text-align: center;
+		padding: 24px;
 	}
-	.empty-state.hero { min-height: 320px; }
+	.empty-state.hero {
+		min-height: 320px;
+	}
 	.hero-orb {
-		width: 72px; height: 72px; border-radius: 50%;
-		background: radial-gradient(circle at 30% 30%, var(--sonora-accent-soft), transparent 70%);
-		border: 1px solid var(--sonora-border); margin-bottom: 4px;
+		width: 72px;
+		height: 72px;
+		border-radius: 50%;
+		background: radial-gradient(
+			circle at 30% 30%,
+			var(--sonora-accent-soft),
+			transparent 70%
+		);
+		border: 1px solid var(--sonora-border);
+		margin-bottom: 4px;
 	}
-	.empty-state h2 { margin: 0; color: var(--sonora-text); font-size: 18px; font-weight: 650; }
-	.empty-state p { margin: 0; max-width: 360px; font-size: 13px; line-height: 1.45; }
-	:global(.spin) { animation: spin 0.9s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
+	.empty-state h2 {
+		margin: 0;
+		color: var(--sonora-text);
+		font-size: 18px;
+		font-weight: 650;
+	}
+	.empty-state p {
+		margin: 0;
+		max-width: 360px;
+		font-size: 13px;
+		line-height: 1.45;
+	}
+	:global(.spin) {
+		animation: spin 0.9s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
 	@media (max-width: 820px) {
-		.panel { top: 0; width: 100vw; height: 100vh; border-radius: 0; }
-		.body.split { grid-template-columns: 1fr; }
-		.context { border-right: 0; border-bottom: 1px solid var(--sonora-border); max-height: 28vh; }
+		.panel {
+			top: 0;
+			width: 100vw;
+			height: 100vh;
+			border-radius: 0;
+		}
+		.body.split {
+			grid-template-columns: 1fr;
+		}
+		.context {
+			border-right: 0;
+			border-bottom: 1px solid var(--sonora-border);
+			max-height: 28vh;
+		}
 	}
 </style>
