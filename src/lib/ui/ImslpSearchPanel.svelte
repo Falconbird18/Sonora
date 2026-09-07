@@ -57,6 +57,11 @@
 		}
 	}
 
+	function onSubmit(event: Event) {
+		event.preventDefault();
+		void runSearch();
+	}
+
 	async function selectWork(hit: ImslpSearchHit) {
 		selected = hit;
 		scores = [];
@@ -136,15 +141,12 @@
 				</p>
 			</div>
 		{:else}
-			<div class="search-row">
+			<form class="search-row" onsubmit={onSubmit}>
 				<SearchField
 					bind:value={query}
 					placeholder="Composer, work, opus…"
-					ariaLabel="Search IMSLP"
-					onkeydown={(e: KeyboardEvent) => {
-						if (e.key === 'Enter') void runSearch();
-					}} />
-				<TextButton onclick={() => void runSearch()} disabled={searching || !query.trim()}>
+					ariaLabel="Search IMSLP" />
+				<TextButton type="submit" disabled={searching || !query.trim()}>
 					{#if searching}
 						<Loader2 size={16} class="spin" />
 					{:else}
@@ -152,7 +154,7 @@
 					{/if}
 					<span>Search</span>
 				</TextButton>
-			</div>
+			</form>
 
 			{#if error}
 				<p class="err">{error}</p>
@@ -163,7 +165,7 @@
 
 			{#if selected}
 				<div class="work-head">
-					<button class="linkish" onclick={backToResults}>← Results</button>
+					<button type="button" class="linkish" onclick={backToResults}>← Results</button>
 					<h3>{selected.title}</h3>
 					<a
 						class="external"
@@ -190,6 +192,7 @@
 									{/if}
 								</div>
 								<button
+									type="button"
 									class="dl"
 									disabled={!!downloading}
 									onclick={() => void doDownload(score)}>
@@ -209,7 +212,7 @@
 					{#each hits as hit (hit.title)}
 						{@const parsed = parseWorkTitle(hit.title)}
 						<li>
-							<button class="hit" onclick={() => void selectWork(hit)}>
+							<button type="button" class="hit" onclick={() => void selectWork(hit)}>
 								<strong>{parsed.title}</strong>
 								<span class="composer">{parsed.composer}</span>
 								{#if hit.snippet}
