@@ -30,49 +30,32 @@
 	}: Props = $props();
 </script>
 
-<div
-	class="list-row"
-	class:opening
-	role="button"
-	tabindex="0"
-	onclick={() => onOpen(score)}
-	onkeydown={(event) => {
-		if (event.key === 'Enter' || event.key === ' ') {
-			event.preventDefault();
-			onOpen(score);
-		}
-	}}
->
-	<div class="list-cover">
-		{#if score.thumbnailUrl}
-			<img src={score.thumbnailUrl} alt="" loading="lazy" decoding="async" />
-		{:else}
-			<FileText size={20} strokeWidth={1.7} />
-		{/if}
-	</div>
-
-	<div class="list-info">
-		<strong title={score.title}>{score.title}</strong>
-		<span>{score.composer}</span>
-		{#if score.tags?.length}
-			<div class="tags">
-				{#each score.tags.slice(0, 3) as tag}
-					<span>{tag}</span>
-				{/each}
-				{#if score.tags.length > 3}
-					<small>+{score.tags.length - 3}</small>
-				{/if}
-			</div>
-		{/if}
-	</div>
-
-	<div class="list-meta">
-		<span>{score.totalPages || 1} {(score.totalPages || 1) === 1 ? 'page' : 'pages'}</span>
-		{#if score.lastOpenedAt}
-			<span class="recent">Recent</span>
-		{/if}
-	</div>
-
+<div class="list-row" class:opening>
+	<button type="button" class="list-open" onclick={() => onOpen(score)} aria-label={`Open ${score.title}`}>
+		<div class="list-cover">
+			{#if score.thumbnailUrl}
+				<img src={score.thumbnailUrl} alt="" loading="eager" decoding="async" />
+			{:else}
+				<div class="no-cover"><FileText size={18} strokeWidth={1.6} /></div>
+			{/if}
+		</div>
+		<div class="list-info">
+			<h3 title={score.title}>{score.title}</h3>
+			<p>{score.composer}</p>
+			{#if score.tags?.length}
+				<div class="tags">
+					{#each score.tags.slice(0, 3) as tag}
+						<span>{tag}</span>
+					{/each}
+				</div>
+			{/if}
+		</div>
+		<div class="list-meta">
+			{#if score.totalPages}
+				<span>{score.totalPages}p</span>
+			{/if}
+		</div>
+	</button>
 	<div class="list-actions">
 		<button
 			type="button"
@@ -100,38 +83,45 @@
 <style>
 	.list-row {
 		display: grid;
-		grid-template-columns: 48px minmax(0, 1fr) auto auto;
+		grid-template-columns: 1fr auto;
 		align-items: center;
-		gap: 14px;
-		padding: 10px 12px;
-		border: 1px solid transparent;
+		gap: 8px;
+		padding: 8px 10px;
 		border-radius: var(--sonora-radius-md);
-		cursor: pointer;
+		border: 1px solid transparent;
 		transition:
 			background var(--sonora-duration) ease,
 			border-color var(--sonora-duration) ease;
 	}
 	.list-row:hover,
-	.list-row:focus-visible {
-		background: rgba(255, 255, 255, 0.04);
+	.list-row:focus-within {
+		background: var(--sonora-bg-hover);
 		border-color: var(--sonora-border);
-		outline: none;
 	}
 	.list-row.opening {
 		opacity: 0.7;
 		pointer-events: none;
 	}
+	.list-open {
+		display: grid;
+		grid-template-columns: 48px minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 12px;
+		min-width: 0;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		text-align: left;
+		cursor: pointer;
+	}
 	.list-cover {
 		width: 48px;
-		height: 62px;
-		display: grid;
-		place-items: center;
+		height: 64px;
 		overflow: hidden;
+		border-radius: 8px;
 		border: 1px solid var(--sonora-border);
-		border-radius: 9px;
-		background: linear-gradient(160deg, #23231f 0%, #161613 100%);
-		color: var(--sonora-text-muted);
-		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+		background: #1a1a17;
 	}
 	.list-cover img {
 		width: 100%;
@@ -139,58 +129,47 @@
 		object-fit: cover;
 		object-position: top center;
 	}
+	.no-cover {
+		height: 100%;
+		display: grid;
+		place-items: center;
+		color: var(--sonora-text-muted);
+	}
 	.list-info {
 		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
 	}
-	.list-info strong {
+	.list-info h3 {
+		margin: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-size: 13.5px;
 		font-weight: 600;
-		letter-spacing: -0.02em;
-		color: var(--sonora-text);
 	}
-	.list-info > span {
+	.list-info p {
+		margin: 2px 0 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		color: var(--sonora-text-muted);
 		font-size: var(--sonora-text-sm);
 	}
-	.tags {
+	.list-info .tags {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 5px;
-		margin-top: 3px;
-	}
-	.tags span,
-	.tags small {
-		padding: 2px 7px;
-		border-radius: 999px;
-		background: rgba(255, 255, 255, 0.05);
-		border: 1px solid var(--sonora-border);
-		color: var(--sonora-text-faint);
-		font-size: 10px;
-	}
-	.list-meta {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-end;
 		gap: 4px;
-		color: var(--sonora-text-faint);
-		font-size: 11px;
-		white-space: nowrap;
+		margin-top: 6px;
 	}
-	.list-meta .recent {
-		padding: 2px 7px;
+	.list-info .tags span {
+		padding: 2px 6px;
 		border-radius: 999px;
 		background: var(--sonora-accent-soft);
 		color: #93c5fd;
 		font-size: 10px;
+	}
+	.list-meta {
+		color: var(--sonora-text-faint);
+		font-size: 11px;
 	}
 	.list-actions {
 		display: flex;
@@ -212,7 +191,7 @@
 			color var(--sonora-duration) ease;
 	}
 	.action-button:hover {
-		background: rgba(255, 255, 255, 0.08);
+		background: var(--sonora-bg-hover);
 		color: var(--sonora-text);
 	}
 	.action-button.favorite.marked {

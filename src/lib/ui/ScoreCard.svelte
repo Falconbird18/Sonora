@@ -227,19 +227,20 @@
 		place-items: center;
 		border: 1px solid transparent;
 		border-radius: 10px;
-		background: rgba(18, 18, 16, 0.72);
+		background: color-mix(in srgb, var(--sonora-bg-elevated) 78%, transparent);
 		color: var(--sonora-text-secondary);
 		cursor: pointer;
-		backdrop-filter: blur(10px);
+		backdrop-filter: var(--sonora-blur-sm);
+		-webkit-backdrop-filter: var(--sonora-blur-sm);
 		transition:
 			background var(--sonora-duration) ease,
 			color var(--sonora-duration) ease,
 			border-color var(--sonora-duration) ease;
 	}
 	.action-button:hover {
-		background: rgba(255, 255, 255, 0.1);
+		background: var(--sonora-bg-hover);
 		color: var(--sonora-text);
-		border-color: var(--sonora-border);
+		border-color: var(--sonora-border-strong);
 	}
 	.action-button.favorite.marked {
 		color: #fbbf24;
