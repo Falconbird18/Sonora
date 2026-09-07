@@ -343,13 +343,14 @@ async fn imslp_download_score(
         }
     }
 
+    let include_bytes = saved_path.is_none();
     Ok(ImslpDownloadResult {
         filename,
         size: bytes.len() as u64,
         saved_path,
         relative_path,
         // Only include bytes when we did not write to disk (web/fallback path)
-        bytes_base64: if saved_path.is_none() {
+        bytes_base64: if include_bytes {
             Some(data_encoding_base64(&bytes))
         } else {
             None
