@@ -264,6 +264,18 @@
 		"portraitFiles": ["Carl Czerny.jpg"]
 	},
 	{
+		"id": "hanon",
+		"name": "Charles-Louis Hanon",
+		"aliases": ["Hanon", "Charles-Louis Hanon", "Charles Louis Hanon"],
+		"period": "Romantic",
+		"birthYear": 1819,
+		"deathYear": 1900,
+		"birthPlace": "Renescure, France",
+		"country": "France",
+		"portraitFiles": ["Charles-Louis Hanon.jpg"],
+		"portraitQuery": "Charles-Louis Hanon.jpg"
+	},
+	{
 		"id": "schradieck",
 		"name": "Henry Schradieck",
 		"aliases": ["Schradieck", "Shradiak", "Schradiak", "Henry Schradieck"],
@@ -909,6 +921,45 @@
 		"portraitQuery": "Josquin des Prez portrait"
 	},
 	{
+		"id": "scriabin",
+		"name": "Alexander Scriabin",
+		"aliases": [
+			"Scriabin",
+			"Alexander Scriabin",
+			"Aleksandr Scriabin",
+			"Alexander Skriabin"
+		],
+		"period": "Late Romantic / Modern",
+		"birthYear": 1872,
+		"deathYear": 1915,
+		"birthPlace": "Moscow, Russian Empire",
+		"country": "Russia",
+		"portraitFiles": ["Scriabin 1909 Cropped.jpg"]
+	},
+	{
+		"id": "granados",
+		"name": "Enrique Granados",
+		"aliases": ["Granados", "Enric Granados", "Enrique Granados"],
+		"period": "Late Romantic",
+		"birthYear": 1867,
+		"deathYear": 1916,
+		"birthPlace": "Lleida, Spain",
+		"country": "Spain",
+		"portraitFiles": ["Enrique Granados 1914 (2).jpg"]
+	},
+	{
+		"id": "alkan",
+		"name": "Charles-Valentin Alkan",
+		"aliases": ["Alkan", "Charles-Valentin Alkan", "Charles Valentin Alkan"],
+		"period": "Romantic",
+		"birthYear": 1813,
+		"deathYear": 1888,
+		"birthPlace": "Paris, France",
+		"country": "France",
+		"portraitFiles": ["Charles-Valentin Alkan.jpg"],
+		"portraitQuery": "Charles-Valentin Alkan portrait"
+	},
+	{
 		"id": "williams",
 		"name": "John Williams",
 		"aliases": ["John Williams", "John Towner Williams"],
@@ -917,8 +968,8 @@
 		"deathYear": null,
 		"birthPlace": "Queens, New York, United States",
 		"country": "United States",
-		"portraitFiles": [],
-		"portraitQuery": "John Williams conductor crop.jpg"
+		"portraitFiles": ["Mr. John Williams conductor (5349029).jpg"],
+		"portraitQuery": "Mr. John Williams conductor (5349029).jpg"
 	},
 	{
 		"id": "morricone",
@@ -991,5 +1042,198 @@
 		"country": "Estonia",
 		"portraitFiles": ["Arvo Pärt 2011.jpg"],
 		"portraitQuery": "Arvo Pärt 2011.jpg"
+	},
+	{
+		"id": "chaminade",
+		"name": "Cécile Chaminade",
+		"aliases": ["Chaminade", "Cecile Chaminade", "Cécile"],
+		"period": "Romantic",
+		"birthYear": 1857,
+		"deathYear": 1944,
+		"birthPlace": "Paris, France",
+		"country": "France",
+		"portraitFiles": ["Portrait of Cécile Chaminade.jpg"]
+	},
+	{
+		"id": "faure",
+		"name": "Gabriel Fauré",
+		"aliases": ["Fauré", "Faure", "Gabriel Faure"],
+		"period": "Late Romantic",
+		"birthYear": 1845,
+		"deathYear": 1924,
+		"birthPlace": "Pamiers, France",
+		"country": "France",
+		"portraitFiles": ["Gabriel Faure.jpg"]
+	},
+	{
+		"id": "franck",
+		"name": "César Franck",
+		"aliases": ["Franck", "Cesar Franck", "César"],
+		"period": "Romantic",
+		"birthYear": 1822,
+		"deathYear": 1890,
+		"birthPlace": "Liège, United Kingdom of the Netherlands",
+		"country": "Belgium / France",
+		"portraitFiles": ["César Franck by Pierre Petit.jpg"]
+	},
+	{
+		"id": "bizet",
+		"name": "Georges Bizet",
+		"aliases": ["Bizet", "Georges Bizet"],
+		"period": "Romantic",
+		"birthYear": 1838,
+		"deathYear": 1875,
+		"birthPlace": "Paris, France",
+		"country": "France",
+		"portraitFiles": ["Georges Bizet portrait early career.jpg"]
+	},
+	{
+		"id": "gounod",
+		"name": "Charles Gounod",
+		"aliases": ["Gounod", "Charles-François Gounod", "Charles Gounod"],
+		"period": "Romantic",
+		"birthYear": 1818,
+		"deathYear": 1893,
+		"birthPlace": "Paris, France",
+		"country": "France",
+		"portraitFiles": ["Charles Gounod 002.jpg"]
+	},
+	{
+		"id": "massenet",
+		"name": "Jules Massenet",
+		"aliases": ["Massenet", "Jules"],
+		"period": "Romantic",
+		"birthYear": 1842,
+		"deathYear": 1912,
+		"birthPlace": "Montaud, France",
+		"country": "France",
+		"portraitFiles": ["Portrait of Jules Massenet.jpg"]
+	},
+	{
+		"id": "offenbach",
+		"name": "Jacques Offenbach",
+		"aliases": ["Offenbach", "Jacques"],
+		"period": "Romantic",
+		"birthYear": 1819,
+		"deathYear": 1880,
+		"birthPlace": "Cologne, Prussia",
+		"country": "Germany / France",
+		"portraitFiles": [
+			"Carjat etienne portrait de jacques-offenbach-cropped-alt.jpg"
+		]
+	},
+	{
+		"id": "glazunov",
+		"name": "Alexander Glazunov",
+		"aliases": ["Glazunov", "Alexander Glazunov"],
+		"period": "Late Romantic",
+		"birthYear": 1865,
+		"deathYear": 1936,
+		"birthPlace": "Saint Petersburg, Russian Empire",
+		"country": "Russia / France",
+		"portraitFiles": ["Portrait of the Composer Alexander Glazunov.jpg"]
+	},
+	{
+		"id": "cui",
+		"name": "César Cui",
+		"aliases": ["Cui", "Cesar Cui"],
+		"period": "Romantic",
+		"birthYear": 1835,
+		"deathYear": 1918,
+		"birthPlace": "Vilnius, Russian Empire",
+		"country": "Russia",
+		"portraitFiles": ["Cesar cui.jpg"]
+	},
+	{
+		"id": "balakirev",
+		"name": "Mily Balakirev",
+		"aliases": ["Balakirev", "Mily Balakirev"],
+		"period": "Romantic",
+		"birthYear": 1837,
+		"deathYear": 1910,
+		"birthPlace": "Nizhny Novgorod, Russian Empire",
+		"country": "Russia",
+		"portraitFiles": ["Mily Balakirev.jpg"]
+	},
+	{
+		"id": "lyadov",
+		"name": "Anatoly Lyadov",
+		"aliases": ["Lyadov", "Anatoly Lyadov", "Anatoli Liadov"],
+		"period": "Romantic",
+		"birthYear": 1855,
+		"deathYear": 1914,
+		"birthPlace": "Saint Petersburg, Russian Empire",
+		"country": "Russia",
+		"portraitFiles": ["Anatoly Lyadov.jpg"]
+	},
+	{
+		"id": "milhaud",
+		"name": "Darius Milhaud",
+		"aliases": ["Milhaud", "Darius"],
+		"period": "Modern",
+		"birthYear": 1892,
+		"deathYear": 1974,
+		"birthPlace": "Aix-en-Provence, France",
+		"country": "France",
+		"portraitFiles": [
+			"Darius Milhaud - Buste, face - Compositeur français - btv1b102197220.jpg"
+		]
+	},
+	{
+		"id": "respighi",
+		"name": "Ottorino Respighi",
+		"aliases": ["Respighi", "Ottorino"],
+		"period": "Late Romantic / Modern",
+		"birthYear": 1879,
+		"deathYear": 1936,
+		"birthPlace": "Bologna, Italy",
+		"country": "Italy",
+		"portraitFiles": [
+			"Ottorino Respighi (1936) - Archivio Storico Ricordi FOTO002727.jpg"
+		]
+	},
+	{
+		"id": "szymanowski",
+		"name": "Karol Szymanowski",
+		"aliases": ["Szymanowski", "Karol"],
+		"period": "Modern",
+		"birthYear": 1882,
+		"deathYear": 1937,
+		"birthPlace": "Tymoshovka, Russian Empire",
+		"country": "Poland",
+		"portraitFiles": ["Karol Szymanowski.jpg"]
+	},
+	{
+		"id": "lili-boulanger",
+		"name": "Lili Boulanger",
+		"aliases": ["Lili Boulanger", "Lili"],
+		"period": "Modern",
+		"birthYear": 1893,
+		"deathYear": 1918,
+		"birthPlace": "Paris, France",
+		"country": "France",
+		"portraitFiles": ["Lili Boulanger.jpg"]
+	},
+	{
+		"id": "tansman",
+		"name": "Alexander Tansman",
+		"aliases": ["Tansman", "Aleksander Tansman", "Alexander Tansman"],
+		"period": "Modern",
+		"birthYear": 1897,
+		"deathYear": 1986,
+		"birthPlace": "Łódź, Russian Empire",
+		"country": "Poland / France",
+		"portraitFiles": ["Aleksander Tansman Alban Paris 1932.jpg"]
+	},
+	{
+		"id": "florent-schmitt",
+		"name": "Florent Schmitt",
+		"aliases": ["Schmitt", "Florent Schmitt"],
+		"period": "Modern",
+		"birthYear": 1870,
+		"deathYear": 1958,
+		"birthPlace": "Meurthe-et-Moselle, France",
+		"country": "France",
+		"portraitFiles": ["Florent Schmitt 1900.jpg"]
 	}
 ]
