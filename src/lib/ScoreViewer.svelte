@@ -1,17 +1,29 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { loadAnnotations, saveAnnotation, flushAnnotationSaves, requestPersistentStorage } from './annotationStore';
-	import type { ScoreItem, Stroke, Point, SymbolStamp, TextNote } from './types';
+	import {
+		loadAnnotations,
+		saveAnnotation,
+		flushAnnotationSaves,
+		requestPersistentStorage
+	} from './annotationStore';
+	import type {
+		ScoreItem,
+		Stroke,
+		Point,
+		SymbolStamp,
+		TextNote
+	} from './types';
 	import { MUSIC_SYMBOLS, MUSIC_SYMBOL_CATEGORIES } from './musicSymbols';
 	import { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';
-	import {
-		acquireScreenWakeLock,
-		releaseScreenWakeLock
-	} from './wakeLock';
+	import { acquireScreenWakeLock, releaseScreenWakeLock } from './wakeLock';
 	import { settings } from './settingsStore';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
 	import { get } from 'svelte/store';
-	import type { PdfDocumentProxy, PdfPageProxy, PdfRenderTask } from './pdfUtils';
+	import type {
+		PdfDocumentProxy,
+		PdfPageProxy,
+		PdfRenderTask
+	} from './pdfUtils';
 	import {
 		ArrowLeft,
 		ArrowUpRight,
@@ -46,10 +58,30 @@
 	} from '@lucide/svelte';
 	let { score, onClose }: { score: ScoreItem; onClose: () => void } = $props();
 
-	type Tool = 'pan' | 'pen' | 'highlighter' | 'eraser' | 'line' | 'arrow' | 'symbol' | 'text';
+	type Tool =
+		| 'pan'
+		| 'pen'
+		| 'highlighter'
+		| 'eraser'
+		| 'line'
+		| 'arrow'
+		| 'symbol'
+		| 'text';
 	type Fit = 'page' | 'width';
-	type Snapshot = { strokes: Stroke[]; stamps: SymbolStamp[]; notes: TextNote[] };
-	type TextEditor = { page: number; x: number; y: number; text: string; id?: string; screenX?: number; screenY?: number };
+	type Snapshot = {
+		strokes: Stroke[];
+		stamps: SymbolStamp[];
+		notes: TextNote[];
+	};
+	type TextEditor = {
+		page: number;
+		x: number;
+		y: number;
+		text: string;
+		id?: string;
+		screenX?: number;
+		screenY?: number;
+	};
 
 	let pdf = $state<PdfDocumentProxy | null>(null);
 	let openedPdf: Awaited<ReturnType<typeof openPdfSource>> | null = null;
@@ -85,13 +117,22 @@
 	let isDrawing = $state(false);
 	let tool = $state<Tool>('pan');
 	let annotating = $derived(controls && tool !== 'pan' && !reading);
-	const strokeTool = $derived(tool === 'pen' || tool === 'highlighter' || tool === 'line' || tool === 'arrow');
-	const showToolOptions = $derived(annotating && (strokeTool || tool === 'eraser'));
+	const strokeTool = $derived(
+		tool === 'pen' ||
+			tool === 'highlighter' ||
+			tool === 'line' ||
+			tool === 'arrow'
+	);
+	const showToolOptions = $derived(
+		annotating && (strokeTool || tool === 'eraser')
+	);
 	const paletteAway = $derived(isDrawing);
 	let color = $state('#111827');
 	let width = $state(3);
 	let selectedSymbol = $state(MUSIC_SYMBOLS[0]);
-	let symbolCategory = $state<'Recent' | (typeof MUSIC_SYMBOL_CATEGORIES)[number]>('Recent');
+	let symbolCategory = $state<
+		'Recent' | (typeof MUSIC_SYMBOL_CATEGORIES)[number]
+	>('Recent');
 	let symbolSearch = $state('');
 	let symbolSize = $state(34);
 	let recentSymbols = $state<string[]>([]);
@@ -120,7 +161,13 @@
 	let textSize = $state(18);
 	let textEditor = $state<TextEditor | null>(null);
 	let textDraft = $state('');
-	let draggingAnnot: { kind: 'stamp' | 'note'; page: number; id: string; canvas: HTMLCanvasElement; pointerId: number } | null = null;
+	let draggingAnnot: {
+		kind: 'stamp' | 'note';
+		page: number;
+		id: string;
+		canvas: HTMLCanvasElement;
+		pointerId: number;
+	} | null = null;
 	let strokes = $state<Record<number, Stroke[]>>({});
 	let stamps = $state<Record<number, SymbolStamp[]>>({});
 	let notes = $state<Record<number, TextNote[]>>({});
@@ -178,7 +225,15 @@
 	}
 
 	const prefs = $derived(`sonora-viewer-${score.id}`);
-	const colors = ['#c2410c', '#111827', '#2563eb', '#15803d', '#a16207', '#7e22ce', '#ffffff'];
+	const colors = [
+		'#c2410c',
+		'#111827',
+		'#2563eb',
+		'#15803d',
+		'#a16207',
+		'#7e22ce',
+		'#ffffff'
+	];
 	const primaryColors = colors.slice(0, 3);
 	const extraColors = colors.slice(3);
 	let colorPickerOpen = $state(false);
@@ -196,13 +251,20 @@
 			return MUSIC_SYMBOLS.filter((s) => s.name.toLowerCase().includes(q));
 		}
 		if (symbolCategory === 'Recent') {
-			return recentSymbolObjects.length ? recentSymbolObjects : MUSIC_SYMBOLS.slice(0, 24);
+			return recentSymbolObjects.length
+				? recentSymbolObjects
+				: MUSIC_SYMBOLS.slice(0, 24);
 		}
 		return MUSIC_SYMBOLS.filter((s) => s.category === symbolCategory);
 	});
-	const canUndo = $derived((historyIndex[page] ?? 0) > 0);
-	const canRedo = $derived((historyIndex[page] ?? 0) < (histories[page]?.length ?? 1) - 1);
-
+	const canUndo = $derived(
+		visiblePages.some((p) => (historyIndex[p] ?? 0) > 0)
+	);
+	const canRedo = $derived(
+		visiblePages.some(
+			(p) => (historyIndex[p] ?? 0) < (histories[p]?.length ?? 1) - 1
+		)
+	);
 
 	async function requestWakeLock() {
 		if (!keepAwake || closed) {
@@ -229,11 +291,17 @@
 		textSize = s.textSize;
 		if (!autoLayout) dual = s.dualPages;
 		else if (typeof window !== 'undefined') {
-			dual = window.matchMedia('(orientation: landscape)').matches && window.innerWidth >= 720;
+			dual =
+				window.matchMedia('(orientation: landscape)').matches &&
+				window.innerWidth >= 720;
 		}
 		if (keepAwake) void requestWakeLock();
 		else void releaseWakeLock();
-		if (settingsHydrated && (prevDual !== dual || prevAuto !== autoLayout) && hasPainted) {
+		if (
+			settingsHydrated &&
+			(prevDual !== dual || prevAuto !== autoLayout) &&
+			hasPainted
+		) {
 			void render({ quiet: true });
 		}
 		settingsHydrated = true;
@@ -248,7 +316,9 @@
 			textSize = global.textSize;
 			fit = global.defaultFit;
 			if (autoLayout) {
-				dual = window.matchMedia('(orientation: landscape)').matches && window.innerWidth >= 720;
+				dual =
+					window.matchMedia('(orientation: landscape)').matches &&
+					window.innerWidth >= 720;
 			} else {
 				dual = global.dualPages;
 			}
@@ -258,8 +328,11 @@
 			renderedZoom = zoom;
 			visualScale = 1;
 			needsCenter = true;
-			if (typeof saved.fit === 'string') fit = saved.fit === 'width' ? 'width' : 'page';
-			recentSymbols = Array.isArray(saved.recentSymbols) ? saved.recentSymbols : [];
+			if (typeof saved.fit === 'string')
+				fit = saved.fit === 'width' ? 'width' : 'page';
+			recentSymbols = Array.isArray(saved.recentSymbols)
+				? saved.recentSymbols
+				: [];
 			if (typeof saved.page === 'number' && saved.page > 0) {
 				page = saved.page;
 				pageInput = String(saved.page);
@@ -281,9 +354,16 @@
 				}
 				return;
 			}
-			if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
+			if (
+				event.target instanceof HTMLInputElement ||
+				event.target instanceof HTMLTextAreaElement
+			)
 				return;
-			if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') {
+			if (
+				event.key === 'ArrowRight' ||
+				event.key === 'PageDown' ||
+				event.key === ' '
+			) {
 				event.preventDefault();
 				next();
 			} else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
@@ -294,15 +374,31 @@
 			else if (event.key.toLowerCase() === 'f') {
 				event.preventDefault();
 				reading ? exitReading() : enterReading();
-			} else if (event.key.toLowerCase() === 'p') { controls = true; choose('pen'); }
-			else if (event.key.toLowerCase() === 'h') { controls = true; choose('highlighter'); }
-			else if (event.key.toLowerCase() === 'e') { controls = true; choose('eraser'); }
-			else if (event.key.toLowerCase() === 's') { controls = true; choose('symbol'); }
-			else if (event.key.toLowerCase() === 't') { controls = true; choose('text'); }
-			else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+			} else if (event.key.toLowerCase() === 'p') {
+				controls = true;
+				choose('pen');
+			} else if (event.key.toLowerCase() === 'h') {
+				controls = true;
+				choose('highlighter');
+			} else if (event.key.toLowerCase() === 'e') {
+				controls = true;
+				choose('eraser');
+			} else if (event.key.toLowerCase() === 's') {
+				controls = true;
+				choose('symbol');
+			} else if (event.key.toLowerCase() === 't') {
+				controls = true;
+				choose('text');
+			} else if (
+				(event.ctrlKey || event.metaKey) &&
+				event.key.toLowerCase() === 'z'
+			) {
 				event.preventDefault();
 				undo();
-			} else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+			} else if (
+				(event.ctrlKey || event.metaKey) &&
+				event.key.toLowerCase() === 'y'
+			) {
 				event.preventDefault();
 				redo();
 			} else if (event.key === 'Escape') {
@@ -362,7 +458,8 @@
 			void flushPendingAnnotations().finally(() => {
 				closed = true;
 				releaseCanvases();
-				if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+				if (document.fullscreenElement)
+					void document.exitFullscreen().catch(() => {});
 				void destroyDocument();
 			});
 		};
@@ -379,7 +476,9 @@
 			const hasBlob = !!(score.pdfBlob && score.pdfBlob.size > 0);
 			const hasPath = !!(score.nativePath && score.nativePath.length > 0);
 			if (!hasUrl && !hasBlob && !hasPath) {
-				throw new Error('PDF data is missing. Try refreshing the library and open again.');
+				throw new Error(
+					'PDF data is missing. Try refreshing the library and open again.'
+				);
 			}
 			const opened = await openPdfSource({
 				url: score.pdfUrl,
@@ -498,18 +597,26 @@
 			}
 		} catch (reason) {
 			if (
-				!(reason instanceof Error && reason.name === 'RenderingCancelledException') &&
+				!(
+					reason instanceof Error &&
+					reason.name === 'RenderingCancelledException'
+				) &&
 				current === generation
 			) {
 				console.error('PDF render failed', reason);
-				error = 'This page could not be rendered at the current size. Try Fit Page or reduce zoom.';
+				error =
+					'This page could not be rendered at the current size. Try Fit Page or reduce zoom.';
 			}
 		} finally {
 			if (current === generation) loading = false;
 		}
 	}
 
-		async function renderPage(number: number, index: number, current: number): Promise<PageBitmap | null> {
+	async function renderPage(
+		number: number,
+		index: number,
+		current: number
+	): Promise<PageBitmap | null> {
 		if (!pdf || !host) return null;
 		const pdfPage = await pdf.getPage(number);
 		if (current !== generation) return null;
@@ -528,9 +635,20 @@
 		const area = Math.max(1, base.width * base.height);
 		const safeScale = Math.sqrt(MAX_CANVAS_PIXELS / (area * dpr * dpr));
 		// Bitmap resolution tracks the logical zoom so it stays sharp after settle.
-		const renderScale = Math.max(0.18, Math.min(2.4, fitScale * zoom, safeScale));
+		const renderScale = Math.max(
+			0.18,
+			Math.min(2.4, fitScale * zoom, safeScale)
+		);
 		const layoutScale = Math.max(0.18, Math.min(2.4, fitScale));
-		return paintPage(pdfPage, number, index, layoutScale, renderScale, dpr, current);
+		return paintPage(
+			pdfPage,
+			number,
+			index,
+			layoutScale,
+			renderScale,
+			dpr,
+			current
+		);
 	}
 
 	type PageBitmap = {
@@ -559,7 +677,8 @@
 		const renderViewport = pdfPage.getViewport({ scale: renderScale });
 		const canvasW = Math.ceil(renderViewport.width * dpr);
 		const canvasH = Math.ceil(renderViewport.height * dpr);
-		if (canvasW * canvasH > MAX_CANVAS_PIXELS) throw new Error('Canvas exceeds safe pixel budget');
+		if (canvasW * canvasH > MAX_CANVAS_PIXELS)
+			throw new Error('Canvas exceeds safe pixel budget');
 
 		// Fully rasterize offscreen — never touch the live canvas until every page is ready.
 		const offscreen = document.createElement('canvas');
@@ -616,10 +735,16 @@
 	/** Center the score in the workspace (used on open / fit / page jumps). */
 	function centerPages() {
 		if (!host) return;
-		const leftW = leftPdf ? Number.parseFloat(leftPdf.style.width) || leftPdf.clientWidth : 0;
-		const leftH = leftPdf ? Number.parseFloat(leftPdf.style.height) || leftPdf.clientHeight : 0;
+		const leftW = leftPdf
+			? Number.parseFloat(leftPdf.style.width) || leftPdf.clientWidth
+			: 0;
+		const leftH = leftPdf
+			? Number.parseFloat(leftPdf.style.height) || leftPdf.clientHeight
+			: 0;
 		const rightW =
-			dual && rightPdf ? Number.parseFloat(rightPdf.style.width) || rightPdf.clientWidth : 0;
+			dual && rightPdf
+				? Number.parseFloat(rightPdf.style.width) || rightPdf.clientWidth
+				: 0;
 		const gap = dual && rightW ? 20 : 0;
 		const contentW = leftW + gap + rightW;
 		const contentH = leftH;
@@ -638,7 +763,8 @@
 				Math.max(1, page - (dual ? 2 : 1))
 			];
 			for (const number of upcoming) {
-				if (number >= 1 && number <= pdf.numPages) void pdf.getPage(number).catch(() => {});
+				if (number >= 1 && number <= pdf.numPages)
+					void pdf.getPage(number).catch(() => {});
 			}
 		}, 60);
 	}
@@ -669,19 +795,29 @@
 		}
 	}
 
-	function hitAnnotation(number: number, point: Point, radius = 0.04): { kind: 'stamp' | 'note'; id: string } | null {
+	function hitAnnotation(
+		number: number,
+		point: Point,
+		radius = 0.04
+	): { kind: 'stamp' | 'note'; id: string } | null {
 		for (let i = (stamps[number] || []).length - 1; i >= 0; i--) {
 			const stamp = stamps[number][i];
-			if (Math.hypot(stamp.x - point.x, stamp.y - point.y) <= radius) return { kind: 'stamp', id: stamp.id };
+			if (Math.hypot(stamp.x - point.x, stamp.y - point.y) <= radius)
+				return { kind: 'stamp', id: stamp.id };
 		}
 		for (let i = (notes[number] || []).length - 1; i >= 0; i--) {
 			const note = notes[number][i];
-			if (Math.hypot(note.x - point.x, note.y - point.y) <= radius) return { kind: 'note', id: note.id };
+			if (Math.hypot(note.x - point.x, note.y - point.y) <= radius)
+				return { kind: 'note', id: note.id };
 		}
 		return null;
 	}
 
-	function placeSymbolAt(number: number, point: Point, canvas: HTMLCanvasElement | null) {
+	function placeSymbolAt(
+		number: number,
+		point: Point,
+		canvas: HTMLCanvasElement | null
+	) {
 		const stamp = {
 			id: crypto.randomUUID(),
 			symbol: selectedSymbol.glyph,
@@ -692,7 +828,10 @@
 			color
 		};
 		stamps[number] = [...(stamps[number] || []), stamp];
-		recentSymbols = [selectedSymbol.id, ...recentSymbols.filter((id) => id !== selectedSymbol.id)].slice(0, 10);
+		recentSymbols = [
+			selectedSymbol.id,
+			...recentSymbols.filter((id) => id !== selectedSymbol.id)
+		].slice(0, 10);
 		symbolSheetCollapsed = true;
 		persistPrefs();
 		if (canvas) redraw(number, canvas);
@@ -704,7 +843,11 @@
 		placeSymbolAt(page, { x: 0.5, y: 0.4 }, canvas);
 	}
 
-	function begin(event: PointerEvent, number: number, canvas: HTMLCanvasElement) {
+	function begin(
+		event: PointerEvent,
+		number: number,
+		canvas: HTMLCanvasElement
+	) {
 		if (reading || !annotating) return;
 		if (textEditor) {
 			commitText();
@@ -713,10 +856,20 @@
 		event.preventDefault();
 		const point = position(event, canvas);
 		if (tool !== 'eraser') {
-			const hit = hitAnnotation(number, point, tool === 'symbol' || tool === 'text' ? 0.05 : 0.035);
+			const hit = hitAnnotation(
+				number,
+				point,
+				tool === 'symbol' || tool === 'text' ? 0.05 : 0.035
+			);
 			if (hit) {
 				canvas.setPointerCapture(event.pointerId);
-				draggingAnnot = { kind: hit.kind, page: number, id: hit.id, canvas, pointerId: event.pointerId };
+				draggingAnnot = {
+					kind: hit.kind,
+					page: number,
+					id: hit.id,
+					canvas,
+					pointerId: event.pointerId
+				};
 				return;
 			}
 		}
@@ -771,9 +924,19 @@
 			screenY = Math.min(window.innerHeight - 80, Math.max(12, screenY));
 		}
 		textDraft = existing?.text || '';
-		textEditor = { page: number, x, y, text: textDraft, id: existing?.id, screenX, screenY };
+		textEditor = {
+			page: number,
+			x,
+			y,
+			text: textDraft,
+			id: existing?.id,
+			screenX,
+			screenY
+		};
 		void tick().then(() => {
-			const el = document.querySelector<HTMLInputElement>('[data-score-text-input]');
+			const el = document.querySelector<HTMLInputElement>(
+				'[data-score-text-input]'
+			);
 			el?.focus();
 			el?.select();
 		});
@@ -787,12 +950,21 @@
 		if (text) {
 			if (editor.id)
 				notes[editor.page] = (notes[editor.page] || []).map((note) =>
-					note.id === editor.id ? { ...note, text, fontSize: textSize, color } : note
+					note.id === editor.id
+						? { ...note, text, fontSize: textSize, color }
+						: note
 				);
 			else
 				notes[editor.page] = [
 					...(notes[editor.page] || []),
-					{ id: crypto.randomUUID(), text, x: editor.x, y: editor.y, fontSize: textSize, color }
+					{
+						id: crypto.randomUUID(),
+						text,
+						x: editor.x,
+						y: editor.y,
+						fontSize: textSize,
+						color
+					}
 				];
 			const canvas = editor.page === visiblePages[0] ? leftInk : rightInk;
 			if (canvas) redraw(editor.page, canvas);
@@ -804,7 +976,10 @@
 		textDraft = '';
 	}
 
-	function updateCursorOverlay(event: PointerEvent, canvas?: HTMLCanvasElement | null) {
+	function updateCursorOverlay(
+		event: PointerEvent,
+		canvas?: HTMLCanvasElement | null
+	) {
 		if (tool !== 'eraser' && tool !== 'symbol') {
 			cursorScreen = null;
 			return;
@@ -817,7 +992,9 @@
 		const targetCanvas =
 			draggingAnnot?.canvas ||
 			drawing?.canvas ||
-			(event.currentTarget instanceof HTMLCanvasElement ? event.currentTarget : null);
+			(event.currentTarget instanceof HTMLCanvasElement
+				? event.currentTarget
+				: null);
 		updateCursorOverlay(event, targetCanvas);
 
 		if (draggingAnnot) {
@@ -825,12 +1002,13 @@
 			const x = Math.min(0.98, Math.max(0.02, point.x));
 			const y = Math.min(0.98, Math.max(0.02, point.y));
 			if (draggingAnnot.kind === 'stamp') {
-				stamps[draggingAnnot.page] = (stamps[draggingAnnot.page] || []).map((stamp) =>
-					stamp.id === draggingAnnot!.id ? { ...stamp, x, y } : stamp
+				stamps[draggingAnnot.page] = (stamps[draggingAnnot.page] || []).map(
+					(stamp) =>
+						stamp.id === draggingAnnot!.id ? { ...stamp, x, y } : stamp
 				);
 			} else {
-				notes[draggingAnnot.page] = (notes[draggingAnnot.page] || []).map((note) =>
-					note.id === draggingAnnot!.id ? { ...note, x, y } : note
+				notes[draggingAnnot.page] = (notes[draggingAnnot.page] || []).map(
+					(note) => (note.id === draggingAnnot!.id ? { ...note, x, y } : note)
 				);
 			}
 			redraw(draggingAnnot.page, draggingAnnot.canvas);
@@ -839,7 +1017,9 @@
 		if (!drawing) return;
 		for (const pointEvent of event.getCoalescedEvents?.() || [event]) {
 			if (drawing.stroke) {
-				const stroke = (strokes[drawing.page] || []).find((item) => item.id === drawing?.stroke?.id);
+				const stroke = (strokes[drawing.page] || []).find(
+					(item) => item.id === drawing?.stroke?.id
+				);
 				if (stroke) {
 					const point = position(pointEvent, drawing.canvas);
 					stroke.points =
@@ -847,7 +1027,13 @@
 							? [stroke.points[0], point]
 							: [...stroke.points, point];
 				}
-			} else erase(position(pointEvent, drawing.canvas), drawing.page, drawing.canvas, false);
+			} else
+				erase(
+					position(pointEvent, drawing.canvas),
+					drawing.page,
+					drawing.canvas,
+					false
+				);
 		}
 		if (!drawing.raf)
 			drawing.raf = requestAnimationFrame(() => {
@@ -859,7 +1045,9 @@
 		if (draggingAnnot) {
 			const active = draggingAnnot;
 			draggingAnnot = null;
-			try { active.canvas.releasePointerCapture(active.pointerId); } catch {}
+			try {
+				active.canvas.releasePointerCapture(active.pointerId);
+			} catch {}
 			checkpoint(active.page);
 			redraw(active.page, active.canvas);
 			return;
@@ -869,7 +1057,9 @@
 		if (active.raf) cancelAnimationFrame(active.raf);
 		drawing = null;
 		isDrawing = false;
-		try { active.canvas.releasePointerCapture(active.pointerId); } catch {}
+		try {
+			active.canvas.releasePointerCapture(active.pointerId);
+		} catch {}
 		redraw(active.page, active.canvas);
 		checkpoint(active.page);
 	}
@@ -887,12 +1077,17 @@
 		return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 	}
 
-	function strokeHitsEraser(stroke: Stroke, point: Point, radius: number): boolean {
+	function strokeHitsEraser(
+		stroke: Stroke,
+		point: Point,
+		radius: number
+	): boolean {
 		const pts = stroke.points;
 		if (!pts.length) return false;
 		// Point hits (works for freehand samples and endpoints)
 		for (const candidate of pts) {
-			if (Math.hypot(candidate.x - point.x, candidate.y - point.y) < radius) return true;
+			if (Math.hypot(candidate.x - point.x, candidate.y - point.y) < radius)
+				return true;
 		}
 		// Segment hits — critical for line / arrow (often only 2 points)
 		for (let i = 1; i < pts.length; i++) {
@@ -901,11 +1096,18 @@
 		return false;
 	}
 
-	function erase(point: Point, number: number, canvas: HTMLCanvasElement | null, save = true) {
+	function erase(
+		point: Point,
+		number: number,
+		canvas: HTMLCanvasElement | null,
+		save = true
+	) {
 		const radius = Math.max(0.012, width / 700);
 		let changed = false;
 		const before = strokes[number] || [];
-		const after = before.filter((stroke) => !strokeHitsEraser(stroke, point, radius));
+		const after = before.filter(
+			(stroke) => !strokeHitsEraser(stroke, point, radius)
+		);
 		if (after.length !== before.length) {
 			strokes[number] = after;
 			changed = true;
@@ -940,7 +1142,8 @@
 		context.setTransform(scale, 0, 0, scale, 0, 0);
 		context.clearRect(0, 0, layoutW, layoutH);
 		if (!annotationsVisible) return;
-		for (const stroke of strokes[number] || []) drawStroke(context, stroke, canvas);
+		for (const stroke of strokes[number] || [])
+			drawStroke(context, stroke, canvas);
 		context.save();
 		context.textAlign = 'center';
 		context.textBaseline = 'middle';
@@ -963,7 +1166,11 @@
 			context.restore();
 		}
 	}
-	function drawStroke(context: CanvasRenderingContext2D, stroke: Stroke, canvas: HTMLCanvasElement) {
+	function drawStroke(
+		context: CanvasRenderingContext2D,
+		stroke: Stroke,
+		canvas: HTMLCanvasElement
+	) {
 		if (!stroke.points.length) return;
 		const points = stroke.points.map((p) => pointToCanvas(p, canvas));
 		context.save();
@@ -999,7 +1206,8 @@
 		} else {
 			context.beginPath();
 			context.moveTo(points[0].x, points[0].y);
-			for (let i = 1; i < points.length; i++) context.lineTo(points[i].x, points[i].y);
+			for (let i = 1; i < points.length; i++)
+				context.lineTo(points[i].x, points[i].y);
 			context.stroke();
 		}
 		context.restore();
@@ -1018,8 +1226,8 @@
 	}
 	function ensureHistory(number: number) {
 		if (!histories[number]) {
-			histories[number] = [snapshot(number)];
-			historyIndex[number] = 0;
+			histories = { ...histories, [number]: [snapshot(number)] };
+			historyIndex = { ...historyIndex, [number]: 0 };
 		}
 	}
 	function checkpoint(number: number) {
@@ -1027,40 +1235,56 @@
 		const list = histories[number];
 		const index = historyIndex[number] ?? list.length - 1;
 		const nextList = [...list.slice(0, index + 1), snapshot(number)].slice(-80);
-		histories[number] = nextList;
-		historyIndex[number] = nextList.length - 1;
+		histories = { ...histories, [number]: nextList };
+		historyIndex = { ...historyIndex, [number]: nextList.length - 1 };
 		scheduleSave(number);
 	}
 	function applySnapshot(number: number, state: Snapshot) {
-		strokes[number] = cloneData(state.strokes);
-		stamps[number] = cloneData(state.stamps);
-		notes[number] = cloneData(state.notes);
-		redraw(number, number === visiblePages[0] ? leftInk : rightInk);
+		strokes = { ...strokes, [number]: cloneData(state.strokes) };
+		stamps = { ...stamps, [number]: cloneData(state.stamps) };
+		notes = { ...notes, [number]: cloneData(state.notes) };
+		const canvas =
+			number === visiblePages[0]
+				? leftInk
+				: number === visiblePages[1]
+					? rightInk
+					: null;
+		if (canvas) redraw(number, canvas);
 		scheduleSave(number);
 	}
 	function undo() {
-		ensureHistory(page);
-		const index = historyIndex[page] ?? 0;
-		if (index > 0) {
-			historyIndex[page] = index - 1;
-			applySnapshot(page, histories[page][index - 1]);
+		for (const p of visiblePages) {
+			ensureHistory(p);
+			const index = historyIndex[p] ?? 0;
+			if (index > 0) {
+				historyIndex = { ...historyIndex, [p]: index - 1 };
+				applySnapshot(p, histories[p][index - 1]);
+			}
 		}
 	}
 	function redo() {
-		ensureHistory(page);
-		const index = historyIndex[page] ?? 0;
-		if (index < histories[page].length - 1) {
-			historyIndex[page] = index + 1;
-			applySnapshot(page, histories[page][index + 1]);
+		for (const p of visiblePages) {
+			ensureHistory(p);
+			const index = historyIndex[p] ?? 0;
+			const list = histories[p];
+			if (index < list.length - 1) {
+				historyIndex = { ...historyIndex, [p]: index + 1 };
+				applySnapshot(p, list[index + 1]);
+			}
 		}
 	}
 	function scheduleSave(number: number) {
 		const old = saveTimers.get(number);
 		if (old) clearTimeout(old);
-		saveTimers.set(number, setTimeout(() => {
-			saveTimers.delete(number);
-			void saveAnnotations(number).catch((error) => console.error('Annotation save failed', error));
-		}, 150));
+		saveTimers.set(
+			number,
+			setTimeout(() => {
+				saveTimers.delete(number);
+				void saveAnnotations(number).catch((error) =>
+					console.error('Annotation save failed', error)
+				);
+			}, 150)
+		);
 	}
 	async function saveAnnotations(number: number) {
 		await saveAnnotation(score.id, number, {
@@ -1123,12 +1347,17 @@
 		pageTransition = true;
 		stopPanMomentum();
 		needsCenter = true;
-		page = Math.min(pdf.numPages, dual ? Math.min(pdf.numPages, page + 2) : page + 1);
+		page = Math.min(
+			pdf.numPages,
+			dual ? Math.min(pdf.numPages, page + 2) : page + 1
+		);
 		pageInput = String(page);
 		ensureHistory(page);
 		persistPrefs();
 		void render({ quiet: hasPainted }).finally(() => {
-			requestAnimationFrame(() => { pageTransition = false; });
+			requestAnimationFrame(() => {
+				pageTransition = false;
+			});
 		});
 	}
 	function previous() {
@@ -1141,11 +1370,16 @@
 		ensureHistory(page);
 		persistPrefs();
 		void render({ quiet: hasPainted }).finally(() => {
-			requestAnimationFrame(() => { pageTransition = false; });
+			requestAnimationFrame(() => {
+				pageTransition = false;
+			});
 		});
 	}
 	function goToPage() {
-		const value = Math.max(1, Math.min(pdf?.numPages || 1, Number.parseInt(pageInput, 10) || 1));
+		const value = Math.max(
+			1,
+			Math.min(pdf?.numPages || 1, Number.parseInt(pageInput, 10) || 1)
+		);
 		const nextPage = dual && value % 2 === 0 ? value - 1 : value;
 		if (nextPage === page) return;
 		stopPanMomentum();
@@ -1222,7 +1456,6 @@
 		};
 		panMomentumRaf = requestAnimationFrame(tick);
 	}
-
 
 	function touchDistance(a: Touch, b: Touch) {
 		return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
@@ -1327,7 +1560,9 @@
 		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
 		panDrag = null;
 		try {
-			(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+			(event.currentTarget as HTMLElement).releasePointerCapture(
+				event.pointerId
+			);
 		} catch {}
 		if (Math.hypot(panVx, panVy) > 0.8) startPanMomentum();
 		else {
@@ -1340,7 +1575,11 @@
 		event.preventDefault();
 		if (event.ctrlKey || event.metaKey) {
 			const pixelDelta =
-				event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * 40 : event.deltaY;
+				event.deltaMode === 1
+					? event.deltaY * 16
+					: event.deltaMode === 2
+						? event.deltaY * 40
+						: event.deltaY;
 			const factor = Math.exp(-pixelDelta * 0.0016);
 			zoomPending = Math.max(0.35, Math.min(3, zoom * factor));
 			if (host) {
@@ -1389,7 +1628,8 @@
 		searchStatus = 'Not found';
 	}
 	function downloadScore() {
-		const href = score.pdfUrl || (score.pdfBlob ? URL.createObjectURL(score.pdfBlob) : '');
+		const href =
+			score.pdfUrl || (score.pdfBlob ? URL.createObjectURL(score.pdfBlob) : '');
 		if (!href) return;
 		const link = document.createElement('a');
 		link.href = href;
@@ -1397,7 +1637,8 @@
 		link.target = '_blank';
 		link.rel = 'noopener';
 		link.click();
-		if (score.pdfBlob && !score.pdfUrl) setTimeout(() => URL.revokeObjectURL(href), 1000);
+		if (score.pdfBlob && !score.pdfUrl)
+			setTimeout(() => URL.revokeObjectURL(href), 1000);
 	}
 	function printScore() {
 		window.print();
@@ -1414,40 +1655,87 @@
 	{#if !reading}
 		<header class="topbar">
 			<div class="topbar-left">
-				<button class="icon-button" title="Back to library" aria-label="Back to library" onclick={() => void leave()}
-					><ArrowLeft size={19} /></button>
+				<button
+					class="icon-button"
+					title="Back to library"
+					aria-label="Back to library"
+					onclick={() => void leave()}><ArrowLeft size={19} /></button>
 				<div class="score-title">
 					<strong>{score.title}</strong><span>{score.composer}</span>
 				</div>
 			</div>
 			<div class="page-controls">
-				<button class="icon-button" title="Previous page" aria-label="Previous page" onclick={previous} disabled={page <= 1}
-					><ChevronLeft size={19} /></button>
-				<input aria-label="Page number" bind:value={pageInput} onkeydown={(e) => e.key === 'Enter' && goToPage()} onblur={goToPage} />
+				<button
+					class="icon-button"
+					title="Previous page"
+					aria-label="Previous page"
+					onclick={previous}
+					disabled={page <= 1}><ChevronLeft size={19} /></button>
+				<input
+					aria-label="Page number"
+					bind:value={pageInput}
+					onkeydown={(e) => e.key === 'Enter' && goToPage()}
+					onblur={goToPage} />
 				<span>/ {pdf?.numPages ?? score.totalPages}</span>
-				<button class="icon-button" title="Next page" aria-label="Next page" onclick={next} disabled={!pdf || page >= pdf.numPages}
+				<button
+					class="icon-button"
+					title="Next page"
+					aria-label="Next page"
+					onclick={next}
+					disabled={!pdf || page >= pdf.numPages}
 					><ChevronRight size={19} /></button>
 			</div>
 			<div class="topbar-right">
-				<button class="icon-button" class:active={bookmarked} title={bookmarked ? 'Remove bookmark' : 'Bookmark score'} onclick={toggleBookmark}
-					>{#if bookmarked}<BookmarkCheck size={18} />{:else}<Bookmark size={18} />{/if}</button>
-				<button class="icon-button" title="Search score" onclick={() => (searchOpen = !searchOpen)}><Search size={18} /></button>
-				<button class="icon-button" title="Reading mode (F)" onclick={enterReading}><Eye size={18} /></button>
+				<button
+					class="icon-button"
+					class:active={bookmarked}
+					title={bookmarked ? 'Remove bookmark' : 'Bookmark score'}
+					onclick={toggleBookmark}
+					>{#if bookmarked}<BookmarkCheck size={18} />{:else}<Bookmark
+							size={18} />{/if}</button>
+				<button
+					class="icon-button"
+					title="Search score"
+					onclick={() => (searchOpen = !searchOpen)}
+					><Search size={18} /></button>
+				<button
+					class="icon-button"
+					title="Reading mode (F)"
+					onclick={enterReading}><Eye size={18} /></button>
 			</div>
 		</header>
 	{:else}
-		<button class="reading-exit" title="Exit reading mode" aria-label="Exit reading mode" onclick={exitReading}
+		<button
+			class="reading-exit"
+			title="Exit reading mode"
+			aria-label="Exit reading mode"
+			onclick={exitReading}
 			><Minimize2 size={17} /><span>Exit reading</span></button>
 	{/if}
 
 	{#if !reading}
 		<footer class="bottombar">
 			<div class="footer-section">
-				<button class="icon-button" class:active={fit === 'page'} title="Fit page" onclick={() => setFit('page')}><Scan size={16} /></button>
-				<button class="icon-button" class:active={fit === 'width'} title="Fit width" onclick={() => setFit('width')}><StretchHorizontal size={17} /></button>
-				<button class="icon-button" title="Zoom out" onclick={() => setZoom(zoom - 0.08)}><ZoomOut size={17} /></button>
+				<button
+					class="icon-button"
+					class:active={fit === 'page'}
+					title="Fit page"
+					onclick={() => setFit('page')}><Scan size={16} /></button>
+				<button
+					class="icon-button"
+					class:active={fit === 'width'}
+					title="Fit width"
+					onclick={() => setFit('width')}
+					><StretchHorizontal size={17} /></button>
+				<button
+					class="icon-button"
+					title="Zoom out"
+					onclick={() => setZoom(zoom - 0.08)}><ZoomOut size={17} /></button>
 				<span>{Math.round(zoom * 100)}%</span>
-				<button class="icon-button" title="Zoom in" onclick={() => setZoom(zoom + 0.08)}><ZoomIn size={17} /></button>
+				<button
+					class="icon-button"
+					title="Zoom in"
+					onclick={() => setZoom(zoom + 0.08)}><ZoomIn size={17} /></button>
 			</div>
 			<div class="footer-section">
 				<button
@@ -1459,21 +1747,38 @@
 						persistPrefs();
 						void render({ quiet: hasPainted });
 					}}><Columns2 size={15} />{dual ? 'Single page' : 'Two pages'}</button>
-				<button class="icon-button" title="Show/hide annotations" onclick={toggleAnnotations}
-					>{#if annotationsVisible}<Eye size={17} />{:else}<EyeOff size={17} />{/if}</button>
-				<button class="icon-button" title="Fullscreen" onclick={toggleFullScreen}
-					>{#if isFullscreen}<Minimize2 size={17} />{:else}<Maximize2 size={17} />{/if}</button>
-				<button class="icon-button" title="Settings" onclick={() => (settingsOpen = !settingsOpen)}><Settings2 size={17} /></button>
+				<button
+					class="icon-button"
+					title="Show/hide annotations"
+					onclick={toggleAnnotations}
+					>{#if annotationsVisible}<Eye size={17} />{:else}<EyeOff
+							size={17} />{/if}</button>
+				<button
+					class="icon-button"
+					title="Fullscreen"
+					onclick={toggleFullScreen}
+					>{#if isFullscreen}<Minimize2 size={17} />{:else}<Maximize2
+							size={17} />{/if}</button>
+				<button
+					class="icon-button"
+					title="Settings"
+					onclick={() => (settingsOpen = !settingsOpen)}
+					><Settings2 size={17} /></button>
 			</div>
 		</footer>
 	{/if}
 
-
 	{#if searchOpen && !reading}<div class="search-panel">
-			<Search size={17} /><input bind:value={searchText} placeholder="Find text in this score…" onkeydown={(e) => e.key === 'Enter' && searchPdf()} />
+			<Search size={17} /><input
+				bind:value={searchText}
+				placeholder="Find text in this score…"
+				onkeydown={(e) => e.key === 'Enter' && searchPdf()} />
 			<button class="text-button" onclick={searchPdf}>Find</button>
 			<span>{searchStatus}</span>
-			<button class="icon-button" aria-label="Close search" onclick={() => (searchOpen = false)}><X size={17} /></button>
+			<button
+				class="icon-button"
+				aria-label="Close search"
+				onclick={() => (searchOpen = false)}><X size={17} /></button>
 		</div>{/if}
 
 	<main
@@ -1485,14 +1790,12 @@
 		onpointerdown={onWorkspacePointerDown}
 		onpointermove={onWorkspacePointerMove}
 		onpointerup={onWorkspacePointerUp}
-		onpointercancel={onWorkspacePointerUp}
-	>
+		onpointercancel={onWorkspacePointerUp}>
 		<div
 			class="pages"
 			class:dual
 			class:transitioning={pageTransition}
-			style={`transform: translate3d(${panX}px, ${panY}px, 0) scale(${zoom}); transform-origin: 0 0`}
-		>
+			style={`transform: translate3d(${panX}px, ${panY}px, 0) scale(${zoom}); transform-origin: 0 0`}>
 			<div class="page-shell">
 				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
 				<canvas
@@ -1538,9 +1841,19 @@
 		{/if}
 	</main>
 
-	<button class="page-hit left-hit" aria-label="Previous page" onclick={previous} disabled={page <= 1 || !!textEditor || annotating}></button>
-	<button class="page-hit right-hit" aria-label="Next page" onclick={next} disabled={!pdf || page >= (pdf?.numPages ?? 1) || !!textEditor || annotating}></button>
-
+	<button
+		class="page-hit left-hit"
+		aria-label="Previous page"
+		onclick={previous}
+		disabled={page <= 1 || !!textEditor || annotating}></button>
+	<button
+		class="page-hit right-hit"
+		aria-label="Next page"
+		onclick={next}
+		disabled={!pdf ||
+			page >= (pdf?.numPages ?? 1) ||
+			!!textEditor ||
+			annotating}></button>
 
 	{#if textEditor}
 		<div
@@ -1549,8 +1862,7 @@
 			aria-labelledby="text-editor-title"
 			style={`left:${textEditor.screenX ?? 24}px;top:${textEditor.screenY ?? 120}px`}
 			onpointerdown={(e) => e.stopPropagation()}
-			tabindex="-1"
-		>
+			tabindex="-1">
 			<span class="text-editor-label">Note</span>
 			<input
 				data-score-text-input
@@ -1564,45 +1876,124 @@
 						e.preventDefault();
 						cancelText();
 					}
-				}}
-			/>
-			<button type="button" class="text-editor-save" title="Save" onclick={commitText}><Check size={15} /></button>
-			<button type="button" title="Cancel" onclick={cancelText}><X size={15} /></button>
+				}} />
+			<button
+				type="button"
+				class="text-editor-save"
+				title="Save"
+				onclick={commitText}><Check size={15} /></button>
+			<button type="button" title="Cancel" onclick={cancelText}
+				><X size={15} /></button>
 		</div>
 	{/if}
 
 	{#if !reading && !controls}
-		<button class="annotation-toggle" title="Annotation tools" aria-label="Open annotation tools" onclick={toggleControls}><Pencil size={18} /></button>
+		<button
+			class="annotation-toggle"
+			title="Annotation tools"
+			aria-label="Open annotation tools"
+			onclick={toggleControls}><Pencil size={18} /></button>
 	{/if}
 
 	{#if !reading && controls}
-		<div class="palette" class:is-away={paletteAway} class:symbol-open={tool === 'symbol' && !symbolSheetCollapsed}>
+		<div
+			class="palette"
+			class:is-away={paletteAway}
+			class:symbol-open={tool === 'symbol' && !symbolSheetCollapsed}>
 			<aside class="tool-rail" aria-label="Annotation tools">
 				<div class="rail-group" role="toolbar" aria-label="Draw">
-					<button type="button" class:active={tool === 'pen'} class="rail-btn" data-tool="pen" title="Pen (P)" aria-label="Pen" onclick={() => choose('pen')}><PenTool size={18} /></button>
-					<button type="button" class:active={tool === 'highlighter'} class="rail-btn" data-tool="highlighter" title="Highlighter (H)" aria-label="Highlighter" onclick={() => choose('highlighter')}><Highlighter size={18} /></button>
-					<button type="button" class:active={tool === 'line'} class="rail-btn" data-tool="line" title="Line" aria-label="Line" onclick={() => choose('line')}><Minus size={18} /></button>
-					<button type="button" class:active={tool === 'arrow'} class="rail-btn" data-tool="arrow" title="Arrow" aria-label="Arrow" onclick={() => choose('arrow')}><ArrowUpRight size={18} /></button>
-					<button type="button" class:active={tool === 'eraser'} class="rail-btn" data-tool="eraser" title="Eraser (E)" aria-label="Eraser" onclick={() => choose('eraser')}><Eraser size={18} /></button>
+					<button
+						type="button"
+						class:active={tool === 'pen'}
+						class="rail-btn"
+						data-tool="pen"
+						title="Pen (P)"
+						aria-label="Pen"
+						onclick={() => choose('pen')}><PenTool size={18} /></button>
+					<button
+						type="button"
+						class:active={tool === 'highlighter'}
+						class="rail-btn"
+						data-tool="highlighter"
+						title="Highlighter (H)"
+						aria-label="Highlighter"
+						onclick={() => choose('highlighter')}
+						><Highlighter size={18} /></button>
+					<button
+						type="button"
+						class:active={tool === 'line'}
+						class="rail-btn"
+						data-tool="line"
+						title="Line"
+						aria-label="Line"
+						onclick={() => choose('line')}><Minus size={18} /></button>
+					<button
+						type="button"
+						class:active={tool === 'arrow'}
+						class="rail-btn"
+						data-tool="arrow"
+						title="Arrow"
+						aria-label="Arrow"
+						onclick={() => choose('arrow')}><ArrowUpRight size={18} /></button>
+					<button
+						type="button"
+						class:active={tool === 'eraser'}
+						class="rail-btn"
+						data-tool="eraser"
+						title="Eraser (E)"
+						aria-label="Eraser"
+						onclick={() => choose('eraser')}><Eraser size={18} /></button>
 				</div>
 				<div class="rail-sep" aria-hidden="true"></div>
 				<div class="rail-group" role="toolbar" aria-label="Place">
-					<button type="button" class:active={tool === 'symbol'} class="rail-btn" data-tool="symbol" title="Symbols (S)" aria-label="Symbols" onclick={() => choose('symbol')}>
+					<button
+						type="button"
+						class:active={tool === 'symbol'}
+						class="rail-btn"
+						data-tool="symbol"
+						title="Symbols (S)"
+						aria-label="Symbols"
+						onclick={() => choose('symbol')}>
 						{#if tool === 'symbol'}
-							<span class="rail-glyph" aria-hidden="true">{selectedSymbol.glyph}</span>
+							<span class="rail-glyph" aria-hidden="true"
+								>{selectedSymbol.glyph}</span>
 						{:else}
 							<Music2 size={18} />
 						{/if}
 					</button>
-					<button type="button" class:active={tool === 'text'} class="rail-btn" data-tool="text" title="Text (T)" aria-label="Text" onclick={() => choose('text')}><Type size={18} /></button>
+					<button
+						type="button"
+						class:active={tool === 'text'}
+						class="rail-btn"
+						data-tool="text"
+						title="Text (T)"
+						aria-label="Text"
+						onclick={() => choose('text')}><Type size={18} /></button>
 				</div>
 				<div class="rail-sep" aria-hidden="true"></div>
 				<div class="rail-group" role="toolbar" aria-label="History">
-					<button type="button" class="rail-btn" title="Undo" aria-label="Undo" disabled={!canUndo} onclick={undo}><Undo2 size={18} /></button>
-					<button type="button" class="rail-btn" title="Redo" aria-label="Redo" disabled={!canRedo} onclick={redo}><Redo2 size={18} /></button>
+					<button
+						type="button"
+						class="rail-btn"
+						title="Undo"
+						aria-label="Undo"
+						disabled={!canUndo}
+						onclick={undo}><Undo2 size={18} /></button>
+					<button
+						type="button"
+						class="rail-btn"
+						title="Redo"
+						aria-label="Redo"
+						disabled={!canRedo}
+						onclick={redo}><Redo2 size={18} /></button>
 				</div>
 				<div class="rail-sep" aria-hidden="true"></div>
-				<button type="button" class="rail-btn rail-close" title="Close tools" aria-label="Close annotation tools" onclick={toggleControls}><X size={17} /></button>
+				<button
+					type="button"
+					class="rail-btn rail-close"
+					title="Close tools"
+					aria-label="Close annotation tools"
+					onclick={toggleControls}><X size={17} /></button>
 			</aside>
 
 			{#if showToolOptions}
@@ -1616,18 +2007,27 @@
 									class:selected={color === swatch}
 									style={`--swatch:${swatch}`}
 									title={swatch}
-									onclick={() => (color = swatch)}
-								></button>
+									onclick={() => (color = swatch)}></button>
 							{/each}
 						</div>
 						<label class="opt-size">
 							<span class="opt-size-val">{width}</span>
-							<input type="range" min="1" max="14" bind:value={width} aria-label="Stroke size" />
+							<input
+								type="range"
+								min="1"
+								max="14"
+								bind:value={width}
+								aria-label="Stroke size" />
 						</label>
 					{:else if tool === 'eraser'}
 						<label class="opt-size">
 							<span class="opt-size-val">{width}</span>
-							<input type="range" min="1" max="14" bind:value={width} aria-label="Eraser size" />
+							<input
+								type="range"
+								min="1"
+								max="14"
+								bind:value={width}
+								aria-label="Eraser size" />
 						</label>
 					{/if}
 				</div>
@@ -1640,8 +2040,7 @@
 						class="symbol-chip"
 						title="Open symbol picker"
 						aria-label="Open symbol picker"
-						onclick={() => (symbolSheetCollapsed = false)}
-					>
+						onclick={() => (symbolSheetCollapsed = false)}>
 						<span class="symbol-chip-glyph">{selectedSymbol.glyph}</span>
 						<span class="symbol-chip-meta">
 							<strong>{selectedSymbol.name}</strong>
@@ -1656,13 +2055,22 @@
 								<span>Select, then click the score</span>
 							</div>
 							<div class="symbol-drawer-actions">
-								<button type="button" class="icon-button" title="Minimize" aria-label="Minimize symbol picker" onclick={() => (symbolSheetCollapsed = true)}><Minus size={16} /></button>
+								<button
+									type="button"
+									class="icon-button"
+									title="Minimize"
+									aria-label="Minimize symbol picker"
+									onclick={() => (symbolSheetCollapsed = true)}
+									><Minus size={16} /></button>
 								<!-- <button type="button" class="icon-button" title="Close symbols" aria-label="Close symbols" onclick={() => choose('pen')}><X size={16} /></button> -->
 							</div>
 						</header>
 
 						<div class="symbol-search-row">
-							<input bind:value={symbolSearch} placeholder="Search symbols…" aria-label="Search symbols" />
+							<input
+								bind:value={symbolSearch}
+								placeholder="Search symbols…"
+								aria-label="Search symbols" />
 							<label class="symbol-size-control" title="Placement size">
 								<span>{symbolSize}px</span>
 								<input type="range" min="20" max="64" bind:value={symbolSize} />
@@ -1672,21 +2080,21 @@
 						<nav class="symbol-cats" aria-label="Symbol categories">
 							<button
 								type="button"
-								class:active={symbolCategory === 'Recent' && !symbolSearch.trim()}
+								class:active={symbolCategory === 'Recent' &&
+									!symbolSearch.trim()}
 								onclick={() => {
 									symbolCategory = 'Recent';
 									symbolSearch = '';
-								}}
-							>Recent</button>
+								}}>Recent</button>
 							{#each MUSIC_SYMBOL_CATEGORIES as category}
 								<button
 									type="button"
-									class:active={symbolCategory === category && !symbolSearch.trim()}
+									class:active={symbolCategory === category &&
+										!symbolSearch.trim()}
 									onclick={() => {
 										symbolCategory = category;
 										symbolSearch = '';
-									}}
-								>{category}</button>
+									}}>{category}</button>
 							{/each}
 						</nav>
 
@@ -1699,13 +2107,17 @@
 									title={symbol.name}
 									onclick={() => {
 										selectedSymbol = symbol;
-									}}
-								>
-									<span class="glyph-box"><span class="glyph">{symbol.glyph}</span></span>
+									}}>
+									<span class="glyph-box"
+										><span class="glyph">{symbol.glyph}</span></span>
 									<span class="name">{symbol.name}</span>
 								</button>
 							{:else}
-								<p class="symbol-empty">{symbolSearch.trim() ? `No symbols match “${symbolSearch}”` : 'No recent symbols yet — pick a category'}</p>
+								<p class="symbol-empty">
+									{symbolSearch.trim()
+										? `No symbols match “${symbolSearch}”`
+										: 'No recent symbols yet — pick a category'}
+								</p>
 							{/each}
 						</div>
 					</div>
@@ -1718,15 +2130,14 @@
 		<div
 			class="eraser-cursor"
 			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px;--eraser-size:${Math.max(14, width * 1.8)}px`}
-			aria-hidden="true"
-		></div>
+			aria-hidden="true">
+		</div>
 	{/if}
 	{#if cursorScreen && tool === 'symbol' && !reading}
 		<div
 			class="symbol-ghost"
 			style={`left:${cursorScreen.x}px;top:${cursorScreen.y}px;--ghost-size:${symbolSize * zoom}px;--ghost-color:${color}`}
-			aria-hidden="true"
-		>
+			aria-hidden="true">
 			<span class="symbol-ghost-ring"></span>
 			<span class="symbol-ghost-glyph">{selectedSymbol.glyph}</span>
 		</div>
@@ -1740,15 +2151,16 @@
 				settingsOpen = false;
 				persistPrefs();
 				void render({ quiet: hasPainted });
-			}}
-		/>
+			}} />
 	{/if}
 </div>
 
 <style>
 	@font-face {
 		font-family: Leland;
-		src: url('/fonts/Leland.otf') format('opentype'), url('/Leland.otf') format('opentype');
+		src:
+			url('/fonts/Leland.otf') format('opentype'),
+			url('/Leland.otf') format('opentype');
 		font-display: swap;
 	}
 	.viewer {
@@ -1759,7 +2171,13 @@
 		overflow: hidden;
 		background: var(--sonora-bg, #11110f);
 		color: var(--sonora-text, #f4f4f0);
-		font-family: var(--sonora-font, Inter, ui-sans-serif, system-ui, sans-serif);
+		font-family: var(
+			--sonora-font,
+			Inter,
+			ui-sans-serif,
+			system-ui,
+			sans-serif
+		);
 	}
 	.topbar {
 		position: relative;
@@ -1784,16 +2202,16 @@
 	}
 
 	.footer-section {
-    	display: flex;
-        align-items: center;
-        gap: 5px;
-    	z-index: 30;
-    	min-height: 44px;
-    	padding: 5px;
-    	border: 1px solid rgba(255, 255, 255, 0.08);
-    	border-radius: 14px;
-    	background: rgba(25, 25, 22, 0.78);
-    	backdrop-filter: blur(18px);
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		z-index: 30;
+		min-height: 44px;
+		padding: 5px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 14px;
+		background: rgba(25, 25, 22, 0.78);
+		backdrop-filter: blur(18px);
 	}
 
 	.topbar-left,
@@ -1861,7 +2279,7 @@
 		padding: 7px 10px;
 		gap: 5px;
 		font-size: 11px;
-		animation: settings-in 160ms cubic-bezier(.2,.8,.2,1);
+		animation: settings-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 	}
 	.page-controls input {
 		width: 48px;
@@ -1887,7 +2305,10 @@
 		justify-content: center;
 		align-items: flex-start;
 		padding: 28px;
-		background: var(--sonora-bg-workspace, radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%));
+		background: var(
+			--sonora-bg-workspace,
+			radial-gradient(circle at 50% 18%, #292923 0, #151512 48%, #0f0f0d 100%)
+		);
 		overscroll-behavior: none;
 		touch-action: none;
 		cursor: grab;
@@ -1902,7 +2323,9 @@
 	.workspace.fit-page {
 		align-items: center;
 	}
-	.workspace::-webkit-scrollbar { display: none; }
+	.workspace::-webkit-scrollbar {
+		display: none;
+	}
 
 	.pages {
 		position: absolute;
@@ -1924,12 +2347,15 @@
 		opacity: 0.72;
 		transition: opacity 90ms ease;
 	}
-	.pages.dual .page-shell { box-shadow: 0 18px 55px rgba(0,0,0,.42); }
+	.pages.dual .page-shell {
+		box-shadow: 0 18px 55px rgba(0, 0, 0, 0.42);
+	}
 	/* Realistic inner-page gutter gradients (book-like) */
 	.pages.dual .page-shell::after {
 		content: '';
 		position: absolute;
-		top: 0; bottom: 0;
+		top: 0;
+		bottom: 0;
 		width: 28px;
 		pointer-events: none;
 		z-index: 2;
@@ -1992,7 +2418,9 @@
 		border-radius: 50%;
 		border: 1.5px solid rgba(248, 113, 113, 0.95);
 		background: rgba(248, 113, 113, 0.12);
-		box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), inset 0 0 8px rgba(248, 113, 113, 0.25);
+		box-shadow:
+			0 0 0 1px rgba(0, 0, 0, 0.35),
+			inset 0 0 8px rgba(248, 113, 113, 0.25);
 		pointer-events: none;
 		mix-blend-mode: normal;
 	}
@@ -2073,10 +2501,10 @@
 		font-size: 12px;
 		color: #b8b8b0;
 		box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
-    	border: 1px solid rgba(255, 255, 255, 0.08);
-    	border-radius: 14px;
-    	background: rgba(25, 25, 22, 0.78);
-    	backdrop-filter: blur(18px);
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 14px;
+		background: rgba(25, 25, 22, 0.78);
+		backdrop-filter: blur(18px);
 	}
 
 	.loading.subtle {
@@ -2141,7 +2569,9 @@
 		align-items: center;
 		gap: 8px;
 		pointer-events: none;
-		transition: opacity 160ms ease, transform 180ms ease;
+		transition:
+			opacity 160ms ease,
+			transform 180ms ease;
 	}
 	.palette > * {
 		pointer-events: auto;
@@ -2190,7 +2620,10 @@
 		display: grid;
 		place-items: center;
 		cursor: pointer;
-		transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+		transition:
+			background 120ms ease,
+			color 120ms ease,
+			box-shadow 120ms ease;
 	}
 	.rail-btn:hover:not(:disabled) {
 		background: rgba(255, 255, 255, 0.07);
@@ -2202,16 +2635,35 @@
 	}
 	.rail-btn.active {
 		color: #fff;
-		background: color-mix(in srgb, var(--tool-accent, #3b82f6) 30%, transparent);
-		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tool-accent, #3b82f6) 55%, transparent);
+		background: color-mix(
+			in srgb,
+			var(--tool-accent, #3b82f6) 30%,
+			transparent
+		);
+		box-shadow: inset 0 0 0 1px
+			color-mix(in srgb, var(--tool-accent, #3b82f6) 55%, transparent);
 	}
-	.rail-btn[data-tool='pen'] { --tool-accent: #f59e0b; }
-	.rail-btn[data-tool='highlighter'] { --tool-accent: #eab308; }
-	.rail-btn[data-tool='line'] { --tool-accent: #38bdf8; }
-	.rail-btn[data-tool='arrow'] { --tool-accent: #22d3ee; }
-	.rail-btn[data-tool='eraser'] { --tool-accent: #f87171; }
-	.rail-btn[data-tool='symbol'] { --tool-accent: #a78bfa; }
-	.rail-btn[data-tool='text'] { --tool-accent: #4ade80; }
+	.rail-btn[data-tool='pen'] {
+		--tool-accent: #f59e0b;
+	}
+	.rail-btn[data-tool='highlighter'] {
+		--tool-accent: #eab308;
+	}
+	.rail-btn[data-tool='line'] {
+		--tool-accent: #38bdf8;
+	}
+	.rail-btn[data-tool='arrow'] {
+		--tool-accent: #22d3ee;
+	}
+	.rail-btn[data-tool='eraser'] {
+		--tool-accent: #f87171;
+	}
+	.rail-btn[data-tool='symbol'] {
+		--tool-accent: #a78bfa;
+	}
+	.rail-btn[data-tool='text'] {
+		--tool-accent: #4ade80;
+	}
 	.rail-close {
 		margin-top: 1px;
 	}
@@ -2222,7 +2674,9 @@
 		width: 26px;
 		height: 26px;
 		overflow: hidden;
-		font: 20px/1 Leland, serif;
+		font:
+			20px/1 Leland,
+			serif;
 		color: #f4f4f0;
 	}
 
@@ -2281,7 +2735,11 @@
 		width: 4px;
 		height: 72px;
 		border-radius: 999px;
-		background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.1));
+		background: linear-gradient(
+			180deg,
+			rgba(255, 255, 255, 0.28),
+			rgba(255, 255, 255, 0.1)
+		);
 		outline: none;
 		cursor: pointer;
 		padding: 0;
@@ -2340,7 +2798,9 @@
 		overflow: hidden;
 		border-radius: 10px;
 		background: rgba(255, 255, 255, 0.05);
-		font: 22px/1 Leland, serif;
+		font:
+			22px/1 Leland,
+			serif;
 		color: #f4f4f0;
 		flex-shrink: 0;
 	}
@@ -2419,7 +2879,9 @@
 		overflow-x: auto;
 		scrollbar-width: none;
 	}
-	.symbol-cats::-webkit-scrollbar { display: none; }
+	.symbol-cats::-webkit-scrollbar {
+		display: none;
+	}
 	.symbol-cats button {
 		flex-shrink: 0;
 		height: 30px;
@@ -2502,7 +2964,9 @@
 	}
 	.symbol-tile .glyph {
 		display: block;
-		font: 26px/1 Leland, serif;
+		font:
+			26px/1 Leland,
+			serif;
 		/* Optical centering for glyphs with uneven bounding boxes */
 		transform: translateY(1px);
 	}
@@ -2655,8 +3119,14 @@
 		padding: 12px;
 	}
 	@keyframes settings-in {
-		from { opacity: 0; transform: translateY(-5px) scale(.98); }
-		to { opacity: 1; transform: translateY(0) scale(1); }
+		from {
+			opacity: 0;
+			transform: translateY(-5px) scale(0.98);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
 	}
 	@keyframes spin {
 		to {
