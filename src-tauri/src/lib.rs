@@ -5,6 +5,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
+<<<<<<< HEAD
 #[derive(Debug, Serialize)]
 struct NativeScoreFile {
     path: String,
@@ -760,21 +761,12 @@ fn read_text_file(path: String) -> Result<String, String> {
     fs::read_to_string(path).map_err(|error| error.to_string())
 }
 
+=======
+// Temporarily restored stub — full file will be restored next.
+>>>>>>> 2da327d743e46421c78af94dbc9063058fcd8829
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![
-            pick_score_folder,
-            list_score_files,
-            read_score_file,
-            read_score_file_base64,
-            read_text_file,
-            imslp_search,
-            imslp_work_scores,
-            imslp_download_score
-        ])
         .run(tauri::generate_context!())
         .expect("error while running Sonora");
 }

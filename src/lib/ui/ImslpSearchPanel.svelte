@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <script lang="ts">
 	import {
 		Download,
@@ -756,3 +757,6 @@
 		}
 	}
 </style>
+=======
+PLACEHOLDER
+>>>>>>> 2da327d743e46421c78af94dbc9063058fcd8829
