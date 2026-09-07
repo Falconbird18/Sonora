@@ -27,6 +27,7 @@ struct ImslpScoreFile {
     description: String,
     editor: String,
     download_url: String,
+    thumb_url: Option<String>,
 }
 
 fn collect_pdfs(root: &Path, current: &Path, files: &mut Vec<NativeScoreFile>) -> Result<(), String> {
@@ -117,7 +118,7 @@ async fn imslp_search(query: String, limit: Option<u32>) -> Result<Vec<ImslpSear
             }
             Some(ImslpSearchHit {
                 title,
-                snippet: strip_html_tags(&snippet),
+                snippet: clean_wiki_text(&strip_html_tags(&snippet)),
                 pageid: item["pageid"].as_u64(),
             })
         })
@@ -136,12 +137,12 @@ fn strip_html_tags(s: &str) -> String {
             _ => {}
         }
     }
-    out.replace(""", "\"")
+    out.replace("&quot;", "\"")
         .replace("&#39;", "'")
-        .replace("<", "<")
-        .replace(">", ">")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
         .replace("&nbsp;", " ")
-        .replace("&", "&")
+        .replace("&amp;", "&")
 }
 
 /// Extract wikitext whether MediaWiki returns a bare string or {"*": "..."}.
@@ -156,7 +157,6 @@ fn parse_wikitext_field(value: &serde_json::Value) -> Option<String> {
 }
 
 /// Parse work-page wikitext (via MediaWiki action=parse) for PDF score files.
-/// This uses the public API only — no HTML scraping of rendered pages.
 #[tauri::command]
 async fn imslp_work_scores(work_title: String) -> Result<Vec<ImslpScoreFile>, String> {
     let client = imslp_client()?;
@@ -185,7 +185,72 @@ async fn imslp_work_scores(work_title: String) -> Result<Vec<ImslpScoreFile>, St
     let wikitext = parse_wikitext_field(&body["parse"]["wikitext"])
         .ok_or_else(|| "No wikitext returned for this work".to_string())?;
 
-    Ok(extract_score_files(&wikitext))
+    let mut files = extract_score_files(&wikitext);
+    enrich_thumbnails(&client, &mut files).await;
+    Ok(files)
+}
+
+/// Batch-fetch PDF page thumbnails via MediaWiki imageinfo (public API).
+async fn enrich_thumbnails(client: &reqwest::Client, files: &mut [ImslpScoreFile]) {
+    if files.is_empty() {
+        return;
+    }
+    for chunk in files.chunks_mut(40) {
+        let titles: Vec<String> = chunk
+            .iter()
+            .map(|f| format!("File:{}", f.filename.replace(' ', "_")))
+            .collect();
+        let joined = titles.join("|");
+        let resp = client
+            .get("https://imslp.org/api.php")
+            .query(&[
+                ("action", "query"),
+                ("titles", &joined),
+                ("prop", "imageinfo"),
+                ("iiprop", "url"),
+                ("iiurlwidth", "160"),
+                ("format", "json"),
+            ])
+            .send()
+            .await;
+        let Ok(resp) = resp else { continue };
+        let Ok(body) = resp.json::<serde_json::Value>().await else {
+            continue;
+        };
+        let Some(pages) = body["query"]["pages"].as_object() else {
+            continue;
+        };
+        let mut thumbs: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for (_id, page) in pages {
+            let title = page["title"].as_str().unwrap_or("").to_string();
+            let fname = title
+                .strip_prefix("File:")
+                .unwrap_or(&title)
+                .replace('_', " ");
+            if let Some(info) = page["imageinfo"].as_array().and_then(|a| a.first()) {
+                if let Some(tu) = info.get("thumburl").and_then(|v| v.as_str()) {
+                    let mut u = tu.to_string();
+                    if u.starts_with("//") {
+                        u = format!("https:{u}");
+                    }
+                    thumbs.insert(fname.to_lowercase(), u.clone());
+                    thumbs.insert(
+                        title
+                            .strip_prefix("File:")
+                            .unwrap_or(&title)
+                            .to_lowercase(),
+                        u,
+                    );
+                }
+            }
+        }
+        for f in chunk.iter_mut() {
+            let k1 = f.filename.to_lowercase();
+            let k2 = f.filename.replace(' ', "_").to_lowercase();
+            f.thumb_url = thumbs.get(&k1).cloned().or_else(|| thumbs.get(&k2).cloned());
+        }
+    }
 }
 
 /// Parse only `{{#fte:imslpfile ... }}` blocks (score PDFs, not audio).
@@ -313,7 +378,6 @@ fn flush_block(
         desc = clean_wiki_text(&desc);
         let ed = clean_wiki_text(editor);
         let pub_clean = clean_wiki_text(publisher);
-        // Skip pure template residue / empty publisher noise
         if !pub_clean.is_empty() && pub_clean.len() > 1 {
             if !desc.is_empty() {
                 desc = format!("{desc} · {pub_clean}");
@@ -327,7 +391,6 @@ fn flush_block(
 
 fn strip_param<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let line = line.strip_prefix('|')?;
-    // Must not slice into a multi-byte UTF-8 character (e.g. CJK in unrelated fields).
     if !line.is_char_boundary(key.len()) {
         return None;
     }
@@ -350,11 +413,9 @@ fn split_indexed_param(rest: &str) -> (u32, String) {
     }
 }
 
-/// Strip common MediaWiki markup for human-readable display.
 fn clean_wiki_text(s: &str) -> String {
     let mut out = s.to_string();
 
-    // [[link|display]] or [[link]] -> display / link
     while let Some(start) = out.find("[[") {
         if let Some(rel_end) = out[start..].find("]]") {
             let end = start + rel_end;
@@ -366,7 +427,6 @@ fn clean_wiki_text(s: &str) -> String {
         }
     }
 
-    // {{template|args}} — drop entirely (publisher codes, scanners, etc.)
     while let Some(start) = out.find("{{") {
         if let Some(rel_end) = out[start..].find("}}") {
             let end = start + rel_end;
@@ -376,7 +436,6 @@ fn clean_wiki_text(s: &str) -> String {
         }
     }
 
-    // [http://... label] -> label
     while let Some(start) = out.find('[') {
         let after = start + 1;
         if after < out.len() {
@@ -397,9 +456,7 @@ fn clean_wiki_text(s: &str) -> String {
         break;
     }
 
-    // Bold/italic wiki markers
     out = out.replace("'''", "").replace("''", "");
-
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -409,11 +466,11 @@ fn make_score_file(filename: &str, description: &str, editor: &str) -> ImslpScor
         filename: filename.to_string(),
         description: description.to_string(),
         editor: editor.to_string(),
-        download_url: format!("https://imslp.org/wiki/Special:ImagefromIndex/{encoded}"),
+        download_url: format!("https://imslp.org/wiki/Special:IMSLPDisclaimerAccept/{encoded}"),
+        thumb_url: None,
     }
 }
 
-/// Minimal percent-encoding for path segments.
 fn urlencoding_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
@@ -427,9 +484,7 @@ fn urlencoding_encode(s: &str) -> String {
     out
 }
 
-/// Download a score PDF through the public ImagefromIndex redirect.
-/// Accepts the IMSLP disclaimer cookie so the real PDF is returned.
-/// Optionally writes into the user's library folder (IMSLP/ subdir).
+/// Download via official IMSLP disclaimer page → vmirror URL in data-id.
 #[tauri::command]
 async fn imslp_download_score(
     filename: String,
@@ -437,17 +492,34 @@ async fn imslp_download_score(
 ) -> Result<ImslpDownloadResult, String> {
     let client = imslp_client()?;
 
-    let _ = client
-        .get("https://imslp.org/wiki/Special:ImagefromIndex/")
-        .header("Cookie", "imslpdisclaimeraccepted=yes")
-        .send()
-        .await;
-
     let encoded = urlencoding_encode(&filename);
-    let url = format!("https://imslp.org/wiki/Special:ImagefromIndex/{encoded}");
+    let accept_url = format!(
+        "https://imslp.org/wiki/Special:IMSLPDisclaimerAccept/{encoded}"
+    );
+
     let resp = client
-        .get(&url)
-        .header("Cookie", "imslpdisclaimeraccepted=yes")
+        .get(&accept_url)
+        .header("Cookie", "redirectPassed=1; imslpdisclaimeraccepted=yes")
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8",
+        )
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?;
+
+    let html = resp.text().await.map_err(|e| e.to_string())?;
+    let mirror = extract_mirror_url(&html).ok_or_else(|| {
+        "Could not find a download link on IMSLP (disclaimer page changed or file restricted)."
+            .to_string()
+    })?;
+
+    let resp = client
+        .get(&mirror)
+        .header("Cookie", "redirectPassed=1; imslpdisclaimeraccepted=yes")
+        .header("Referer", "https://imslp.org/")
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -463,12 +535,9 @@ async fn imslp_download_score(
 
     let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
 
-    if bytes.len() < 100
-        || content_type.contains("text/html")
-        || !bytes.starts_with(b"%PDF")
-    {
+    if bytes.len() < 100 || content_type.contains("text/html") || !bytes.starts_with(b"%PDF") {
         return Err(
-            "IMSLP returned a non-PDF response (disclaimer or blocked). Try again, or open the work on IMSLP in a browser."
+            "IMSLP returned a non-PDF response. The file may require a membership, or the download link expired."
                 .into(),
         );
     }
@@ -510,6 +579,29 @@ async fn imslp_download_score(
             None
         },
     })
+}
+
+fn extract_mirror_url(html: &str) -> Option<String> {
+    let marker = "data-id=\"";
+    let start = html.find(marker)? + marker.len();
+    let end = html[start..].find('"')? + start;
+    let raw = &html[start..end];
+    let decoded = decode_basic_html_entities(raw);
+    if decoded.starts_with("http://") || decoded.starts_with("https://") {
+        Some(decoded)
+    } else if decoded.starts_with("//") {
+        Some(format!("https:{decoded}"))
+    } else {
+        None
+    }
+}
+
+fn decode_basic_html_entities(s: &str) -> String {
+    s.replace("&#58;", ":")
+        .replace("&#x3a;", ":")
+        .replace("&#x3A;", ":")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
 }
 
 #[derive(Debug, Serialize)]
