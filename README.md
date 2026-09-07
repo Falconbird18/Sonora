@@ -10,7 +10,6 @@ Import a folder of PDF scores, browse by composer, annotate with pen, highlighte
 - **Annotations that stick** — freehand, highlighter, line/arrow, text notes, and music-symbol stamps stored in IndexedDB (Dexie)
 - **Undo / redo** per page, eraser (strokes, symbols, and notes), move tool
 - **Library** — one synced score folder (native desktop or browser File System Access), favorites, search, grid/list, sort filters
-- **Local composer portraits** — bundled JPEGs in `public/composers/` (no Wikimedia requests at runtime)
 - **Focus mode** (`F`), keyboard page turns, thumbnail-friendly layout
 - **Desktop app** via Tauri with native folder picking and file access
 
