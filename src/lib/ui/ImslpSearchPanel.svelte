@@ -57,9 +57,11 @@
 		}
 	}
 
-	function onSubmit(event: Event) {
-		event.preventDefault();
-		void runSearch();
+	function onSearchKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			void runSearch();
+		}
 	}
 
 	async function selectWork(hit: ImslpSearchHit) {
@@ -141,12 +143,13 @@
 				</p>
 			</div>
 		{:else}
-			<form class="search-row" onsubmit={onSubmit}>
+			<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+			<div class="search-row" onkeydown={onSearchKeydown}>
 				<SearchField
 					bind:value={query}
 					placeholder="Composer, work, opus…"
 					ariaLabel="Search IMSLP" />
-				<TextButton type="submit" disabled={searching || !query.trim()}>
+				<TextButton onclick={() => void runSearch()} disabled={searching || !query.trim()}>
 					{#if searching}
 						<Loader2 size={16} class="spin" />
 					{:else}
@@ -154,7 +157,7 @@
 					{/if}
 					<span>Search</span>
 				</TextButton>
-			</form>
+			</div>
 
 			{#if error}
 				<p class="err">{error}</p>
