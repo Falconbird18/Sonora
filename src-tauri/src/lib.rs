@@ -136,12 +136,11 @@ fn strip_html_tags(s: &str) -> String {
             _ => {}
         }
     }
-    out.replace(""", "\"")
-        .replace("&#39;", "'")
-        .replace("<", "<")
-        .replace(">", ">")
-        .replace("&nbsp;", " ")
-        .replace("&", "&")
+out.replace("&quot;", "\"")
+    .replace("&#39;", "'")
+    .replace("&lt;", "<")
+    .replace("&gt;", ">")
+    .replace("&amp;", "&")  // Must be last!
 }
 
 /// Extract wikitext whether MediaWiki returns a bare string or {"*": "..."}.
