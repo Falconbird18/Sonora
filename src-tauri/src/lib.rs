@@ -5,4 +5,10 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-// NOTE: full content too large for this inline attempt - will use alternative
+// Temporarily restored stub — full file will be restored next.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .run(tauri::generate_context!())
+        .expect("error while running Sonora");
+}
