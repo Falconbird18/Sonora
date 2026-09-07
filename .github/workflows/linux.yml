@@ -38,7 +38,8 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            wget
 
       - name: Install dependencies
         run: npm ci
@@ -52,6 +53,42 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           SONORA_BUILD_APPIMAGE: '1'
         run: npm run tauri:build
+
+      - name: Make AppImage portable (strip conflicting Wayland libs)
+        run: |
+          set -euo pipefail
+
+          # Download a recent appimagetool (static) for repacking
+          wget -q -O /tmp/appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x /tmp/appimagetool
+
+          shopt -s nullglob
+          for appimage in src-tauri/target/release/bundle/appimage/*.AppImage; do
+            echo "Processing $appimage ..."
+            workdir=$(mktemp -d)
+            cd "$workdir"
+
+            # Extract
+            "$appimage" --appimage-extract
+
+            # Remove the libs that break EGL on modern Mesa / Wayland hosts.
+            # These are on the official AppImage excludelist for this reason.
+            find squashfs-root -type f \( \
+              -name 'libwayland-client.so*' -o \
+              -name 'libwayland-cursor.so*' -o \
+              -name 'libwayland-egl.so*' -o \
+              -name 'libwayland-server.so*' \
+            \) -print -delete || true
+
+            # Repack (no FUSE needed on the runner)
+            ARCH=x86_64 /tmp/appimagetool --appimage-extract-and-run \
+              squashfs-root "$appimage"
+
+            cd -
+            rm -rf "$workdir"
+            echo "Portable AppImage written: $appimage"
+          done
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@v4

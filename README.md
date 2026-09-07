@@ -40,6 +40,32 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
+On Linux the build produces `.deb`, `.rpm`, and (when `SONORA_BUILD_APPIMAGE=1`) an AppImage. Prefer the native packages when available.
+
+### Linux AppImage note
+
+Older AppImages could crash on some Wayland / modern-Mesa systems with:
+
+```text
+Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...
+```
+
+This is caused by over-bundled `libwayland-*` libraries conflicting with the host graphics stack. Recent CI builds strip those libraries so the AppImage uses the system ones instead.
+
+If you still hit the error with an older AppImage, try:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 ./Sonora_*.AppImage
+```
+
+or
+
+```bash
+LD_PRELOAD=/usr/lib/libwayland-client.so.0 ./Sonora_*.AppImage
+```
+
+(use `/usr/lib64/...` or the multiarch path on your distro if needed).
+
 ## Composer portraits
 
 Portraits are downloaded **once** into `public/composers/` so the desktop app never fetches them on launch.
