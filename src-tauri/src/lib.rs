@@ -136,11 +136,12 @@ fn strip_html_tags(s: &str) -> String {
             _ => {}
         }
     }
-out.replace("&quot;", "\"")
-    .replace("&#39;", "'")
-    .replace("&lt;", "<")
-    .replace("&gt;", ">")
-    .replace("&amp;", "&")  // Must be last!
+    out.replace(""", "\"")
+        .replace("&#39;", "'")
+        .replace("<", "<")
+        .replace(">", ">")
+        .replace("&nbsp;", " ")
+        .replace("&", "&")
 }
 
 /// Extract wikitext whether MediaWiki returns a bare string or {"*": "..."}.
@@ -160,7 +161,6 @@ fn parse_wikitext_field(value: &serde_json::Value) -> Option<String> {
 async fn imslp_work_scores(work_title: String) -> Result<Vec<ImslpScoreFile>, String> {
     let client = imslp_client()?;
     let url = "https://imslp.org/api.php";
-    // Classic format: wikitext is under parse.wikitext["*"]
     let resp = client
         .get(url)
         .query(&[
@@ -310,9 +310,11 @@ fn flush_block(
         if desc.is_empty() && !image_type.is_empty() {
             desc = image_type.to_string();
         }
-        let ed = strip_wiki_links(editor);
-        let pub_clean = strip_wiki_links(publisher);
-        if !pub_clean.is_empty() {
+        desc = clean_wiki_text(&desc);
+        let ed = clean_wiki_text(editor);
+        let pub_clean = clean_wiki_text(publisher);
+        // Skip pure template residue / empty publisher noise
+        if !pub_clean.is_empty() && pub_clean.len() > 1 {
             if !desc.is_empty() {
                 desc = format!("{desc} · {pub_clean}");
             } else {
@@ -325,10 +327,12 @@ fn flush_block(
 
 fn strip_param<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let line = line.strip_prefix('|')?;
-    if line.len() < key.len() {
+    // Must not slice into a multi-byte UTF-8 character (e.g. CJK in unrelated fields).
+    if !line.is_char_boundary(key.len()) {
         return None;
     }
-    if !line[..key.len()].eq_ignore_ascii_case(key) {
+    let prefix = line.get(..key.len())?;
+    if !prefix.eq_ignore_ascii_case(key) {
         return None;
     }
     Some(&line[key.len()..])
@@ -346,24 +350,56 @@ fn split_indexed_param(rest: &str) -> (u32, String) {
     }
 }
 
-fn strip_wiki_links(s: &str) -> String {
+/// Strip common MediaWiki markup for human-readable display.
+fn clean_wiki_text(s: &str) -> String {
     let mut out = s.to_string();
+
+    // [[link|display]] or [[link]] -> display / link
     while let Some(start) = out.find("[[") {
-        if let Some(end) = out[start..].find("]]") {
-            let inner = &out[start + 2..start + end];
-            let display = inner.split('|').last().unwrap_or(inner).to_string();
-            out.replace_range(start..start + end + 2, &display);
+        if let Some(rel_end) = out[start..].find("]]") {
+            let end = start + rel_end;
+            let inner = &out[start + 2..end];
+            let display = inner.split('|').next_back().unwrap_or(inner).to_string();
+            out.replace_range(start..end + 2, &display);
         } else {
             break;
         }
     }
+
+    // {{template|args}} — drop entirely (publisher codes, scanners, etc.)
     while let Some(start) = out.find("{{") {
-        if let Some(end) = out[start..].find("}}") {
-            out.replace_range(start..start + end + 2, "");
+        if let Some(rel_end) = out[start..].find("}}") {
+            let end = start + rel_end;
+            out.replace_range(start..end + 2, "");
         } else {
             break;
         }
     }
+
+    // [http://... label] -> label
+    while let Some(start) = out.find('[') {
+        let after = start + 1;
+        if after < out.len() {
+            let rest = &out[after..];
+            if rest.starts_with("http://") || rest.starts_with("https://") {
+                if let Some(rel_end) = rest.find(']') {
+                    let inner = &rest[..rel_end];
+                    let display = inner
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("")
+                        .to_string();
+                    out.replace_range(start..after + rel_end + 1, &display);
+                    continue;
+                }
+            }
+        }
+        break;
+    }
+
+    // Bold/italic wiki markers
+    out = out.replace("'''", "").replace("''", "");
+
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
