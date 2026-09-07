@@ -57,7 +57,7 @@
 	async function refresh() {
 		const [nextScores, nextFolder] = await Promise.all([
 			db.scores.orderBy('addedAt').reverse().toArray(),
-			db.folders.get('library-root')
+		db.folders.get('library-root')
 		]);
 		scores = nextScores;
 		folder = nextFolder;
@@ -384,7 +384,7 @@
 	<header class="header">
 		<div class="brand">
 			<img
-				src="../../../../../src-tauri/icons/app-icon.svg"
+				src="/icon.svg"
 				alt="Sonora logo"
 				class="brand-mark" />
 			<strong>Sonora</strong>

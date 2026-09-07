@@ -2,6 +2,13 @@ export interface ScoreItem {
 	id: string;
 	title: string;
 	composer: string;
+	/** Stable composer database record, when the composer is recognized. */
+	composerId?: string | null;
+	composerPeriod?: string;
+	composerCountry?: string;
+	composerBirthPlace?: string;
+	composerBirthYear?: number;
+	composerDeathYear?: number;
 	/** Year composed (optional). */
 	year?: number | null;
 	/** e.g. "String Quartet", "Orchestra", "Solo". */
@@ -38,11 +45,7 @@ export interface FolderSource {
 	autoSync: boolean;
 }
 
-export interface Point {
-	x: number;
-	y: number;
-	pressure?: number;
-}
+export interface Point { x: number; y: number; pressure?: number; }
 export interface Stroke {
 	id?: string;
 	tool: 'pen' | 'highlighter';
@@ -81,10 +84,15 @@ export interface AnnotationRecord {
 	notes: TextNote[];
 }
 
-/** Payload returned by the metadata edit dialog. */
 export interface ScoreMetadataUpdate {
 	title: string;
 	composer: string;
+	composerId?: string | null;
+	composerPeriod?: string;
+	composerCountry?: string;
+	composerBirthPlace?: string;
+	composerBirthYear?: number;
+	composerDeathYear?: number;
 	year?: number | null;
 	ensemble?: string;
 	instruments?: string;
