@@ -1,9 +1,12 @@
 /**
  * IMSLP integration for Sonora.
  *
- * Uses only public IMSLP APIs (MediaWiki search + action=parse wikitext).
- * No HTML scraping of rendered pages. Network work runs in Tauri (Rust)
- * because browsers block cross-origin requests to imslp.org.
+ * Uses public IMSLP endpoints only:
+ * - MediaWiki search + action=parse (wikitext) + imageinfo
+ * - Official Special:IMSLPDisclaimerAccept download handshake → mirror URL
+ *
+ * Network work runs in Tauri (Rust) because browsers block cross-origin
+ * requests to imslp.org.
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -20,6 +23,7 @@ export type ImslpScoreFile = {
 	description: string;
 	editor: string;
 	download_url: string;
+	thumb_url?: string | null;
 };
 
 export type ImslpDownloadResult = {
@@ -53,9 +57,8 @@ export async function getWorkScores(workTitle: string): Promise<ImslpScoreFile[]
 }
 
 /**
- * Download a score PDF.
- * When `libraryRoot` is set, the file is written to `{libraryRoot}/IMSLP/` and
- * the library can be re-synced. Otherwise base64 bytes are returned.
+ * Download a score PDF via the official disclaimer → mirror URL flow.
+ * When `libraryRoot` is set, the file is written to `{libraryRoot}/IMSLP/`.
  */
 export async function downloadScore(
 	filename: string,
@@ -82,4 +85,13 @@ export function parseWorkTitle(title: string): { title: string; composer: string
 
 export function workPageUrl(title: string) {
 	return `https://imslp.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+}
+
+/** Friendly short name from a raw IMSLP PDF filename. */
+export function displayFilename(filename: string) {
+	return filename
+		.replace(/^PMLP\d+-?/i, '')
+		.replace(/_/g, ' ')
+		.replace(/\.pdf$/i, '')
+		.trim() || filename;
 }
