@@ -89,9 +89,13 @@ export function workPageUrl(title: string) {
 
 /** Friendly short name from a raw IMSLP PDF filename. */
 export function displayFilename(filename: string) {
-	return filename
+	let name = filename
 		.replace(/^PMLP\d+-?/i, '')
+		.replace(/^IMSLP\d+-?/i, '')
 		.replace(/_/g, ' ')
 		.replace(/\.pdf$/i, '')
-		.trim() || filename;
+		.trim();
+	// Collapse whitespace and trim leftover dashes
+	name = name.replace(/\s+/g, ' ').replace(/^[\s\-–—]+|[\s\-–—]+$/g, '');
+	return name || filename;
 }
