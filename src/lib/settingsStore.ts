@@ -7,6 +7,8 @@ export type AppSettings = {
 	theme: ThemePreference;
 	reduceMotion: boolean;
 	compactLibrary: boolean;
+	/** When true, changing a score's composer moves its PDF into {library}/{composerId}/. */
+	organizeByComposer: boolean;
 	/** Viewer */
 	autoLayout: boolean;
 	dualPages: boolean;
@@ -22,6 +24,7 @@ const defaults: AppSettings = {
 	theme: 'system',
 	reduceMotion: false,
 	compactLibrary: false,
+	organizeByComposer: true,
 	autoLayout: true,
 	dualPages: false,
 	keepAwake: true,
@@ -42,6 +45,10 @@ function load(): AppSettings {
 				: defaults.theme,
 			reduceMotion: !!parsed.reduceMotion,
 			compactLibrary: !!parsed.compactLibrary,
+			organizeByComposer:
+				typeof parsed.organizeByComposer === 'boolean'
+					? parsed.organizeByComposer
+					: defaults.organizeByComposer,
 			autoLayout: parsed.autoLayout !== false,
 			dualPages: !!parsed.dualPages,
 			keepAwake: parsed.keepAwake !== false,
@@ -112,6 +119,9 @@ function createSettingsStore() {
 		},
 		setCompactLibrary(compactLibrary: boolean) {
 			update((s) => ({ ...s, compactLibrary }));
+		},
+		setOrganizeByComposer(organizeByComposer: boolean) {
+			update((s) => ({ ...s, organizeByComposer }));
 		},
 		setAutoLayout(autoLayout: boolean) {
 			update((s) => ({ ...s, autoLayout }));

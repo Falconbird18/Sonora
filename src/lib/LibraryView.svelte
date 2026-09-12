@@ -60,7 +60,7 @@
 	async function refresh() {
 		const [nextScores, nextFolder] = await Promise.all([
 			db.scores.orderBy('addedAt').reverse().toArray(),
-		db.folders.get('library-root')
+			db.folders.get('library-root')
 		]);
 		scores = nextScores;
 		folder = nextFolder;
@@ -387,10 +387,7 @@
 <div class="library" class:compact={$settings.compactLibrary}>
 	<header class="header">
 		<div class="brand">
-			<img
-				src="/icon.svg"
-				alt="Sonora logo"
-				class="brand-mark" />
+			<div class="brand-mark"><Music2 size={18} strokeWidth={2.1} /></div>
 			<strong>Sonora</strong>
 		</div>
 		<SearchField

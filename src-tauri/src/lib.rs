@@ -14,6 +14,11 @@ struct NativeScoreFile {
     modified_at: u64,
 }
 
+#[derive(Debug, Serialize)]
+struct MovedScore {
+    native_path: String,
+    relative_path: String,
+    filename: String,
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct ImslpSearchHit {
     title: String,
@@ -62,6 +67,7 @@ fn collect_pdfs(root: &Path, current: &Path, files: &mut Vec<NativeScoreFile>) -
     Ok(())
 }
 
+fn sanitize_folder_segment(name: &str) -> String {
 fn imslp_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent(
@@ -961,6 +967,10 @@ fn unique_dest(dir: &Path, filename: &str) -> Result<PathBuf, String> {
     if !dest.exists() {
         return Ok(dest);
     }
+    let stem = dest
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("score");
     let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("score");
     let ext = dest
         .extension()
@@ -982,6 +992,63 @@ fn unique_dest(dir: &Path, filename: &str) -> Result<PathBuf, String> {
     )))
 }
 
+/// Move a score PDF into `{library_root}/{composer_folder}/`, creating the folder if needed.
+#[tauri::command]
+fn move_score_into_composer_folder(
+    source_path: String,
+    library_root: String,
+    composer_folder: String,
+) -> Result<MovedScore, String> {
+    let source = PathBuf::from(&source_path);
+    if !source.is_file() {
+        return Err(format!("Source file not found: {source_path}"));
+    }
+
+    let root = PathBuf::from(&library_root);
+    if !root.is_dir() {
+        return Err("Library folder no longer exists.".into());
+    }
+
+    // Refuse to move files outside the library root
+    let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
+    let canonical_source = source.canonicalize().map_err(|e| e.to_string())?;
+    if !canonical_source.starts_with(&canonical_root) {
+        return Err("Score file is outside the library folder.".into());
+    }
+
+    let folder_name = sanitize_folder_segment(&composer_folder);
+    let dest_dir = root.join(&folder_name);
+    fs::create_dir_all(&dest_dir).map_err(|e| format!("Could not create composer folder: {e}"))?;
+
+    let filename = source
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid source filename".to_string())?;
+
+    // Already in the right folder
+    if source.parent().map(|p| p == dest_dir.as_path()).unwrap_or(false) {
+        let relative = format!("{folder_name}/{filename}").replace('\\', "/");
+        return Ok(MovedScore {
+            native_path: source.to_string_lossy().to_string(),
+            relative_path: relative,
+            filename,
+        });
+    }
+
+    let dest = unique_dest(&dest_dir, &filename)?;
+    fs::rename(&source, &dest).map_err(|e| format!("Could not move score file: {e}"))?;
+
+    let saved_name = dest
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or(filename);
+    let relative = format!("{folder_name}/{saved_name}").replace('\\', "/");
+
+    Ok(MovedScore {
+        native_path: dest.to_string_lossy().to_string(),
+        relative_path: relative,
+        filename: saved_name,
+    })
 async fn imageinfo_url(client: &reqwest::Client, filename: &str) -> Option<String> {
     let title = format!("File:{}", filename.replace(' ', "_"));
     let resp = client
@@ -1241,6 +1308,7 @@ pub fn run() {
             read_score_file,
             read_score_file_base64,
             read_text_file,
+            move_score_into_composer_folder
             imslp_search,
             imslp_work_scores,
             imslp_download_score
