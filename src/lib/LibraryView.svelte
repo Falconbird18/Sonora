@@ -4,6 +4,7 @@
 		Clock3,
 		FolderOpen,
 		FolderPlus,
+		Globe,
 		Grid2X2,
 		List,
 		Music2,
@@ -19,6 +20,7 @@
 	import ComposerPortrait from './ui/ComposerPortrait.svelte';
 	import IconButton from './ui/IconButton.svelte';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
+	import ImslpSearchPanel from './ui/ImslpSearchPanel.svelte';
 	import { saveScoreMetadata } from './scoreMeta';
 	import { settings } from './settingsStore';
 	import { db } from './db';
@@ -53,6 +55,7 @@
 		timer: ReturnType<typeof setInterval> | undefined,
 		backfillRunning = false;
 	let settingsOpen = $state(false);
+	let imslpOpen = $state(false);
 
 	async function refresh() {
 		const [nextScores, nextFolder] = await Promise.all([
@@ -376,7 +379,8 @@
 		if (event.key === 'Escape') {
 			closeMenu();
 			if (metadata) metadata = null;
-			if (settingsOpen) settingsOpen = false;
+			if (imslpOpen) imslpOpen = false;
+			else if (settingsOpen) settingsOpen = false;
 		}
 	}} />
 
@@ -403,6 +407,12 @@
 				ariaLabel="Refresh library"
 				onclick={sync}>
 				<RefreshCw size={18} class={syncing ? 'spinning' : ''} />
+			</IconButton>
+			<IconButton
+				title="Search IMSLP"
+				ariaLabel="Search IMSLP for scores"
+				onclick={() => (imslpOpen = true)}>
+				<Globe size={18} />
 			</IconButton>
 			<IconButton
 				title="Settings"
@@ -565,11 +575,21 @@
 			ensemble={metadata.ensemble}
 			instruments={metadata.instruments}
 			tags={metadata.tags ?? []}
+			allTags={allTags}
 			onSave={(payload) => void saveMetadata(payload)}
 			onClose={() => (metadata = null)} />
 	{/if}
 
 	<SettingsPanel open={settingsOpen} onClose={() => (settingsOpen = false)} />
+
+	<ImslpSearchPanel
+		bind:open={imslpOpen}
+		libraryRoot={folder?.nativePath ?? null}
+		onDownloaded={() => {
+			void sync();
+			notice = 'IMSLP score added — library refreshed';
+			setTimeout(() => (notice = ''), 3000);
+		}} />
 </div>
 
 <style>
@@ -588,109 +608,89 @@
 		display: grid;
 		grid-template-columns: 200px minmax(200px, 1fr) auto;
 		align-items: center;
-		gap: 20px;
-		padding: 0 24px;
+		gap: 16px;
+		padding: 0 20px;
 		border-bottom: 1px solid var(--sonora-border);
-		background: var(--sonora-bg-header);
-		backdrop-filter: var(--sonora-blur-sm);
-		-webkit-backdrop-filter: var(--sonora-blur-sm);
+		background: color-mix(in srgb, var(--sonora-bg-elevated) 92%, transparent);
+		backdrop-filter: blur(16px);
 	}
 	.brand {
 		display: flex;
 		align-items: center;
 		gap: 10px;
-		min-width: 0;
-	}
-	.brand strong {
-		font-size: 16px;
-		font-weight: 650;
-		letter-spacing: var(--sonora-tracking-tight);
 	}
 	.brand-mark {
 		width: 34px;
 		height: 34px;
 		display: grid;
 		place-items: center;
-		border: 1px solid var(--sonora-border-strong);
-		border-radius: 11px;
-		background: linear-gradient(
-			145deg,
-			var(--sonora-accent-soft),
-			var(--sonora-bg-elevated)
-		);
+		border-radius: 10px;
+		background: var(--sonora-accent-soft);
 		color: var(--sonora-accent);
-		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+	}
+	.brand strong {
+		font-size: 16px;
+		font-weight: 700;
+		letter-spacing: var(--sonora-tracking-tight);
 	}
 	.header-actions {
 		display: flex;
-		justify-content: flex-end;
 		align-items: center;
 		gap: 8px;
 	}
 	.folder-button {
+		height: 36px;
 		display: inline-flex;
 		align-items: center;
-		justify-content: center;
 		gap: 8px;
-		border: 1px solid transparent;
+		padding: 0 12px;
+		border: 1px solid var(--sonora-border-strong);
 		border-radius: var(--sonora-radius-md);
-		background: var(--sonora-accent);
-		color: var(--sonora-accent-contrast);
-		padding: 9px 14px;
-		font-size: var(--sonora-text-sm);
-		font-weight: 650;
+		background: var(--sonora-bg-elevated);
+		color: var(--sonora-text);
+		font-size: 13px;
+		font-weight: 550;
 		cursor: pointer;
-		box-shadow: var(--sonora-accent-glow);
 		transition:
 			background var(--sonora-duration) var(--sonora-ease),
-			transform var(--sonora-duration) var(--sonora-ease),
-			box-shadow var(--sonora-duration) var(--sonora-ease);
+			border-color var(--sonora-duration) var(--sonora-ease);
 	}
 	.folder-button:hover {
-		background: var(--sonora-accent-hover);
-		transform: translateY(-1px);
-	}
-	.folder-button:active {
-		transform: translateY(0);
-	}
-	:global(.spinning) {
-		animation: spin 0.9s linear infinite;
-	}
-	@keyframes spin {
-		to {
-			transform: rotate(360deg);
-		}
+		background: var(--sonora-bg-hover);
+		border-color: color-mix(in srgb, var(--sonora-accent) 35%, var(--sonora-border-strong));
 	}
 	.body {
-		min-height: 0;
 		flex: 1;
+		min-height: 0;
 		display: grid;
-		grid-template-columns: 220px minmax(0, 1fr);
+		grid-template-columns: 240px minmax(0, 1fr);
 	}
 	.sidebar {
-		min-height: 0;
-		overflow: auto;
-		padding: 16px 12px 28px;
+		width: 240px;
+		overflow-y: auto;
+		padding: 16px 12px 24px;
 		border-right: 1px solid var(--sonora-border);
-		background: var(--sonora-bg-sidebar);
+		background: color-mix(in srgb, var(--sonora-bg-elevated) 55%, transparent);
 	}
 	.sidebar nav {
 		display: flex;
 		flex-direction: column;
-		gap: 3px;
+		gap: 2px;
+		margin-bottom: 18px;
 	}
 	.sidebar nav button,
 	.sidebar section button {
+		width: 100%;
 		display: flex;
 		align-items: center;
 		gap: 10px;
-		width: 100%;
 		padding: 9px 10px;
 		border: 0;
-		border-radius: var(--sonora-radius-md);
+		border-radius: 10px;
 		background: transparent;
 		color: var(--sonora-text-muted);
-		font-size: var(--sonora-text-sm);
+		font-size: 13px;
+		text-align: left;
 		cursor: pointer;
 		transition:
 			background var(--sonora-duration) var(--sonora-ease),
@@ -703,112 +703,89 @@
 	}
 	.sidebar nav button.active,
 	.sidebar section button.active {
-		background: var(--sonora-accent-soft);
+		background: var(--sonora-bg-active);
 		color: var(--sonora-text);
 	}
-	.sidebar button span {
-		min-width: 0;
+	.sidebar nav button span,
+	.sidebar section button span {
 		flex: 1;
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		text-align: left;
 	}
-	.sidebar button b {
-		color: var(--sonora-text-faint);
-		font-size: 10px;
-		font-weight: 500;
+	.sidebar nav button b,
+	.sidebar section button b {
+		font-weight: 600;
+		font-size: 12px;
+		opacity: 0.7;
 	}
 	.folder-summary {
 		display: flex;
+		align-items: flex-start;
 		gap: 10px;
-		align-items: center;
-		margin: 20px 4px 0;
-		padding: 11px 10px;
-		border: 1px solid var(--sonora-border);
-		border-radius: var(--sonora-radius-md);
-		background: var(--sonora-bg-elevated);
+		padding: 12px 10px;
+		margin-bottom: 16px;
+		border-radius: 12px;
+		background: rgba(255, 255, 255, 0.03);
 		color: var(--sonora-text-muted);
 	}
-	.folder-summary div {
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
 	.folder-summary strong {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: var(--sonora-text-secondary);
-		font-size: 11px;
+		display: block;
+		color: var(--sonora-text);
+		font-size: 13px;
+		font-weight: 600;
 	}
 	.folder-summary span {
-		font-size: 10px;
-		color: var(--sonora-text-faint);
+		font-size: 12px;
 	}
-	.sidebar section {
-		margin-top: 22px;
-	}
-	.sidebar h2 {
-		margin: 0 0 10px 8px;
-		color: var(--sonora-text-faint);
-		font-size: 10px;
+	.sidebar section h2 {
+		margin: 0 0 8px 10px;
+		font-size: 11px;
 		font-weight: 650;
-		letter-spacing: var(--sonora-tracking-wide);
+		letter-spacing: 0.06em;
 		text-transform: uppercase;
+		color: var(--sonora-text-faint);
 	}
 	.main {
 		min-width: 0;
-		min-height: 0;
-		overflow: auto;
-		padding: 26px 30px 40px;
+		overflow-y: auto;
+		padding: 24px 28px 40px;
 	}
 	.toolbar {
 		display: flex;
 		align-items: flex-end;
 		justify-content: space-between;
-		gap: 18px;
+		gap: 16px;
 		margin-bottom: 22px;
 	}
 	.toolbar h1 {
-		margin: 0;
-		font-size: var(--sonora-text-2xl);
-		line-height: 1.1;
+		margin: 0 0 4px;
+		font-size: 22px;
+		font-weight: 700;
 		letter-spacing: var(--sonora-tracking-tight);
-		font-weight: 650;
 	}
-	.toolbar > div:first-child span {
-		display: block;
-		margin-top: 6px;
-		color: var(--sonora-text-faint);
-		font-size: var(--sonora-text-sm);
+	.toolbar span {
+		color: var(--sonora-text-muted);
+		font-size: 13px;
 	}
 	.toolbar-actions {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: 10px;
 	}
 	.sort-select {
 		height: 36px;
-		border: 1px solid var(--sonora-border-strong);
-		border-radius: var(--sonora-radius-sm);
 		padding: 0 10px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
 		background: var(--sonora-bg-elevated);
-		color: var(--sonora-text-secondary);
-		outline: 0;
-		font-size: var(--sonora-text-sm);
-		transition: border-color var(--sonora-duration) var(--sonora-ease);
-	}
-	.sort-select:hover {
-		border-color: color-mix(
-			in srgb,
-			var(--sonora-accent) 35%,
-			var(--sonora-border-strong)
-		);
+		color: var(--sonora-text);
+		font-size: 13px;
 	}
 	.sort-select:focus {
-		border-color: var(--sonora-border-focus);
+		outline: none;
+		border-color: color-mix(in srgb, var(--sonora-accent) 55%, var(--sonora-border-strong));
 		box-shadow: 0 0 0 3px var(--sonora-accent-soft);
 	}
 	.seg {
