@@ -107,6 +107,17 @@
 						</div>
 						<Toggle checked={$settings.compactLibrary} ariaLabel="Compact library" onchange={(v) => settings.setCompactLibrary(v)} />
 					</label>
+					<label class="row">
+						<div class="row-copy">
+							<strong>Organize by composer</strong>
+							<span>Move PDFs into a composer folder when you change the composer</span>
+						</div>
+						<Toggle
+							checked={$settings.organizeByComposer}
+							ariaLabel="Organize by composer"
+							onchange={(v) => settings.setOrganizeByComposer(v)}
+						/>
+					</label>
 				</div>
 			</section>
 

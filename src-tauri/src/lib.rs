@@ -14,6 +14,13 @@ struct NativeScoreFile {
     modified_at: u64,
 }
 
+#[derive(Debug, Serialize)]
+struct MovedScore {
+    native_path: String,
+    relative_path: String,
+    filename: String,
+}
+
 fn collect_pdfs(root: &Path, current: &Path, files: &mut Vec<NativeScoreFile>) -> Result<(), String> {
     let entries = fs::read_dir(current).map_err(|error| error.to_string())?;
     for entry in entries {
@@ -45,6 +52,113 @@ fn collect_pdfs(root: &Path, current: &Path, files: &mut Vec<NativeScoreFile>) -
         }
     }
     Ok(())
+}
+
+fn sanitize_folder_segment(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if r#"<>:"/\|?*"#.contains(c) || c.is_control() {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let s = s.trim().trim_matches('.').trim().to_string();
+    if s.is_empty() {
+        "Unknown Composer".into()
+    } else {
+        s
+    }
+}
+
+fn unique_dest(dir: &Path, filename: &str) -> Result<PathBuf, String> {
+    let dest = dir.join(filename);
+    if !dest.exists() {
+        return Ok(dest);
+    }
+    let stem = dest
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("score");
+    let ext = dest
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    for n in 2..100 {
+        let candidate = dir.join(format!("{stem} ({n}){ext}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Ok(dir.join(format!(
+        "{stem}-{}.pdf",
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    )))
+}
+
+/// Move a score PDF into `{library_root}/{composer_folder}/`, creating the folder if needed.
+#[tauri::command]
+fn move_score_into_composer_folder(
+    source_path: String,
+    library_root: String,
+    composer_folder: String,
+) -> Result<MovedScore, String> {
+    let source = PathBuf::from(&source_path);
+    if !source.is_file() {
+        return Err(format!("Source file not found: {source_path}"));
+    }
+
+    let root = PathBuf::from(&library_root);
+    if !root.is_dir() {
+        return Err("Library folder no longer exists.".into());
+    }
+
+    // Refuse to move files outside the library root
+    let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
+    let canonical_source = source.canonicalize().map_err(|e| e.to_string())?;
+    if !canonical_source.starts_with(&canonical_root) {
+        return Err("Score file is outside the library folder.".into());
+    }
+
+    let folder_name = sanitize_folder_segment(&composer_folder);
+    let dest_dir = root.join(&folder_name);
+    fs::create_dir_all(&dest_dir).map_err(|e| format!("Could not create composer folder: {e}"))?;
+
+    let filename = source
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid source filename".to_string())?;
+
+    // Already in the right folder
+    if source.parent().map(|p| p == dest_dir.as_path()).unwrap_or(false) {
+        let relative = format!("{folder_name}/{filename}").replace('\\', "/");
+        return Ok(MovedScore {
+            native_path: source.to_string_lossy().to_string(),
+            relative_path: relative,
+            filename,
+        });
+    }
+
+    let dest = unique_dest(&dest_dir, &filename)?;
+    fs::rename(&source, &dest).map_err(|e| format!("Could not move score file: {e}"))?;
+
+    let saved_name = dest
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or(filename);
+    let relative = format!("{folder_name}/{saved_name}").replace('\\', "/");
+
+    Ok(MovedScore {
+        native_path: dest.to_string_lossy().to_string(),
+        relative_path: relative,
+        filename: saved_name,
+    })
 }
 
 #[tauri::command]
@@ -122,7 +236,8 @@ pub fn run() {
             list_score_files,
             read_score_file,
             read_score_file_base64,
-            read_text_file
+            read_text_file,
+            move_score_into_composer_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sonora");
