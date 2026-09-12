@@ -110,9 +110,17 @@
 		notice = '';
 		downloading = score.filename;
 		try {
-			const result = await downloadScore(score.filename, libraryRoot);
+			const parsed = selected ? parseWorkTitle(selected.title) : null;
+			const result = await downloadScore(score.filename, {
+				libraryRoot,
+				composer: parsed?.composer ?? null,
+				workTitle: selected?.title ?? null
+			});
+			const where = parsed?.composer
+				? `under “${parsed.composer}”`
+				: 'into your library';
 			notice = result.saved_path
-				? `Saved “${result.filename}” into your library (IMSLP folder).`
+				? `Saved “${result.filename}” ${where}.`
 				: `Downloaded “${result.filename}” (${Math.round(result.size / 1024)} KB).`;
 			onDownloaded?.({
 				filename: result.filename,
@@ -277,7 +285,16 @@
 												src={score.thumb_url}
 												alt=""
 												loading="lazy"
-												referrerpolicy="no-referrer" />
+												referrerpolicy="no-referrer"
+												crossorigin="anonymous"
+												onerror={(e) => {
+												const el = e.currentTarget as HTMLImageElement;
+												el.style.display = 'none';
+												const fb = el.parentElement?.querySelector('.thumb-fallback');
+												if (fb instanceof HTMLElement) fb.style.display = 'grid';
+											}} />
+											<div class="thumb-fallback" style="display:none"
+												><Music2 size={28} /></div>
 										{:else}
 											<div class="thumb-fallback"><Music2 size={28} /></div>
 										{/if}

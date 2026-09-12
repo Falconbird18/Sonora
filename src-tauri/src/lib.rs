@@ -79,51 +79,111 @@ async fn imslp_search(query: String, limit: Option<u32>) -> Result<Vec<ImslpSear
     let limit = limit.unwrap_or(20).clamp(1, 50);
     let client = imslp_client()?;
     let q = query.trim().to_string();
-    let resp = client
-        .get("https://imslp.org/api.php")
-        .query(&[
-            ("action", "query"),
-            ("list", "search"),
-            ("srsearch", &q),
-            ("srnamespace", "0"),
-            ("srlimit", &limit.to_string()),
-            ("srprop", "snippet|size|wordcount|timestamp"),
-            ("format", "json"),
-            ("formatversion", "2"),
-        ])
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?;
-    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let hits = body["query"]["search"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|item| {
-            let title = item["title"].as_str()?.to_string();
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Run a few complementary MediaWiki searches and merge/rank.
+    // 1) plain text  2) intitle:  3) quoted phrase when multi-word
+    let mut queries = vec![q.clone(), format!("intitle:{}", q)];
+    if q.contains(' ') {
+        queries.push(format!("\"{}\"", q));
+    }
+
+
+    let mut merged: Vec<ImslpSearchHit> = Vec::new();
+    let mut seen = std::collections::HashSet::<String>::new();
+
+    for srsearch in queries {
+        let resp = client
+            .get("https://imslp.org/api.php")
+            .query(&[
+                ("action", "query"),
+                ("list", "search"),
+                ("srsearch", &srsearch),
+                ("srnamespace", "0"),
+                ("srlimit", &limit.to_string()),
+                ("srprop", "snippet|size|wordcount|timestamp"),
+                ("srwhat", "text"),
+                ("format", "json"),
+                ("formatversion", "2"),
+            ])
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?;
+        let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        let Some(arr) = body["query"]["search"].as_array() else {
+            continue;
+        };
+        for item in arr {
+            let title = match item["title"].as_str() {
+                Some(t) => t.to_string(),
+                None => continue,
+            };
             if title.starts_with("Category:")
                 || title.starts_with("Help:")
                 || title.starts_with("IMSLP:")
                 || title.starts_with("File:")
+                || title.starts_with("Template:")
+                || title.starts_with("User:")
             {
-                return None;
+                continue;
             }
             let snippet = item["snippet"].as_str().unwrap_or("").to_string();
             let snippet_plain = strip_html_tags(&decode_html_entities(&snippet));
             if snippet_plain.trim_start().to_uppercase().starts_with("#REDIRECT") {
-                return None;
+                continue;
             }
-            Some(ImslpSearchHit {
+            let key = title.to_lowercase();
+            if !seen.insert(key) {
+                continue;
+            }
+            merged.push(ImslpSearchHit {
                 title,
                 snippet: clean_search_snippet(&snippet),
                 pageid: item["pageid"].as_u64(),
-            })
-        })
-        .collect();
-    Ok(hits)
+            });
+        }
+    }
+
+    // Rank: work pages "Title (Composer)" first, then title match quality
+    let q_lower = q.to_lowercase();
+    let q_tokens: Vec<&str> = q_lower.split_whitespace().collect();
+    merged.sort_by(|a, b| {
+        search_rank(&b.title, &q_lower, &q_tokens)
+            .cmp(&search_rank(&a.title, &q_lower, &q_tokens))
+            .then_with(|| a.title.cmp(&b.title))
+    });
+    merged.truncate(limit as usize);
+    Ok(merged)
+}
+
+fn search_rank(title: &str, q: &str, tokens: &[&str]) -> i32 {
+    let t = title.to_lowercase();
+    let mut score = 0i32;
+    // Prefer real work pages: "Something (Composer, Name)"
+    if t.contains('(') && t.contains(')') {
+        score += 50;
+    }
+    if t == *q {
+        score += 100;
+    } else if t.starts_with(q) {
+        score += 40;
+    } else if t.contains(q) {
+        score += 25;
+    }
+    for tok in tokens {
+        if t.contains(tok) {
+            score += 8;
+        }
+    }
+    // Penalize arrangements / extracts that often clutter results
+    if t.contains("theme from") || t.contains("arranged") || t.contains("simplified") {
+        score -= 15;
+    }
+    score
 }
 
 fn strip_html_tags(s: &str) -> String {
@@ -286,10 +346,14 @@ async fn enrich_thumbnails(client: &reqwest::Client, files: &mut [ImslpScoreFile
         return;
     }
     for chunk in files.chunks_mut(40) {
-        let titles: Vec<String> = chunk
-            .iter()
-            .map(|f| format!("File:{}", f.filename.replace(' ', "_")))
-            .collect();
+        // Query both space and underscore forms — MediaWiki normalizes unpredictably
+        let mut titles: Vec<String> = Vec::new();
+        for f in chunk.iter() {
+            titles.push(format!("File:{}", f.filename.replace(' ', "_")));
+            if f.filename.contains(' ') {
+                titles.push(format!("File:{}", f.filename));
+            }
+        }
         let joined = titles.join("|");
         let resp = client
             .get("https://imslp.org/api.php")
@@ -297,38 +361,61 @@ async fn enrich_thumbnails(client: &reqwest::Client, files: &mut [ImslpScoreFile
                 ("action", "query"),
                 ("titles", &joined),
                 ("prop", "imageinfo"),
-                ("iiprop", "url"),
-                ("iiurlwidth", "160"),
+                ("iiprop", "url|thumburl|size"),
+                ("iiurlwidth", "240"),
                 ("format", "json"),
+                ("formatversion", "2"),
             ])
             .send()
             .await;
         let Ok(resp) = resp else { continue };
         let Ok(body) = resp.json::<serde_json::Value>().await else { continue };
-        let Some(pages) = body["query"]["pages"].as_object() else { continue };
+        let pages = body["query"]["pages"].as_array().cloned().unwrap_or_default();
         let mut thumbs: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        for (_id, page) in pages {
+        for page in pages {
+            if page.get("missing").is_some() {
+                continue;
+            }
             let title = page["title"].as_str().unwrap_or("").to_string();
-            let fname = title.strip_prefix("File:").unwrap_or(&title).replace('_', " ");
-            if let Some(info) = page["imageinfo"].as_array().and_then(|a| a.first()) {
-                if let Some(tu) = info.get("thumburl").and_then(|v| v.as_str()) {
-                    let mut u = tu.to_string();
-                    if u.starts_with("//") {
-                        u = format!("https:{u}");
-                    }
-                    thumbs.insert(fname.to_lowercase(), u.clone());
-                    thumbs.insert(
-                        title.strip_prefix("File:").unwrap_or(&title).to_lowercase(),
-                        u,
-                    );
+            let fname = title.strip_prefix("File:").unwrap_or(&title);
+            let info = match page["imageinfo"].as_array().and_then(|a| a.first()) {
+                Some(i) => i,
+                None => continue,
+            };
+            // Prefer rendered thumb; fall back to full file URL (browser may not show PDF)
+            let mut chosen = info
+                .get("thumburl")
+                .and_then(|v| v.as_str())
+                .or_else(|| info.get("url").and_then(|v| v.as_str()))
+                .map(|s| s.to_string());
+            if let Some(ref mut u) = chosen {
+                if u.starts_with("//") {
+                    *u = format!("https:{u}");
+                } else if u.starts_with("http://") {
+                    *u = format!("https://{}", &u[7..]);
+                }
+            }
+            if let Some(u) = chosen {
+                let keys = [
+                    fname.to_lowercase(),
+                    fname.replace('_', " ").to_lowercase(),
+                    fname.replace(' ', "_").to_lowercase(),
+                ];
+                for k in keys {
+                    thumbs.insert(k, u.clone());
                 }
             }
         }
         for f in chunk.iter_mut() {
             let k1 = f.filename.to_lowercase();
             let k2 = f.filename.replace(' ', "_").to_lowercase();
-            f.thumb_url = thumbs.get(&k1).cloned().or_else(|| thumbs.get(&k2).cloned());
+            let k3 = f.filename.replace('_', " ").to_lowercase();
+            f.thumb_url = thumbs
+                .get(&k1)
+                .cloned()
+                .or_else(|| thumbs.get(&k2).cloned())
+                .or_else(|| thumbs.get(&k3).cloned());
         }
     }
 }
@@ -638,6 +725,8 @@ fn urlencoding_encode(s: &str) -> String {
 async fn imslp_download_score(
     filename: String,
     library_root: Option<String>,
+    composer: Option<String>,
+    work_title: Option<String>,
 ) -> Result<ImslpDownloadResult, String> {
     let client = imslp_client()?;
     let encoded = urlencoding_encode(&filename);
@@ -649,7 +738,7 @@ async fn imslp_download_score(
     // 1) Disclaimer / wait page
     let accept_bytes = fetch_bytes(&client, &accept_url).await?;
     if accept_bytes.starts_with(b"%PDF") {
-        return finish_download(filename, library_root, accept_bytes);
+        return finish_download(filename, library_root, composer.clone(), work_title.clone(), accept_bytes);
     }
     let accept_html = String::from_utf8_lossy(&accept_bytes).into_owned();
     push_unique(&mut candidates, extract_all_mirror_urls(&accept_html));
@@ -657,7 +746,7 @@ async fn imslp_download_score(
     // 2) Image handler page
     if let Ok(handler_bytes) = fetch_bytes(&client, &handler_url).await {
         if handler_bytes.starts_with(b"%PDF") {
-            return finish_download(filename, library_root, handler_bytes);
+            return finish_download(filename, library_root, composer.clone(), work_title.clone(), handler_bytes);
         }
         let handler_html = String::from_utf8_lossy(&handler_bytes).into_owned();
         push_unique(&mut candidates, extract_all_mirror_urls(&handler_html));
@@ -689,7 +778,7 @@ async fn imslp_download_score(
     for url in candidates {
         match fetch_bytes(&client, &url).await {
             Ok(bytes) if bytes.starts_with(b"%PDF") => {
-                return finish_download(filename, library_root, bytes);
+                return finish_download(filename, library_root, composer, work_title, bytes);
             }
             Ok(_) => {
                 last_err = format!("Mirror returned non-PDF content ({url})");
@@ -732,6 +821,8 @@ async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, Str
 fn finish_download(
     filename: String,
     library_root: Option<String>,
+    composer: Option<String>,
+    work_title: Option<String>,
     bytes: Vec<u8>,
 ) -> Result<ImslpDownloadResult, String> {
     let size = bytes.len() as u64;
@@ -740,18 +831,29 @@ fn finish_download(
     }
 
     if let Some(root) = library_root.filter(|s| !s.trim().is_empty()) {
-        let dir = PathBuf::from(&root).join("IMSLP");
-        fs::create_dir_all(&dir).map_err(|e| format!("Could not create IMSLP folder: {e}"))?;
-        // Sanitize filename for filesystem
-        let safe = filename
-            .chars()
-            .map(|c| if r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
-            .collect::<String>();
-        let dest = dir.join(&safe);
+        // Prefer composer folder so library sync tags the score with that composer
+        // (folderSync uses the parent directory name as composer).
+        let composer_folder = sanitize_path_segment(
+            composer
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != "Unknown Composer")
+                .unwrap_or("Unknown Composer"),
+        );
+        let dir = PathBuf::from(&root).join(&composer_folder);
+        fs::create_dir_all(&dir).map_err(|e| format!("Could not create composer folder: {e}"))?;
+
+        // Prefer a readable work-based filename when available
+        let safe = preferred_filename(&filename, work_title.as_deref());
+        let dest = unique_dest(&dir, &safe)?;
         fs::write(&dest, &bytes).map_err(|e| format!("Could not write PDF: {e}"))?;
-        let relative = format!("IMSLP/{safe}");
+        let saved_name = dest
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or(safe);
+        let relative = format!("{composer_folder}/{saved_name}");
         return Ok(ImslpDownloadResult {
-            filename: safe,
+            filename: saved_name,
             size,
             saved_path: Some(dest.to_string_lossy().to_string()),
             relative_path: Some(relative),
@@ -766,6 +868,70 @@ fn finish_download(
         relative_path: None,
         bytes_base64: Some(data_encoding_base64(&bytes)),
     })
+}
+
+fn sanitize_path_segment(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if r#"<>:"/\|?*"#.contains(c) || c.is_control() {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let s = s.trim().trim_matches('.').trim().to_string();
+    if s.is_empty() {
+        "Unknown Composer".into()
+    } else {
+        s
+    }
+}
+
+fn preferred_filename(raw_filename: &str, work_title: Option<&str>) -> String {
+    if let Some(title) = work_title.map(str::trim).filter(|s| !s.is_empty()) {
+        // Use work title without the trailing "(Composer)" for a cleaner file name
+        let base = title
+            .rsplit_once('(')
+            .map(|(left, _)| left.trim())
+            .unwrap_or(title);
+        let safe = sanitize_path_segment(base);
+        if !safe.is_empty() && safe != "Unknown Composer" {
+            return format!("{safe}.pdf");
+        }
+    }
+    let stem = raw_filename
+        .strip_suffix(".pdf")
+        .or_else(|| raw_filename.strip_suffix(".PDF"))
+        .unwrap_or(raw_filename);
+    format!("{}.pdf", sanitize_path_segment(stem))
+}
+
+fn unique_dest(dir: &Path, filename: &str) -> Result<PathBuf, String> {
+    let dest = dir.join(filename);
+    if !dest.exists() {
+        return Ok(dest);
+    }
+    let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("score");
+    let ext = dest
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    for n in 2..100 {
+        let candidate = dir.join(format!("{stem} ({n}){ext}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Ok(dir.join(format!(
+        "{stem}-{}.pdf",
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    )))
 }
 
 async fn imageinfo_url(client: &reqwest::Client, filename: &str) -> Option<String> {

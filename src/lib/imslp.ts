@@ -34,6 +34,14 @@ export type ImslpDownloadResult = {
 	bytes_base64?: string | null;
 };
 
+export type ImslpDownloadOptions = {
+	libraryRoot?: string | null;
+	/** Composer name used for the library folder + score tag (e.g. "Beethoven, Ludwig van"). */
+	composer?: string | null;
+	/** Full IMSLP work title, used to build a readable filename. */
+	workTitle?: string | null;
+};
+
 export function imslpAvailable() {
 	return isTauri();
 }
@@ -58,18 +66,25 @@ export async function getWorkScores(workTitle: string): Promise<ImslpScoreFile[]
 
 /**
  * Download a score PDF via the official disclaimer → mirror URL flow.
- * When `libraryRoot` is set, the file is written to `{libraryRoot}/IMSLP/`.
+ * When `libraryRoot` is set, the file is written under `{libraryRoot}/{Composer}/`.
  */
 export async function downloadScore(
 	filename: string,
-	libraryRoot?: string | null
+	options?: ImslpDownloadOptions | string | null
 ): Promise<ImslpDownloadResult> {
 	if (!isTauri()) {
 		throw new Error('IMSLP download requires the desktop app.');
 	}
+	// Back-compat: second arg used to be libraryRoot string
+	const opts: ImslpDownloadOptions =
+		typeof options === 'string' || options === null || options === undefined
+			? { libraryRoot: options ?? null }
+			: options;
 	return invoke<ImslpDownloadResult>('imslp_download_score', {
 		filename,
-		libraryRoot: libraryRoot ?? null
+		libraryRoot: opts.libraryRoot ?? null,
+		composer: opts.composer ?? null,
+		workTitle: opts.workTitle ?? null
 	});
 }
 
@@ -95,7 +110,6 @@ export function displayFilename(filename: string) {
 		.replace(/_/g, ' ')
 		.replace(/\.pdf$/i, '')
 		.trim();
-	// Collapse whitespace and trim leftover dashes
 	name = name.replace(/\s+/g, ' ').replace(/^[\s\-–—]+|[\s\-–—]+$/g, '');
 	return name || filename;
 }
