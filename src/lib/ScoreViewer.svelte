@@ -82,6 +82,15 @@
 		screenX?: number;
 		screenY?: number;
 	};
+	type PageBitmap = {
+		index: number;
+		number: number;
+		widthPx: number;
+		heightPx: number;
+		canvasW: number;
+		canvasH: number;
+		offscreen: HTMLCanvasElement;
+	};
 
 	let pdf = $state<PdfDocumentProxy | null>(null);
 	let openedPdf: Awaited<ReturnType<typeof openPdfSource>> | null = null;
@@ -180,6 +189,36 @@
 	let rightInk = $state<HTMLCanvasElement | null>(null);
 	let generation = 0;
 	let tasks: PdfRenderTask[] = [];
+	/** LRU cache of fully rendered page bitmaps keyed by `page@renderScale`. */
+	const pageCache = new Map<string, PageBitmap>();
+	const MAX_PAGE_CACHE = 20;
+	function cacheKey(number: number, renderScale: number) {
+		return `${number}@${Math.round(renderScale * 1000)}`;
+	}
+	function touchCache(key: string, bmp: PageBitmap) {
+		if (pageCache.has(key)) pageCache.delete(key);
+		pageCache.set(key, bmp);
+		while (pageCache.size > MAX_PAGE_CACHE) {
+			const oldest = pageCache.keys().next().value as string | undefined;
+			if (oldest === undefined) break;
+			const old = pageCache.get(oldest);
+			pageCache.delete(oldest);
+			// Help GC release large canvases
+			if (old?.offscreen) {
+				old.offscreen.width = 0;
+				old.offscreen.height = 0;
+			}
+		}
+	}
+	function clearPageCache() {
+		for (const bmp of pageCache.values()) {
+			if (bmp.offscreen) {
+				bmp.offscreen.width = 0;
+				bmp.offscreen.height = 0;
+			}
+		}
+		pageCache.clear();
+	}
 	let resizeTimer: ReturnType<typeof setTimeout> | undefined;
 	let prefetchTimer: ReturnType<typeof setTimeout> | undefined;
 	let saveTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -238,7 +277,13 @@
 	const extraColors = colors.slice(3);
 	let colorPickerOpen = $state(false);
 	const visiblePages = $derived(
-		pdf ? (dual ? [page, Math.min(pdf.numPages, page + 1)] : [page]) : [page]
+		pdf
+			? dual
+				? page < pdf.numPages
+					? [page, page + 1]
+					: [page]
+				: [page]
+			: [page]
 	);
 	const recentSymbolObjects = $derived(
 		recentSymbols
@@ -324,8 +369,9 @@
 			}
 			const saved = JSON.parse(localStorage.getItem(prefs) || '{}');
 			bookmarked = !!saved.bookmarked;
-			zoom = typeof saved.zoom === 'number' ? saved.zoom : 1;
-			renderedZoom = zoom;
+			// Always open at 100% zoom (ignore previously saved zoom).
+			zoom = 1;
+			renderedZoom = 1;
 			visualScale = 1;
 			needsCenter = true;
 			if (typeof saved.fit === 'string')
@@ -525,6 +571,7 @@
 
 	async function destroyDocument() {
 		cancelRender();
+		clearPageCache();
 		const opened = openedPdf;
 		openedPdf = null;
 		pdf = null;
@@ -585,13 +632,13 @@
 			} else if (host.clientWidth < 720) {
 				dual = false;
 			}
-			const bitmaps: PageBitmap[] = [];
-			for (let index = 0; index < visiblePages.length; index++) {
-				const bmp = await renderPage(visiblePages[index], index, current);
-				if (current !== generation) return;
-				if (bmp) bitmaps.push(bmp);
-			}
-			if (current === generation && bitmaps.length) {
+			// Parallelize left/right page rasterization — dual mode was sequential before.
+			const results = await Promise.all(
+				visiblePages.map((num, index) => renderPage(num, index, current))
+			);
+			if (current !== generation) return;
+			const bitmaps = results.filter((b): b is PageBitmap => !!b);
+			if (bitmaps.length) {
 				hasPainted = true;
 				commitPageBitmaps(bitmaps);
 			}
@@ -651,15 +698,6 @@
 		);
 	}
 
-	type PageBitmap = {
-		index: number;
-		number: number;
-		widthPx: number;
-		heightPx: number;
-		canvasW: number;
-		canvasH: number;
-		offscreen: HTMLCanvasElement;
-	};
 
 	async function paintPage(
 		pdfPage: PdfPageProxy,
@@ -670,6 +708,14 @@
 		dpr: number,
 		current: number
 	): Promise<PageBitmap | null> {
+		const key = cacheKey(number, renderScale);
+		const cached = pageCache.get(key);
+		if (cached) {
+			// Reuse cached raster; only update the layout index for dual/single placement.
+			touchCache(key, cached);
+			return { ...cached, index, number };
+		}
+
 		// CSS size stays at fit (layoutScale) so zoom is purely a CSS transform — no layout jump on settle.
 		const layoutViewport = pdfPage.getViewport({ scale: layoutScale });
 		const widthPx = Math.ceil(layoutViewport.width);
@@ -697,7 +743,9 @@
 		tasks.push(task);
 		await task.promise;
 		if (current !== generation || closed) return null;
-		return { index, number, widthPx, heightPx, canvasW, canvasH, offscreen };
+		const bmp: PageBitmap = { index, number, widthPx, heightPx, canvasW, canvasH, offscreen };
+		touchCache(key, bmp);
+		return bmp;
 	}
 
 	function commitPageBitmaps(bitmaps: PageBitmap[]) {
@@ -741,11 +789,12 @@
 		const leftH = leftPdf
 			? Number.parseFloat(leftPdf.style.height) || leftPdf.clientHeight
 			: 0;
-		const rightW =
-			dual && rightPdf
-				? Number.parseFloat(rightPdf.style.width) || rightPdf.clientWidth
-				: 0;
-		const gap = dual && rightW ? 20 : 0;
+		// When dual is on but we're on the final odd page, only one page is shown.
+		const showRight = dual && visiblePages.length > 1 && rightPdf;
+		const rightW = showRight
+			? Number.parseFloat(rightPdf!.style.width) || rightPdf!.clientWidth
+			: 0;
+		const gap = showRight && rightW ? 20 : 0;
 		const contentW = leftW + gap + rightW;
 		const contentH = leftH;
 		panX = (host.clientWidth - contentW * zoom) / 2;
@@ -755,18 +804,33 @@
 	function schedulePrefetch() {
 		clearTimeout(prefetchTimer);
 		prefetchTimer = setTimeout(() => {
-			if (!pdf || closed) return;
+			if (!pdf || !host || closed) return;
 			const upcoming = [
 				page + (dual ? 2 : 1),
 				page + (dual ? 4 : 2),
+				page + (dual ? 6 : 3),
 				Math.max(1, page - 1),
-				Math.max(1, page - (dual ? 2 : 1))
+				Math.max(1, page - (dual ? 2 : 1)),
+				Math.max(1, page - (dual ? 4 : 2))
 			];
-			for (const number of upcoming) {
-				if (number >= 1 && number <= pdf.numPages)
-					void pdf.getPage(number).catch(() => {});
-			}
-		}, 60);
+			const unique = [...new Set(upcoming)].filter(
+				(n) => n >= 1 && n <= (pdf?.numPages ?? 0)
+			);
+			// Warm page objects + fully rasterize into cache at current scale so
+			// page turns and long jumps feel instantaneous.
+			void (async () => {
+				const current = generation;
+				for (const number of unique) {
+					if (closed || current !== generation) return;
+					try {
+						// renderPage already checks/uses cache and writes back into it
+						await renderPage(number, 0, current);
+					} catch {
+						/* ignore prefetch failures */
+					}
+				}
+			})();
+		}, 40);
 	}
 
 	function position(event: PointerEvent, canvas: HTMLCanvasElement): Point {
@@ -1731,7 +1795,15 @@
 					class="icon-button"
 					title="Zoom out"
 					onclick={() => setZoom(zoom - 0.08)}><ZoomOut size={17} /></button>
-				<span>{Math.round(zoom * 100)}%</span>
+				<button
+					class="zoom-reset"
+					title="Reset zoom to 100%"
+					aria-label="Reset zoom to 100%"
+					onclick={() => {
+						needsCenter = true;
+						setZoom(1, { immediate: true });
+					}}
+					>{Math.round(zoom * 100)}%</button>
 				<button
 					class="icon-button"
 					title="Zoom in"
@@ -2273,6 +2345,26 @@
 	.icon-button:disabled {
 		opacity: 0.3;
 		cursor: not-allowed;
+	}
+	.zoom-reset {
+		min-width: 48px;
+		height: 36px;
+		padding: 0 8px;
+		border: 1px solid transparent;
+		border-radius: 9px;
+		background: transparent;
+		color: #d4d4cc;
+		font-size: 12px;
+		font-variant-numeric: tabular-nums;
+		font-weight: 500;
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.zoom-reset:hover {
+		background: rgba(255, 255, 255, 0.08);
+		color: #fff;
 	}
 	.text-button {
 		min-height: 36px;

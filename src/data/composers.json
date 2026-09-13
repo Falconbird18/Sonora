@@ -17,7 +17,7 @@
 		"period": "Renaissance",
 		"birthYear": 1505,
 		"deathYear": 1585,
-		"birthPlace": "Kent, England",
+		"birthPlace": "Kent",
 		"country": "England",
 		"portraitFiles": ["Thomas Tallis.jpg"],
 		"portraitQuery": "Thomas Tallis portrait"
@@ -29,7 +29,7 @@
 		"period": "Renaissance",
 		"birthYear": 1540,
 		"deathYear": 1623,
-		"birthPlace": "London, England",
+		"birthPlace": "London",
 		"country": "England",
 		"portraitFiles": ["William Byrd.jpg"],
 		"portraitQuery": "William Byrd portrait"
@@ -74,7 +74,7 @@
 		"period": "Baroque",
 		"birthYear": 1659,
 		"deathYear": 1695,
-		"birthPlace": "Westminster, England",
+		"birthPlace": "Westminster",
 		"country": "England",
 		"portraitFiles": ["Henry Purcell.jpg"]
 	},
@@ -96,7 +96,7 @@
 		"period": "Baroque",
 		"birthYear": 1668,
 		"deathYear": 1733,
-		"birthPlace": "Paris, France",
+		"birthPlace": "Paris",
 		"country": "France",
 		"portraitFiles": ["François Couperin.jpg", "Francois Couperin.jpg"]
 	},
@@ -162,7 +162,7 @@
 		"period": "Baroque",
 		"birthYear": 1683,
 		"deathYear": 1764,
-		"birthPlace": "Dijon, France",
+		"birthPlace": "Dijon",
 		"country": "France",
 		"portraitFiles": ["Jean-Philippe Rameau.jpg"]
 	},
@@ -195,7 +195,7 @@
 		"period": "Classical",
 		"birthYear": 1732,
 		"deathYear": 1809,
-		"birthPlace": "Rohrau, Austria",
+		"birthPlace": "Rohrau",
 		"country": "Austria",
 		"portraitFiles": [
 			"Joseph Haydn by Thomas Hardy (small).jpg",
@@ -259,7 +259,7 @@
 		"period": "Classical / Romantic",
 		"birthYear": 1791,
 		"deathYear": 1857,
-		"birthPlace": "Vienna, Austria",
+		"birthPlace": "Vienna",
 		"country": "Austria",
 		"portraitFiles": ["Carl Czerny.jpg"]
 	},
@@ -270,7 +270,7 @@
 		"period": "Romantic",
 		"birthYear": 1819,
 		"deathYear": 1900,
-		"birthPlace": "Renescure, France",
+		"birthPlace": "Renescure",
 		"country": "France",
 		"portraitFiles": ["Charles-Louis Hanon.jpg"],
 		"portraitQuery": "Charles-Louis Hanon.jpg"
@@ -282,7 +282,7 @@
 		"period": "Romantic",
 		"birthYear": 1846,
 		"deathYear": 1918,
-		"birthPlace": "Hamburg, Germany",
+		"birthPlace": "Hamburg",
 		"country": "Germany",
 		"portraitFiles": ["Henry Schradieck.jpg"],
 		"portraitQuery": "Henry Schradieck portrait"
@@ -306,7 +306,7 @@
 		"period": "Classical / Romantic",
 		"birthYear": 1766,
 		"deathYear": 1831,
-		"birthPlace": "Versailles, France",
+		"birthPlace": "Versailles",
 		"country": "France",
 		"portraitFiles": ["Rodolphe Kreutzer.jpg"]
 	},
@@ -328,7 +328,7 @@
 		"period": "Classical / Early Romantic",
 		"birthYear": 1774,
 		"deathYear": 1830,
-		"birthPlace": "Bordeaux, France",
+		"birthPlace": "Bordeaux",
 		"country": "France",
 		"portraitFiles": ["Pierre Rode.jpg"]
 	},
@@ -339,7 +339,7 @@
 		"period": "Romantic",
 		"birthYear": 1815,
 		"deathYear": 1888,
-		"birthPlace": "Vienna, Austria",
+		"birthPlace": "Vienna",
 		"country": "Austria",
 		"portraitFiles": ["Jakob Dont.jpg"],
 		"portraitQuery": "Jakob Dont portrait"
@@ -363,7 +363,7 @@
 		"period": "Romantic",
 		"birthYear": 1797,
 		"deathYear": 1828,
-		"birthPlace": "Vienna, Austria",
+		"birthPlace": "Vienna",
 		"country": "Austria",
 		"portraitFiles": ["Franz Schubert by Wilhelm August Rieder 1875.jpg"]
 	},
@@ -374,7 +374,7 @@
 		"period": "Romantic",
 		"birthYear": 1803,
 		"deathYear": 1869,
-		"birthPlace": "La Côte-Saint-André, France",
+		"birthPlace": "La Côte-Saint-André",
 		"country": "France",
 		"portraitFiles": ["Hector Berlioz.jpg"]
 	},
@@ -385,7 +385,7 @@
 		"period": "Romantic",
 		"birthYear": 1809,
 		"deathYear": 1847,
-		"birthPlace": "Hamburg, Germany",
+		"birthPlace": "Hamburg",
 		"country": "Germany",
 		"portraitFiles": ["Felix Mendelssohn Bartholdy.jpg"]
 	},
@@ -460,7 +460,7 @@
 		"period": "Romantic",
 		"birthYear": 1824,
 		"deathYear": 1896,
-		"birthPlace": "Ansfelden, Austrian Empire",
+		"birthPlace": "Ansfelden",
 		"country": "Austria",
 		"portraitFiles": ["Anton Bruckner.jpg"]
 	},
@@ -966,10 +966,46 @@
 		"period": "Contemporary / Film Score",
 		"birthYear": 1932,
 		"deathYear": null,
-		"birthPlace": "Queens, New York, United States",
+		"birthPlace": "Queens, New York",
 		"country": "United States",
-		"portraitFiles": ["Mr. John Williams conductor (5349029).jpg"],
-		"portraitQuery": "Mr. John Williams conductor (5349029).jpg"
+		"portraitFiles": ["John Williams Hollywood Bowl.jpg"],
+		"portraitQuery": "John Williams Hollywood Bowl.jpg"
+	},
+	{
+		"id": "grofe",
+		"name": "Ferde Grofé",
+		"aliases": ["Ferde Grofé", "Grofé"],
+		"period": "Contemporary / Symphonic Jazz",
+		"birthYear": 1892,
+		"deathYear": 1972,
+		"birthPlace": "New York City",
+		"country": "United States",
+		"portraitFiles": ["Ferde Grofé.jpg"],
+		"portraitQuery": "Ferde Grofé.jpg"
+	},
+	{
+		"id": "ives",
+		"name": "Charles Ives",
+		"aliases": ["Charles Edward Ives", "Ives"],
+		"period": "Modern",
+		"birthYear": 1874,
+		"deathYear": 1954,
+		"birthPlace": "Danbury, Connecticut",
+		"country": "United States",
+		"portraitFiles": ["Charles Edward Ives - National Portrait Gallery, Smithsonian Institution (NPG.82.185).jpg"],
+		"portraitQuery": "Charles Edward Ives - National Portrait Gallery, Smithsonian Institution (NPG.82.185).jpg"
+	},
+	{
+		"id": "rowley",
+		"name": "Alec Rowley",
+		"aliases": ["Alec Rowley", "Rowley"],
+		"period": "Modern",
+		"birthYear": 1892,
+		"deathYear": 1958,
+		"birthPlace": "Ealing, West London",
+		"country": "England",
+		"portraitFiles": ["Ferde Grofé.jpg"],
+		"portraitQuery": "Ferde Grofé.jpg"
 	},
 	{
 		"id": "morricone",
