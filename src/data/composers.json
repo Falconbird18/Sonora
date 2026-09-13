@@ -984,6 +984,30 @@
 		"portraitQuery": "Ferde Grofé.jpg"
 	},
 	{
+		"id": "ives",
+		"name": "Charles Ives",
+		"aliases": ["Charles Edward Ives", "Ives"],
+		"period": "Modern",
+		"birthYear": 1874,
+		"deathYear": 1954,
+		"birthPlace": "Danbury, Connecticut",
+		"country": "United States",
+		"portraitFiles": ["Charles Edward Ives - National Portrait Gallery, Smithsonian Institution (NPG.82.185).jpg"],
+		"portraitQuery": "Charles Edward Ives - National Portrait Gallery, Smithsonian Institution (NPG.82.185).jpg"
+	},
+	{
+		"id": "rowley",
+		"name": "Alec Rowley",
+		"aliases": ["Alec Rowley", "Rowley"],
+		"period": "Modern",
+		"birthYear": 1892,
+		"deathYear": 1958,
+		"birthPlace": "Ealing, West London",
+		"country": "England",
+		"portraitFiles": ["Ferde Grofé.jpg"],
+		"portraitQuery": "Ferde Grofé.jpg"
+	},
+	{
 		"id": "morricone",
 		"name": "Ennio Morricone",
 		"aliases": ["Ennio Morricone", "Morricone"],
