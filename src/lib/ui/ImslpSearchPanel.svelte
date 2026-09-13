@@ -357,7 +357,14 @@
 									type="button"
 									class="hit"
 									onclick={() => void selectWork(hit)}>
-									<div class="hit-icon"><Music2 size={18} /></div>
+									<div class="hit-icon">
+										{#if hit.thumb_url}
+											<img src={hit.thumb_url} alt="" loading="lazy" referrerpolicy="no-referrer"
+												onerror={(e) => { /* hide + show Music2 fallback */ }} />
+										{:else}
+											<Music2 size={18} />
+										{/if}
+									</div>
 									<div class="hit-body">
 										<strong>{parsed.title}</strong>
 										<span class="composer">{parsed.composer}</span>

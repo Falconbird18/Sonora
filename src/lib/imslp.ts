@@ -16,6 +16,7 @@ export type ImslpSearchHit = {
 	title: string;
 	snippet: string;
 	pageid?: number;
+	thumb_url?: string | null;
 };
 
 export type ImslpScoreFile = {
