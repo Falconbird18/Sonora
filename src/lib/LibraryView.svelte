@@ -29,6 +29,13 @@
 		resolveScoreSource,
 		syncAllFolders
 	} from './folderSync';
+	import {
+		checkForUpdate,
+		shouldShowUpdateBanner,
+		dismissUpdate,
+		type UpdateInfo
+	} from './updateChecker';
+	import { refreshComposersFromRemote } from './composerDatabase';
 	import { getComposerPortrait } from './composerPortraits';
 	import { getPdfInfoFromSource } from './pdfUtils';
 	import { isTauri } from './paths';
@@ -56,6 +63,9 @@
 		backfillRunning = false;
 	let settingsOpen = $state(false);
 	let imslpOpen = $state(false);
+
+	let updateInfo = $state<UpdateInfo | null>(null);
+	let updateBannerVisible = $state(false);
 
 	async function refresh() {
 		const [nextScores, nextFolder] = await Promise.all([
@@ -288,6 +298,15 @@
 		let disposed = false;
 		const initialize = async () => {
 			await refresh();
+			void refreshComposersFromRemote().then((result) => {
+				if (result.updated) {
+					console.info(`Composer list updated from ${result.source} (${result.count} entries)`);
+				}
+			});
+			void checkForUpdate().then((info) => {
+				updateInfo = info;
+				updateBannerVisible = shouldShowUpdateBanner(info);
+			});
 			if (disposed) return;
 			const saved = localStorage.getItem('sonora-library-settings');
 			if (saved) {
@@ -421,6 +440,30 @@
 	{/if}
 	{#if notice}
 		<Notice variant="success">{notice}</Notice>
+	{/if}
+
+	{#if updateBannerVisible && updateInfo}
+		<Notice
+			variant="info"
+			dismissible
+			ondismiss={() => {
+				if (updateInfo?.tagName) dismissUpdate(updateInfo.tagName);
+				updateBannerVisible = false;
+			}}
+		>
+			<span>
+				Sonora {updateInfo.latestVersion} is available
+				(you have {updateInfo.currentVersion}).
+				<a
+					href={updateInfo.htmlUrl || 'https://github.com/Falconbird18/Sonora/releases'}
+					target="_blank"
+					rel="noopener noreferrer"
+					style="color: var(--sonora-accent); font-weight: 600;"
+				>
+					View release
+				</a>
+			</span>
+		</Notice>
 	{/if}
 
 	<div class="body">

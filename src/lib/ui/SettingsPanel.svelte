@@ -4,6 +4,12 @@
 	import { tick } from 'svelte';
 	import { settings, type ThemePreference } from '../settingsStore';
 	import Toggle from './Toggle.svelte';
+	import { checkForUpdate, CURRENT_VERSION, type UpdateInfo } from '../updateChecker';
+	import { refreshComposersFromRemote } from '../composerDatabase';
+
+	let updateStatus = $state<'idle' | 'checking' | 'done'>('idle');
+	let lastUpdate = $state<UpdateInfo | null>(null);
+	let composerStatus = $state('');
 
 	type Props = {
 		open?: boolean;
@@ -19,6 +25,30 @@
 		{ value: 'dark', label: 'Dark', icon: 'dark' },
 		{ value: 'light', label: 'Light', icon: 'light' }
 	];
+
+	async function runUpdateCheck() {
+		updateStatus = 'checking';
+		lastUpdate = null;
+		try {
+			lastUpdate = await checkForUpdate({ force: true });
+		} finally {
+			updateStatus = 'done';
+		}
+	}
+
+	async function runComposerRefresh() {
+		composerStatus = 'Refreshing…';
+		try {
+			const result = await refreshComposersFromRemote({ force: true });
+			composerStatus = result.error
+				? `Using ${result.source} (${result.count}). ${result.error}`
+				: result.updated
+					? `Updated from ${result.source} — ${result.count} composers`
+					: `Already current (${result.source}, ${result.count})`;
+		} catch (e) {
+			composerStatus = e instanceof Error ? e.message : 'Refresh failed';
+		}
+	}
 
 	function onKey(event: KeyboardEvent) {
 		if (event.key === 'Escape' && open) onClose();
@@ -167,6 +197,65 @@
 					</span>
 					<input type="range" min="10" max="36" value={$settings.textSize} oninput={(e) => settings.setTextSize(Number((e.currentTarget as HTMLInputElement).value))} />
 				</label>
+			</section>
+
+			<section class="section">
+				<h3>About</h3>
+				<div class="rows">
+					<div class="row" style="cursor: default;">
+						<div class="row-copy">
+							<strong>Version</strong>
+							<span>Sonora {CURRENT_VERSION}</span>
+						</div>
+					</div>
+					<div class="row" style="cursor: default; flex-wrap: wrap; gap: 8px;">
+						<div class="row-copy" style="flex: 1;">
+							<strong>Updates</strong>
+							<span>
+								{#if updateStatus === 'checking'}
+									Checking GitHub releases…
+								{:else if lastUpdate?.available}
+									{lastUpdate.latestVersion} available —
+									<a
+										href={lastUpdate.htmlUrl || '#'}
+										target="_blank"
+										rel="noopener noreferrer"
+										style="color: var(--sonora-accent);"
+									>download</a>
+								{:else if lastUpdate && !lastUpdate.error}
+									You’re up to date
+								{:else if lastUpdate?.error}
+									Could not check: {lastUpdate.error}
+								{:else}
+									Check GitHub for new releases
+								{/if}
+							</span>
+						</div>
+						<button
+							type="button"
+							class="ghost"
+							style="flex-shrink: 0;"
+							disabled={updateStatus === 'checking'}
+							onclick={() => void runUpdateCheck()}
+						>
+							{updateStatus === 'checking' ? 'Checking…' : 'Check now'}
+						</button>
+					</div>
+					<div class="row" style="cursor: default; flex-wrap: wrap; gap: 8px;">
+						<div class="row-copy" style="flex: 1;">
+							<strong>Composer database</strong>
+							<span>{composerStatus || 'Fetched from GitHub so the list can grow without an app update'}</span>
+						</div>
+						<button
+							type="button"
+							class="ghost"
+							style="flex-shrink: 0;"
+							onclick={() => void runComposerRefresh()}
+						>
+							Refresh
+						</button>
+					</div>
+				</div>
 			</section>
 
 			<footer class="panel-footer">
