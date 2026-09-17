@@ -219,11 +219,9 @@
 						placeholder="Search works or composers — e.g. Moonlight Sonata, Bach cello"
 						bind:value={query}
 						onkeydown={onSearchKeydown}
-						aria-label="Search IMSLP"
-						autofocus />
+						aria-label="Search IMSLP" />
 				</div>
 				<TextButton
-					variant="primary"
 					onclick={() => void runSearch()}
 					disabled={searching || !query.trim()}>
 					{#if searching}<Loader2 size={16} class="spin" /> Searching…{:else}Search{/if}
@@ -294,8 +292,9 @@
 													const fb = el.parentElement?.querySelector('.thumb-fallback');
 													if (fb instanceof HTMLElement) fb.style.display = 'grid';
 												}} />
-											<div class="thumb-fallback" style="display:none"
-												><Music2 size={28} /></div>
+											<div class="thumb-fallback" style="display:none">
+												<Music2 size={28} />
+											</div>
 										{:else}
 											<div class="thumb-fallback"><Music2 size={28} /></div>
 										{/if}
@@ -306,15 +305,16 @@
 										{#if score.description}<span class="desc"
 												>{score.description}</span
 											>{/if}
-										{#if score.editor}<span class="editor"
-												>{score.editor}</span
+										{#if score.editor}<span class="editor">{score.editor}</span
 											>{/if}
 									</div>
 									<button
 										type="button"
 										class="add-btn"
 										class:added={added.has(score.filename)}
-										disabled={downloading === score.filename || !libraryRoot || added.has(score.filename)}
+										disabled={downloading === score.filename ||
+											!libraryRoot ||
+											added.has(score.filename)}
 										onclick={() => void doDownload(score)}>
 										{#if downloading === score.filename}
 											<Loader2 size={15} class="spin" /> Saving…
@@ -642,6 +642,7 @@
 		margin: 4px 0 0;
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
+		line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 	}
@@ -692,6 +693,7 @@
 		line-height: 1.3;
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
+		line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 	}
@@ -702,6 +704,7 @@
 		line-height: 1.35;
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
+		line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 	}

@@ -209,6 +209,7 @@ async fn imslp_search(query: String, limit: Option<u32>) -> Result<Vec<ImslpSear
                 title,
                 snippet: clean_search_snippet(&snippet),
                 pageid: item["pageid"].as_u64(),
+                thumb_url: None,
             });
         }
     }
@@ -765,13 +766,6 @@ fn strip_param<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     }
 }
 
-} else if let Some(r) = strip_param(trimmed, "File Description") {
-    let (idx, value) = split_indexed_param(r);
-    let value = value.trim().to_string();
-    if !value.is_empty() {
-        descriptions.insert(idx, value);
-    }
-}
 
 fn split_indexed_param(rest: &str) -> (u32, String) {
     let rest = rest.trim_start();
@@ -824,13 +818,13 @@ fn clean_wiki_text(s: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ");
+
+    out
 }
 
 
 fn make_score_file(filename: &str, description: &str, editor: &str) -> ImslpScoreFile {
-    let encoded = urlencoding_encode(filename); {
-
-            }
+    let encoded = urlencoding_encode(filename);
     ImslpScoreFile {
         filename: filename.to_string(),
         description: description.to_string(),
@@ -856,13 +850,7 @@ fn urlencoding_encode(s: &str) -> String {
 #[tauri::command]
 async fn imslp_download_score(
     filename: String,
-    library_root: Option<String
-            filename,
-
-
-
-           ,
-
+    library_root: Option<String>,
     composer: Option<String>,
     work_title: Option<String>,
 ) -> Result<ImslpDownloadResult, String> {
@@ -870,12 +858,6 @@ async fn imslp_download_score(
     let encoded = urlencoding_encode(&filename);
     let accept_url = format!("https://imslp.org/wiki/Special:IMSLPDisclaimerAccept/{encoded}");
     let handler_url = format!("https://imslp.org/wiki/Special:IMSLPImageHandler/{encoded}");
-
-                filename,
-                library_root,
-
-
-                handler_bytes,
 
     let mut candidates: Vec<String> = Vec::new();
 
@@ -1102,11 +1084,7 @@ fn move_score_into_composer_folder(
     // Refuse to move files outside the library root
     let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
     let canonical_source = source.canonicalize().map_err(|e| e.to_string())?;
-    if !canon
-        .parent()
-        ce.starts_with(&canonical_root) {
-
-
+    if !canonical_source.starts_with(&canonical_root) {
         return Err("Score file is outside the library folder.".into());
     }
 
@@ -1209,16 +1187,7 @@ fn extract_all_mirror_urls(html: &str) -> Vec<String> {
         "https://s10.imslp.org/",
         "https://s6.imslp.org/",
         "https://s7.imslp.org/",
-        "https://s8.imslp.org/",{
-                    c == '"'
-                        || c == '\''
-                        || c == ' '
-                        || c == '<'
-                        || c == '>'
-                        || c == ')'
-                        || c == '\n'
-                        || c == '\r'
-                }
+        "https://s8.imslp.org/",
         "https://vmirror.imslp.org/",
         "http://vmirror.imslp.org/",
         "//vmirror.imslp.org/",
@@ -1383,9 +1352,6 @@ fn data_encoding_base64(bytes: &[u8]) -> String {
         out.push(TABLE[((triple >> 12) & 63) as usize] as char);
         if chunk.len() > 1 {
             out.push(TABLE[((triple >> 6) & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
         } else {
             out.push('=');
         }

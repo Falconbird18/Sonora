@@ -2561,8 +2561,7 @@
 		z-index: 15;
 		top: 56px;
 		bottom: 8px;
-		/* Generous invisible hit targets for easy page turns while practicing */
-		width: min(22vw, 160px);
+		width: 25vw;
 		border: 0;
 		background: transparent;
 		opacity: 0;
