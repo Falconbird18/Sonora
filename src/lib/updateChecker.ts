@@ -2,16 +2,19 @@
  * Checks GitHub Releases for a newer Sonora version.
  * Uses the public releases API (no auth). Safe to call from the frontend.
  *
+ * CURRENT_VERSION is read from package.json so it stays in sync with the app version.
+ *
  * Testing:
- * - Current package version is 1.2.0; latest published release is still v1.1.x,
- *   so the checker correctly reports "up to date".
- * - To force a positive result for manual testing, temporarily lower
- *   CURRENT_VERSION below the latest tag, or publish a release with a higher tag.
- * - Or call checkForUpdate({ force: true }) after setting localStorage
- *   key "sonora-force-update-tag" to e.g. "v9.9.9".
+ * - When the installed version is ahead of the latest GitHub release, the checker
+ *   reports "up to date".
+ * - To force a positive result for manual testing, set localStorage key
+ *   "sonora-force-update-tag" to e.g. "v9.9.9", then reload or use Settings → Check now.
+ * - Or publish a release whose tag is newer than package.json "version".
  */
 
-export const CURRENT_VERSION = '1.2.0';
+import packageJson from '../../package.json';
+
+export const CURRENT_VERSION: string = packageJson.version;
 
 const REPO = 'Falconbird18/Sonora';
 const RELEASES_LATEST = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -100,15 +103,17 @@ export async function checkForUpdate(options?: {
 			};
 		} else if (options?.includePrerelease) {
 			const list = await fetchJson<GhRelease[]>(RELEASES_LIST);
-			release =
-				list.find((r) => !r.draft) ?? null;
+			release = list.find((r) => !r.draft) ?? null;
 		} else {
 			try {
 				release = await fetchJson<GhRelease>(RELEASES_LATEST);
 			} catch {
 				// No "latest" (e.g. only prereleases) — fall back to list
 				const list = await fetchJson<GhRelease[]>(RELEASES_LIST);
-				release = list.find((r) => !r.draft && !r.prerelease) ?? list.find((r) => !r.draft) ?? null;
+				release =
+					list.find((r) => !r.draft && !r.prerelease) ??
+					list.find((r) => !r.draft) ??
+					null;
 			}
 		}
 
@@ -135,7 +140,9 @@ export async function checkForUpdate(options?: {
 			tagName: release.tag_name,
 			name: release.name ?? null,
 			body: release.body ?? null,
-			htmlUrl: release.html_url ?? `https://github.com/${REPO}/releases/tag/${release.tag_name}`,
+			htmlUrl:
+				release.html_url ??
+				`https://github.com/${REPO}/releases/tag/${release.tag_name}`,
 			publishedAt: release.published_at ?? null
 		};
 	} catch (err) {
