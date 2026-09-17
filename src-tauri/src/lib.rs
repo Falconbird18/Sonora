@@ -26,6 +26,7 @@ struct ImslpSearchHit {
     title: String,
     snippet: String,
     pageid: Option<u64>,
+    thumb_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -37,7 +38,11 @@ struct ImslpScoreFile {
     thumb_url: Option<String>,
 }
 
-fn collect_pdfs(root: &Path, current: &Path, files: &mut Vec<NativeScoreFile>) -> Result<(), String> {
+fn collect_pdfs(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<NativeScoreFile>,
+) -> Result<(), String> {
     let entries = fs::read_dir(current).map_err(|error| error.to_string())?;
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -126,7 +131,6 @@ async fn api_get_json(
     ))
 }
 
-
 #[tauri::command]
 async fn imslp_search(query: String, limit: Option<u32>) -> Result<Vec<ImslpSearchHit>, String> {
     let limit = limit.unwrap_or(20).clamp(1, 50);
@@ -142,7 +146,6 @@ async fn imslp_search(query: String, limit: Option<u32>) -> Result<Vec<ImslpSear
     if q.contains(' ') {
         queries.push(format!("\"{}\"", q));
     }
-
 
     let mut merged: Vec<ImslpSearchHit> = Vec::new();
     let mut seen = std::collections::HashSet::<String>::new();
@@ -191,7 +194,11 @@ async fn imslp_search(query: String, limit: Option<u32>) -> Result<Vec<ImslpSear
             }
             let snippet = item["snippet"].as_str().unwrap_or("").to_string();
             let snippet_plain = strip_html_tags(&decode_html_entities(&snippet));
-            if snippet_plain.trim_start().to_uppercase().starts_with("#REDIRECT") {
+            if snippet_plain
+                .trim_start()
+                .to_uppercase()
+                .starts_with("#REDIRECT")
+            {
                 continue;
             }
             let key = title.to_lowercase();
@@ -219,6 +226,39 @@ async fn imslp_search(query: String, limit: Option<u32>) -> Result<Vec<ImslpSear
         return Err(last_err);
     }
     Ok(merged)
+}
+
+async fn enrich_search_thumbs(client: &reqwest::Client, hits: &mut [ImslpSearchHit]) {
+    if hits.is_empty() { return; }
+    for chunk in hits.chunks_mut(40) {
+        let titles: Vec<String> = chunk.iter().map(|h| h.title.clone()).collect();
+        let joined = titles.join("|");
+        let body = match api_get_json(client, &[
+            ("action", "query"),
+            ("titles", &joined),
+            ("prop", "pageimages"),
+            ("pithumbsize", "240"),
+            ("format", "json"),
+            ("formatversion", "2"),
+        ]).await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let pages = body["query"]["pages"].as_array().cloned().unwrap_or_default();
+        let mut map = std::collections::HashMap::<String, String>::new();
+        for page in pages {
+            if page.get("missing").is_some() { continue; }
+            let title = page["title"].as_str().unwrap_or("").to_string();
+            if let Some(thumb) = page["thumbnail"]["source"].as_str() {
+                let mut u = thumb.to_string();
+                if u.starts_with("//") { u = format!("https:{u}"); }
+                map.insert(title.to_lowercase(), u);
+            }
+        }
+        for h in chunk.iter_mut() {
+            h.thumb_url = map.get(&h.title.to_lowercase()).cloned();
+        }
+    }
 }
 
 fn search_rank(title: &str, q: &str, tokens: &[&str]) -> i32 {
@@ -293,7 +333,10 @@ fn parse_wikitext_field(value: &serde_json::Value) -> Option<String> {
     if let Some(s) = value.as_str() {
         return Some(s.to_string());
     }
-    value.get("*").and_then(|v| v.as_str()).map(|s| s.to_string())
+    value
+        .get("*")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Resolve MediaWiki redirects so short titles like "Moonlight sonata" work.
@@ -355,7 +398,11 @@ async fn imslp_work_scores(work_title: String) -> Result<Vec<ImslpScoreFile>, St
         wikitext = parse_wikitext_field(&body["parse"]["wikitext"])
             .ok_or_else(|| "No wikitext returned for this work".to_string())?;
         // Follow remaining #REDIRECT wikitext if the query API did not
-        if wikitext.trim_start().to_uppercase().starts_with("#REDIRECT") {
+        if wikitext
+            .trim_start()
+            .to_uppercase()
+            .starts_with("#REDIRECT")
+        {
             if let Some(target) = extract_redirect_target(&wikitext) {
                 page = target;
                 continue;
@@ -422,8 +469,13 @@ async fn enrich_thumbnails(client: &reqwest::Client, files: &mut [ImslpScoreFile
             .send()
             .await;
         let Ok(resp) = resp else { continue };
-        let Ok(body) = resp.json::<serde_json::Value>().await else { continue };
-        let pages = body["query"]["pages"].as_array().cloned().unwrap_or_default();
+        let Ok(body) = resp.json::<serde_json::Value>().await else {
+            continue;
+        };
+        let pages = body["query"]["pages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         let mut thumbs: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for page in pages {
@@ -484,7 +536,9 @@ fn extract_score_files(wikitext: &str) -> Vec<ImslpScoreFile> {
 
     while let Some(start) = rest.find("{{#fte:imslpfile") {
         rest = &rest[start..];
-        let Some(block) = extract_template_block(rest) else { break };
+        let Some(block) = extract_template_block(rest) else {
+            break;
+        };
         rest = &rest[block.len()..];
 
         let mut names = std::collections::BTreeMap::<u32, String>::new();
@@ -530,7 +584,13 @@ fn extract_score_files(wikitext: &str) -> Vec<ImslpScoreFile> {
             }
         }
         flush_block(
-            &names, &descriptions, &editor, &publisher, &image_type, &mut seen, &mut results,
+            &names,
+            &descriptions,
+            &editor,
+            &publisher,
+            &image_type,
+            &mut seen,
+            &mut results,
         );
     }
     sort_score_files(&mut results);
@@ -608,7 +668,9 @@ fn simple_pdf_filenames(wikitext: &str) -> Vec<String> {
             && !candidate.contains("{{")
             && !candidate.contains("}}")
         {
-            let clean = candidate.trim_matches(|c: char| c == '[' || c == ']').to_string();
+            let clean = candidate
+                .trim_matches(|c: char| c == '[' || c == ']')
+                .to_string();
             if clean.to_lowercase().ends_with(".pdf") {
                 out.push(clean);
             }
@@ -691,7 +753,8 @@ fn strip_param<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     if !line_lower.starts_with(&key_lower) {
         return None;
     }
-    let after = &line[key.len()..];
+    let matched_len = key_lower.len();
+    let after = line.get(matched_len..)?.trim_start();
     if after.is_empty()
         || after.starts_with('=')
         || after.starts_with(|c: char| c.is_ascii_whitespace() || c.is_ascii_digit())
@@ -699,6 +762,14 @@ fn strip_param<'a>(line: &'a str, key: &str) -> Option<&'a str> {
         Some(after)
     } else {
         None
+    }
+}
+
+} else if let Some(r) = strip_param(trimmed, "File Description") {
+    let (idx, value) = split_indexed_param(r);
+    let value = value.trim().to_string();
+    if !value.is_empty() {
+        descriptions.insert(idx, value);
     }
 }
 
@@ -741,19 +812,25 @@ fn clean_wiki_text(s: &str) -> String {
             break;
         }
     }
-    out = out.replace("'''", "").replace("''", "");
     out = out
-        .replace('|', " ")
         .split_whitespace()
-        .filter(|t| !t.contains('=') && *t != "*" && *t != "#")
+        .filter(|t| {
+            !t.contains('=')
+                && *t != "*"
+                && *t != "#"
+                && !t.eq_ignore_ascii_case("file")
+                && !t.eq_ignore_ascii_case("name")
+                && !t.eq_ignore_ascii_case("description")
+        })
         .collect::<Vec<_>>()
         .join(" ");
-    out
 }
 
 
 fn make_score_file(filename: &str, description: &str, editor: &str) -> ImslpScoreFile {
-    let encoded = urlencoding_encode(filename);
+    let encoded = urlencoding_encode(filename); {
+
+            }
     ImslpScoreFile {
         filename: filename.to_string(),
         description: description.to_string(),
@@ -779,7 +856,13 @@ fn urlencoding_encode(s: &str) -> String {
 #[tauri::command]
 async fn imslp_download_score(
     filename: String,
-    library_root: Option<String>,
+    library_root: Option<String
+            filename,
+
+
+
+           ,
+
     composer: Option<String>,
     work_title: Option<String>,
 ) -> Result<ImslpDownloadResult, String> {
@@ -787,6 +870,12 @@ async fn imslp_download_score(
     let encoded = urlencoding_encode(&filename);
     let accept_url = format!("https://imslp.org/wiki/Special:IMSLPDisclaimerAccept/{encoded}");
     let handler_url = format!("https://imslp.org/wiki/Special:IMSLPImageHandler/{encoded}");
+
+                filename,
+                library_root,
+
+
+                handler_bytes,
 
     let mut candidates: Vec<String> = Vec::new();
 
@@ -1013,7 +1102,11 @@ fn move_score_into_composer_folder(
     // Refuse to move files outside the library root
     let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
     let canonical_source = source.canonicalize().map_err(|e| e.to_string())?;
-    if !canonical_source.starts_with(&canonical_root) {
+    if !canon
+        .parent()
+        ce.starts_with(&canonical_root) {
+
+
         return Err("Score file is outside the library folder.".into());
     }
 
@@ -1116,7 +1209,16 @@ fn extract_all_mirror_urls(html: &str) -> Vec<String> {
         "https://s10.imslp.org/",
         "https://s6.imslp.org/",
         "https://s7.imslp.org/",
-        "https://s8.imslp.org/",
+        "https://s8.imslp.org/",{
+                    c == '"'
+                        || c == '\''
+                        || c == ' '
+                        || c == '<'
+                        || c == '>'
+                        || c == ')'
+                        || c == '\n'
+                        || c == '\r'
+                }
         "https://vmirror.imslp.org/",
         "http://vmirror.imslp.org/",
         "//vmirror.imslp.org/",
@@ -1284,8 +1386,6 @@ fn data_encoding_base64(bytes: &[u8]) -> String {
         } else {
             out.push('=');
         }
-        if chunk.len() > 2 {
-            out.push(TABLE[(triple & 63) as usize] as char);
         } else {
             out.push('=');
         }
