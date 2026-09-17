@@ -223,7 +223,6 @@
 						autofocus />
 				</div>
 				<TextButton
-					variant="primary"
 					onclick={() => void runSearch()}
 					disabled={searching || !query.trim()}>
 					{#if searching}<Loader2 size={16} class="spin" /> Searching…{:else}Search{/if}
