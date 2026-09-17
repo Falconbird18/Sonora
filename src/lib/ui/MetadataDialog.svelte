@@ -174,8 +174,9 @@
 					placeholder="Score title" />
 			</div>
 			<div class="field-row">
-				<label>Composer</label>
+				<label for="meta-composer">Composer</label>
 				<button
+					id="meta-composer"
 					type="button"
 					class="composer-card"
 					class:empty={!composerInfo && !editComposer.trim()}
@@ -206,7 +207,6 @@
 						<div class="picker-search">
 							<Search size={15} aria-hidden="true" /><input
 								bind:value={composerSearch}
-								autofocus
 								autocomplete="off"
 								placeholder="Search composers…"
 								onkeydown={handleComposerPickerKeydown} /><button
@@ -221,6 +221,7 @@
 									<button
 										type="button"
 										role="option"
+										aria-selected={selectedComposer?.id === suggestion.id}
 										class:selected={selectedComposer?.id === suggestion.id}
 										onclick={() => chooseComposer(suggestion)}
 										><span class="composer-name">{suggestion.name}</span><span
@@ -443,8 +444,8 @@
 		color: #eee;
 		font-size: 13px;
 	}
-	.composer-card-main svg {
-		color: #85857c;
+	.composer-card-main :global(svg) {
+    color: #85857c;
 	}
 	.composer-card span {
 		font-size: 11px;

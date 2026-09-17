@@ -331,11 +331,6 @@
 		}
 		return counts;
 	});
-	const allTags = $derived(
-		Array.from(new Set(scores.flatMap((score) => score.tags ?? []))).sort(
-			(a, b) => a.localeCompare(b)
-		)
-	);
 	const filtered = $derived(
 		scores
 			.filter((score) => !composer || score.composer === composer)
@@ -572,7 +567,6 @@
 			ensemble={metadata.ensemble}
 			instruments={metadata.instruments}
 			tags={metadata.tags ?? []}
-			allTags={allTags}
 			onSave={(payload) => void saveMetadata(payload)}
 			onClose={() => (metadata = null)} />
 	{/if}
