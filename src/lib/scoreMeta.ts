@@ -18,17 +18,23 @@ export function plainScore(input: ScoreItem): ScoreItem {
 	};
 	if (input.composerId) out.composerId = String(input.composerId);
 	if (input.composerPeriod) out.composerPeriod = String(input.composerPeriod);
-	if (input.composerCountry) out.composerCountry = String(input.composerCountry);
-	if (input.composerBirthPlace) out.composerBirthPlace = String(input.composerBirthPlace);
-	if (input.composerBirthYear != null) out.composerBirthYear = Number(input.composerBirthYear);
-	if (input.composerDeathYear != null) out.composerDeathYear = Number(input.composerDeathYear);
-	if (input.year != null && !Number.isNaN(Number(input.year))) out.year = Number(input.year);
+	if (input.composerCountry)
+		out.composerCountry = String(input.composerCountry);
+	if (input.composerBirthPlace)
+		out.composerBirthPlace = String(input.composerBirthPlace);
+	if (input.composerBirthYear != null)
+		out.composerBirthYear = Number(input.composerBirthYear);
+	if (input.composerDeathYear != null)
+		out.composerDeathYear = Number(input.composerDeathYear);
+	if (input.year != null && !Number.isNaN(Number(input.year)))
+		out.year = Number(input.year);
 	else out.year = null;
 	if (input.ensemble) out.ensemble = String(input.ensemble);
 	if (input.instruments) out.instruments = String(input.instruments);
 	if (input.pdfUrl) out.pdfUrl = String(input.pdfUrl);
 	if (input.thumbnailUrl) out.thumbnailUrl = String(input.thumbnailUrl);
-	if (input.thumbnailVersion != null) out.thumbnailVersion = Number(input.thumbnailVersion);
+	if (input.thumbnailVersion != null)
+		out.thumbnailVersion = Number(input.thumbnailVersion);
 	if (input.lastOpenedAt != null) out.lastOpenedAt = Number(input.lastOpenedAt);
 	out.favorite = !!input.favorite;
 	out.tags = Array.isArray(input.tags) ? input.tags.map(String) : [];
@@ -37,8 +43,13 @@ export function plainScore(input: ScoreItem): ScoreItem {
 	if (input.sourcePath) out.sourcePath = String(input.sourcePath);
 	if (input.nativePath) out.nativePath = String(input.nativePath);
 	if (input.fileSize != null) out.fileSize = Number(input.fileSize);
-	if (input.fileModifiedAt != null) out.fileModifiedAt = Number(input.fileModifiedAt);
-	if (typeof Blob !== 'undefined' && input.pdfBlob instanceof Blob && input.pdfBlob.size > 0) {
+	if (input.fileModifiedAt != null)
+		out.fileModifiedAt = Number(input.fileModifiedAt);
+	if (
+		typeof Blob !== 'undefined' &&
+		input.pdfBlob instanceof Blob &&
+		input.pdfBlob.size > 0
+	) {
 		out.pdfBlob = input.pdfBlob;
 	}
 	return out;
@@ -47,7 +58,10 @@ export function plainScore(input: ScoreItem): ScoreItem {
 /** Folder name under the library root — prefer stable composer id. */
 export function composerFolderName(composerId: string | null | undefined, composerName: string): string {
 	const id = (composerId || '').trim();
-	if (id) return sanitizeFolderSegment(id);
+	if (id) {
+		const capped = id.charAt(0).toUpperCase() + id.slice(1);
+		return sanitizeFolderSegment(capped);
+	}
 	return sanitizeFolderSegment(composerName || 'Unknown Composer');
 }
 
@@ -77,7 +91,10 @@ function relativeParentFolder(relativePath: string | undefined): string | null {
 
 async function migrateAnnotations(fromScoreId: string, toScoreId: string) {
 	if (fromScoreId === toScoreId) return;
-	const rows = await db.annotations.where('scoreId').equals(fromScoreId).toArray();
+	const rows = await db.annotations
+		.where('scoreId')
+		.equals(fromScoreId)
+		.toArray();
 	if (!rows.length) return;
 	await db.transaction('rw', db.annotations, async () => {
 		for (const row of rows) {
@@ -136,7 +153,10 @@ async function maybeOrganizeScoreFile(
 	}
 }
 
-export async function saveScoreMetadata(id: string, payload: ScoreMetadataUpdate): Promise<ScoreItem> {
+export async function saveScoreMetadata(
+	id: string,
+	payload: ScoreMetadataUpdate
+): Promise<ScoreItem> {
 	const existing = await db.scores.get(id);
 	if (!existing) throw new Error('Score not found');
 
@@ -146,7 +166,9 @@ export async function saveScoreMetadata(id: string, payload: ScoreMetadataUpdate
 	const next = plainScore({
 		...existing,
 		title: String(payload.title || existing.title),
-		composer: composer?.name ?? String(payload.composer || existing.composer || 'Unknown Composer'),
+		composer:
+			composer?.name ??
+			String(payload.composer || existing.composer || 'Unknown Composer'),
 		composerId: composer?.id ?? null,
 		composerPeriod: composer?.period,
 		composerCountry: composer?.country,

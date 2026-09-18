@@ -15,6 +15,7 @@
 		downloadScore,
 		getWorkScores,
 		imslpAvailable,
+		imslpComposerFolder,
 		parseWorkTitle,
 		searchImslp,
 		workPageUrl,
@@ -114,12 +115,17 @@
 			const parsed = selected ? parseWorkTitle(selected.title) : null;
 			const result = await downloadScore(score.filename, {
 				libraryRoot,
-				composer: parsed?.composer ?? null,
+				// Pass the *folder* name (capitalized id), not the display name
+				composer: parsed
+					? imslpComposerFolder(parsed.composerId, parsed.composer)
+					: null,
 				workTitle: selected?.title ?? null
 			});
+			// Notice text can still use parsed.composer (display name)
 			const where = parsed?.composer
-				? `under “${parsed.composer}”`
+				? `under “${imslpComposerFolder(parsed.composerId, parsed.composer)}”`
 				: 'into your library';
+
 			notice = result.saved_path
 				? `Saved “${result.filename}” ${where}.`
 				: `Downloaded “${result.filename}” (${Math.round(result.size / 1024)} KB).`;
@@ -359,8 +365,14 @@
 									onclick={() => void selectWork(hit)}>
 									<div class="hit-icon">
 										{#if hit.thumb_url}
-											<img src={hit.thumb_url} alt="" loading="lazy" referrerpolicy="no-referrer"
-												onerror={(e) => { /* hide + show Music2 fallback */ }} />
+											<img
+												src={hit.thumb_url}
+												alt=""
+												loading="lazy"
+												referrerpolicy="no-referrer"
+												onerror={(e) => {
+													/* hide + show Music2 fallback */
+												}} />
 										{:else}
 											<Music2 size={18} />
 										{/if}

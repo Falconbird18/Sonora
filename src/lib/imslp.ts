@@ -11,6 +11,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { isTauri } from './paths';
+import { findComposer } from './composerDatabase';
 
 export type ImslpSearchHit = {
 	title: string;
@@ -89,14 +90,58 @@ export async function downloadScore(
 	});
 }
 
+
 /** Parse "Title (Composer, Name)" style IMSLP work titles. */
-export function parseWorkTitle(title: string): { title: string; composer: string } {
+export function parseWorkTitle(title: string): {
+	title: string;
+	composer: string;
+	composerId: string | null;
+} {
 	const match = title.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
-	if (!match) return { title: title.trim(), composer: 'Unknown Composer' };
+	if (!match) {
+		return { title: title.trim(), composer: 'Unknown Composer', composerId: null };
+	}
+	const rawComposer = match[2].trim() || 'Unknown Composer';
+	const workTitle = match[1].trim() || title.trim();
+
+	// Resolve against composer DB: prefer "Last, First" → normal name + id
+	const record =
+		findComposer(rawComposer) ||
+		// Try flipping "Beethoven, Ludwig van" → "Ludwig van Beethoven"
+		(rawComposer.includes(',')
+			? findComposer(
+					rawComposer
+						.split(',')
+						.map((p) => p.trim())
+						.reverse()
+						.join(' ')
+				)
+			: null);
+
 	return {
-		title: match[1].trim() || title.trim(),
-		composer: match[2].trim() || 'Unknown Composer'
+		title: workTitle,
+		composer: record?.name ?? flipComposerName(rawComposer),
+		composerId: record?.id ?? null
 	};
+}
+
+/** "Beethoven, Ludwig van" → "Ludwig van Beethoven"; leave already-normal names alone. */
+function flipComposerName(raw: string): string {
+	const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+	if (parts.length >= 2) {
+		return `${parts.slice(1).join(' ')} ${parts[0]}`.trim();
+	}
+	return raw;
+}
+
+/** Folder segment under library: capitalized composer id when known. */
+export function imslpComposerFolder(composerId: string | null, composerName: string): string {
+	if (composerId) {
+		// "beethoven" → "Beethoven"
+		return composerId.charAt(0).toUpperCase() + composerId.slice(1);
+	}
+	// Fallback: use flipped/normal name, still safe for FS
+	return composerName || 'Unknown Composer';
 }
 
 export function workPageUrl(title: string) {
