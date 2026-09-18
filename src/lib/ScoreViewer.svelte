@@ -1711,6 +1711,67 @@
 		if (!document.fullscreenElement) await host?.requestFullscreen();
 		else await document.exitFullscreen();
 	}
+
+	// ── Metronome ──────────────────────────────────────────────
+	let metronomeOpen = $state(false);
+	let metronomeBpm = $state(120);
+	let metronomeRunning = $state(false);
+	let metronomeBeat = $state(0); // 0..3 visual pulse
+	let metronomeCtx: AudioContext | null = null;
+	let metronomeTimer: number | null = null;
+
+	function metronomeClick(accent: boolean) {
+		if (!metronomeCtx) {
+			metronomeCtx = new AudioContext();
+		}
+		const ctx = metronomeCtx;
+		const t = ctx.currentTime;
+		const osc = ctx.createOscillator();
+		const gain = ctx.createGain();
+		osc.type = 'sine';
+		osc.frequency.value = accent ? 1200 : 800;
+		gain.gain.setValueAtTime(0.0001, t);
+		gain.gain.exponentialRampToValueAtTime(0.35, t + 0.005);
+		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+		osc.connect(gain);
+		gain.connect(ctx.destination);
+		osc.start(t);
+		osc.stop(t + 0.09);
+	}
+
+	function stopMetronome() {
+		if (metronomeTimer != null) {
+			clearInterval(metronomeTimer);
+			metronomeTimer = null;
+		}
+		metronomeRunning = false;
+		metronomeBeat = 0;
+	}
+
+	function startMetronome() {
+		stopMetronome();
+		const bpm = Math.max(30, Math.min(300, Math.round(metronomeBpm) || 120));
+		metronomeBpm = bpm;
+		metronomeRunning = true;
+		let beat = 0;
+		const tick = () => {
+			metronomeClick(beat === 0);
+			metronomeBeat = beat;
+			beat = (beat + 1) % 4;
+		};
+		tick();
+		metronomeTimer = window.setInterval(tick, (60_000 / bpm));
+	}
+
+	function toggleMetronome() {
+		if (metronomeRunning) stopMetronome();
+		else startMetronome();
+	}
+
+	// Clean up on leave / destroy
+	$effect(() => {
+		return () => stopMetronome();
+	});
 </script>
 
 <svelte:head><title>{score.title} — Sonora</title></svelte:head>
@@ -1809,6 +1870,51 @@
 					title="Zoom in"
 					onclick={() => setZoom(zoom + 0.08)}><ZoomIn size={17} /></button>
 			</div>
+			<button
+				type="button"
+				class="tool-btn"
+				class:active={metronomeOpen || metronomeRunning}
+				title="Metronome"
+				aria-label="Metronome"
+				onclick={() => (metronomeOpen = !metronomeOpen)}>
+				<!-- simple metronome icon via SVG or use a Lucide icon if available -->
+				<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<path d="M12 3v3M9 21h6M12 6l-4 12h8L12 6z" />
+					<path d="M10 14h4" />
+				</svg>
+			</button>
+
+			{#if metronomeOpen}
+				<div class="metronome-popover" role="dialog" aria-label="Metronome">
+					<label class="metro-row">
+						<span>BPM</span>
+						<input
+							type="number"
+							min="30"
+							max="300"
+							bind:value={metronomeBpm}
+							oninput={() => {
+								if (metronomeRunning) startMetronome();
+							}} />
+					</label>
+					<input
+						type="range"
+						min="30"
+						max="240"
+						bind:value={metronomeBpm}
+						oninput={() => {
+							if (metronomeRunning) startMetronome();
+						}} />
+					<div class="metro-beats">
+						{#each [0, 1, 2, 3] as i}
+							<span class="beat" class:on={metronomeRunning && metronomeBeat === i}></span>
+						{/each}
+					</div>
+					<button type="button" class="metro-go" onclick={toggleMetronome}>
+						{metronomeRunning ? 'Stop' : 'Start'}
+					</button>
+				</div>
+			{/if}
 			<div class="footer-section">
 				<button
 					class:active={dual}
@@ -3208,6 +3314,64 @@
 	}
 	.reading .pages {
 		padding: 12px;
+	}
+
+	.metronome-popover {
+		position: absolute;
+		top: 100%;
+		right: 0;
+		margin-top: 8px;
+		padding: 12px 14px;
+		min-width: 180px;
+		border-radius: 12px;
+		border: 1px solid var(--sonora-border-strong);
+		background: var(--sonora-bg-elevated);
+		box-shadow: var(--sonora-shadow-lg);
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		z-index: 40;
+	}
+	.metro-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		font-size: 12px;
+		color: var(--sonora-text-muted);
+	}
+	.metro-row input[type='number'] {
+		width: 64px;
+		height: 32px;
+		border-radius: 8px;
+		border: 1px solid var(--sonora-border);
+		background: var(--sonora-bg-workspace);
+		color: var(--sonora-text);
+		text-align: center;
+	}
+	.metro-beats {
+		display: flex;
+		gap: 8px;
+		justify-content: center;
+	}
+	.metro-beats .beat {
+		width: 10px;
+		height: 10px;
+		border-radius: 50%;
+		background: var(--sonora-bg-active);
+	}
+	.metro-beats .beat.on {
+		background: var(--sonora-accent);
+		box-shadow: 0 0 0 3px var(--sonora-accent-soft);
+	}
+	.metro-go {
+		height: 34px;
+		border: 0;
+		border-radius: 9px;
+		background: var(--sonora-accent);
+		color: #fff;
+		font-weight: 600;
+		cursor: pointer;
 	}
 	@keyframes settings-in {
 		from {
