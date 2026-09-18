@@ -140,8 +140,7 @@ async fn imslp_search(query: String, limit: Option<u32>) -> Result<Vec<ImslpSear
         return Ok(vec![]);
     }
 
-    // Run a few complementary MediaWiki searches and merge/rank.
-    // 1) plain text  2) intitle:  3) quoted phrase when multi-word
+    // Complementary MediaWiki searches, then merge + rank.
     let mut queries = vec![q.clone(), format!("intitle:{}", q)];
     if q.contains(' ') {
         queries.push(format!("\"{}\"", q));
@@ -223,9 +222,13 @@ async fn imslp_search(query: String, limit: Option<u32>) -> Result<Vec<ImslpSear
             .then_with(|| a.title.cmp(&b.title))
     });
     merged.truncate(limit as usize);
+
     if merged.is_empty() && !last_err.is_empty() {
         return Err(last_err);
     }
+
+    enrich_search_thumbs(&client, &mut merged).await;
+
     Ok(merged)
 }
 
@@ -265,26 +268,57 @@ async fn enrich_search_thumbs(client: &reqwest::Client, hits: &mut [ImslpSearchH
 fn search_rank(title: &str, q: &str, tokens: &[&str]) -> i32 {
     let t = title.to_lowercase();
     let mut score = 0i32;
-    // Prefer real work pages: "Something (Composer, Name)"
-    if t.contains('(') && t.contains(')') {
-        score += 50;
+
+    // Strong preference for real work pages: "Something (Composer, Name)"
+    let has_composer_parens = t.contains('(') && t.contains(')');
+    if has_composer_parens {
+        score += 60;
+    } else {
+        score -= 20; // category-like / disambiguation pages
     }
+
+    // Exact / prefix / contains on full query
     if t == *q {
-        score += 100;
+        score += 120;
     } else if t.starts_with(q) {
-        score += 40;
+        score += 50;
     } else if t.contains(q) {
-        score += 25;
+        score += 30;
     }
+
+    // Token coverage (all tokens present is much better)
+    let mut hits = 0;
     for tok in tokens {
         if t.contains(tok) {
-            score += 8;
+            hits += 1;
+            score += 10;
         }
     }
-    // Penalize arrangements / extracts that often clutter results
-    if t.contains("theme from") || t.contains("arranged") || t.contains("simplified") {
-        score -= 15;
+    if !tokens.is_empty() && hits == tokens.len() {
+        score += 25;
     }
+
+    // Prefer shorter titles when scores are close (less noise)
+    score -= (t.len() as i32 / 40).min(15);
+
+    // Penalize common clutter
+    for bad in [
+        "theme from",
+        "arranged",
+        "simplified",
+        "easy",
+        "excerpt",
+        "selection",
+        "highlights",
+        "medley",
+        "transcribed",
+        "for beginners",
+    ] {
+        if t.contains(bad) {
+            score -= 18;
+        }
+    }
+
     score
 }
 
