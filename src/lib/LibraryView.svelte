@@ -397,3 +397,569 @@
 					: 'All scores'
 	);
 </script>
+
+<svelte:window
+	onclick={() => closeMenu()}
+	onkeydown={(event) => {
+		if (event.key === 'Escape') {
+			closeMenu();
+			if (metadata) metadata = null;
+			if (imslpOpen) imslpOpen = false;
+			else if (settingsOpen) settingsOpen = false;
+		}
+	}} />
+
+<div class="library" class:compact={$settings.compactLibrary}>
+	<header class="header">
+		<div class="brand">
+			<img
+				src="/icon.svg"
+				alt="Sonora logo"
+				class="brand-mark" />
+			<strong>Sonora</strong>
+		</div>
+		<SearchField
+			bind:value={search}
+			placeholder="Search your scores"
+			ariaLabel="Search scores" />
+		<div class="header-actions">
+			<button class="folder-button" onclick={chooseFolder}>
+				<FolderPlus size={17} strokeWidth={2} />
+				<span>{folder ? 'Change folder' : 'Choose folder'}</span>
+			</button>
+			<IconButton
+				title="Refresh library"
+				ariaLabel="Refresh library"
+				onclick={sync}>
+				<RefreshCw size={18} class={syncing ? 'spinning' : ''} />
+			</IconButton>
+			<IconButton
+				title="Search IMSLP"
+				ariaLabel="Search IMSLP for scores"
+				onclick={() => (imslpOpen = true)}>
+				<Globe size={18} />
+			</IconButton>
+			<IconButton
+				title="Settings"
+				ariaLabel="Open settings"
+				onclick={() => (settingsOpen = true)}>
+				<Settings size={18} />
+			</IconButton>
+		</div>
+	</header>
+
+	{#if error}
+		<Notice variant="error" dismissible ondismiss={() => (error = '')}
+			>{error}</Notice>
+	{/if}
+	{#if notice}
+		<Notice variant="success">{notice}</Notice>
+	{/if}
+
+	{#if updateBannerVisible && updateInfo}
+		<Notice
+			variant="info"
+			dismissible
+			ondismiss={() => {
+				if (updateInfo?.tagName) dismissUpdate(updateInfo.tagName);
+				updateBannerVisible = false;
+			}}
+		>
+			<span>
+				Sonora {updateInfo.latestVersion} is available
+				(you have {updateInfo.currentVersion}).
+				<a
+					href={updateInfo.htmlUrl || 'https://github.com/Falconbird18/Sonora/releases'}
+					target="_blank"
+					rel="noopener noreferrer"
+					style="color: var(--sonora-accent); font-weight: 600;"
+				>
+					View release
+				</a>
+			</span>
+		</Notice>
+	{/if}
+
+	<div class="body">
+		<aside class="sidebar">
+			<nav aria-label="Library filters">
+				<button
+					class:active={filter === 'all' && !composer}
+					onclick={() => {
+						filter = 'all';
+						composer = null;
+					}}>
+					<Grid2X2 size={16} /><span>All scores</span><b>{scores.length}</b>
+				</button>
+				<button
+					class:active={filter === 'recent'}
+					onclick={() => {
+						filter = 'recent';
+						composer = null;
+					}}><Clock3 size={16} /><span>Recently opened</span></button>
+				<button
+					class:active={filter === 'favorites'}
+					onclick={() => {
+						filter = 'favorites';
+						composer = null;
+					}}><Star size={16} /><span>Favorites</span></button>
+			</nav>
+			{#if folder}
+				<div class="folder-summary">
+					<FolderOpen size={16} />
+					<div>
+						<strong>{folder.name}</strong>
+						<span
+							>{scores.length} {scores.length === 1 ? 'score' : 'scores'}</span>
+					</div>
+				</div>
+			{/if}
+			{#if Object.keys(composers).length}
+				<section>
+					<h2>Composers</h2>
+					{#each Object.entries(composers)
+						.sort((a, b) => a[0].localeCompare(b[0]))
+						.slice(0, 16) as [name, count]}
+						{@const portrait = getComposerPortrait(name)}
+						<button
+							class:active={composer === name}
+							onclick={() => {
+								composer = name;
+								filter = 'all';
+							}}>
+							<ComposerPortrait {name} src={portrait} />
+							<span>{name}</span><b>{count}</b>
+						</button>
+					{/each}
+				</section>
+			{/if}
+		</aside>
+		<main class="main">
+			<div class="toolbar">
+				<div>
+					<h1>{currentTitle}</h1>
+					<span
+						>{filtered.length}
+						{filtered.length === 1 ? 'score' : 'scores'}</span>
+				</div>
+				<div class="toolbar-actions">
+					<select
+						class="sort-select"
+						bind:value={sort}
+						aria-label="Sort scores">
+						<option value="recent">Recently used</option>
+						<option value="title">Title</option>
+						<option value="composer">Composer</option>
+					</select>
+					<div class="seg">
+						<button
+							class:active={view === 'grid'}
+							onclick={() => (view = 'grid')}
+							aria-label="Grid view"><Grid2X2 size={16} /></button>
+						<button
+							class:active={view === 'list'}
+							onclick={() => (view = 'list')}
+							aria-label="List view"><List size={16} /></button>
+					</div>
+				</div>
+			</div>
+			{#if !folder}
+				<div class="empty">
+					<div class="empty-orb" aria-hidden="true"></div>
+					<h2>Choose a score folder</h2>
+					<p>
+						Point Sonora at the folder where you keep your PDF scores to get
+						started.
+					</p>
+					<button class="folder-button" onclick={chooseFolder}>
+						<FolderPlus size={17} /><span>Choose folder</span>
+					</button>
+				</div>
+			{:else if !filtered.length}
+				<div class="empty">
+					<h2>No scores match</h2>
+					<p>Try another search or filter, or refresh the library.</p>
+				</div>
+			{:else if view === 'list'}
+				<div class="score-list">
+					{#each filtered as score (score.id)}
+						<ScoreListItem
+							{score}
+							opening={openingId === score.id}
+							menuOpen={menuScoreId === score.id}
+							onOpen={(s) => void openScore(s)}
+							onToggleFavorite={toggleFavorite}
+							onToggleMenu={toggleMenu}
+							onEditTags={editMetadata}
+							onDownload={downloadScoreFile}
+							onPrint={printScoreFile}
+							onDelete={deleteScore} />
+					{/each}
+				</div>
+			{:else}
+				<div class="score-grid">
+					{#each filtered as score (score.id)}
+						<ScoreCard
+							{score}
+							opening={openingId === score.id}
+							menuOpen={menuScoreId === score.id}
+							onOpen={(s) => void openScore(s)}
+							onToggleFavorite={toggleFavorite}
+							onToggleMenu={toggleMenu}
+							onEditTags={editMetadata}
+							onDownload={downloadScoreFile}
+							onPrint={printScoreFile}
+							onDelete={deleteScore} />
+					{/each}
+				</div>
+			{/if}
+		</main>
+	</div>
+
+	{#if metadata}
+		<MetadataDialog
+			title={metadata.title}
+			composer={metadata.composer}
+			year={metadata.year}
+			ensemble={metadata.ensemble}
+			instruments={metadata.instruments}
+			tags={metadata.tags ?? []}
+			onSave={(payload) => void saveMetadata(payload)}
+			onClose={() => (metadata = null)} />
+	{/if}
+
+	<SettingsPanel open={settingsOpen} onClose={() => (settingsOpen = false)} />
+
+	<ImslpSearchPanel
+		bind:open={imslpOpen}
+		libraryRoot={folder?.nativePath ?? null}
+		onDownloaded={() => {
+			void sync();
+			notice = 'IMSLP score added — library refreshed';
+			setTimeout(() => (notice = ''), 3000);
+		}} />
+</div>
+
+<style>
+	.library {
+		height: 100%;
+		width: 100%;
+		display: flex;
+		flex-direction: column;
+		background: var(--sonora-bg-workspace);
+		color: var(--sonora-text);
+		overflow: hidden;
+	}
+	.header {
+		height: 68px;
+		flex: 0 0 68px;
+		display: grid;
+		grid-template-columns: 200px minmax(200px, 1fr) auto;
+		align-items: center;
+		gap: 16px;
+		padding: 0 20px;
+		border-bottom: 1px solid var(--sonora-border);
+		background: color-mix(in srgb, var(--sonora-bg-elevated) 92%, transparent);
+		backdrop-filter: blur(16px);
+	}
+	.brand {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.brand-mark {
+		width: 34px;
+		height: 34px;
+		display: grid;
+		place-items: center;
+		border-radius: 10px;
+		background: var(--sonora-accent-soft);
+		color: var(--sonora-accent);
+	}
+	.brand strong {
+		font-size: 16px;
+		font-weight: 700;
+		letter-spacing: var(--sonora-tracking-tight);
+	}
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.folder-button {
+		height: 36px;
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		padding: 0 12px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-bg-elevated);
+		color: var(--sonora-text);
+		font-size: 13px;
+		font-weight: 550;
+		cursor: pointer;
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			border-color var(--sonora-duration) var(--sonora-ease);
+	}
+	.folder-button:hover {
+		background: var(--sonora-bg-hover);
+		border-color: color-mix(in srgb, var(--sonora-accent) 35%, var(--sonora-border-strong));
+	}
+	.body {
+		flex: 1;
+		min-height: 0;
+		display: grid;
+		grid-template-columns: 240px minmax(0, 1fr);
+	}
+	.sidebar {
+		width: 240px;
+		overflow-y: auto;
+		padding: 16px 12px 24px;
+		border-right: 1px solid var(--sonora-border);
+		background: color-mix(in srgb, var(--sonora-bg-elevated) 55%, transparent);
+	}
+	.sidebar nav {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		margin-bottom: 18px;
+	}
+	.sidebar nav button,
+	.sidebar section button {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 9px 10px;
+		border: 0;
+		border-radius: 10px;
+		background: transparent;
+		color: var(--sonora-text-muted);
+		font-size: 13px;
+		text-align: left;
+		cursor: pointer;
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			color var(--sonora-duration) var(--sonora-ease);
+	}
+	.sidebar nav button:hover,
+	.sidebar section button:hover {
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
+	}
+	.sidebar nav button.active,
+	.sidebar section button.active {
+		background: var(--sonora-bg-active);
+		color: var(--sonora-text);
+	}
+	.sidebar nav button span,
+	.sidebar section button span {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.sidebar nav button b,
+	.sidebar section button b {
+		font-weight: 600;
+		font-size: 12px;
+		opacity: 0.7;
+	}
+	.folder-summary {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		padding: 12px 10px;
+		margin-bottom: 16px;
+		border-radius: 12px;
+		background: rgba(255, 255, 255, 0.03);
+		color: var(--sonora-text-muted);
+	}
+	.folder-summary strong {
+		display: block;
+		color: var(--sonora-text);
+		font-size: 13px;
+		font-weight: 600;
+	}
+	.folder-summary span {
+		font-size: 12px;
+	}
+	.sidebar section h2 {
+		margin: 0 0 8px 10px;
+		font-size: 11px;
+		font-weight: 650;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--sonora-text-faint);
+	}
+	.main {
+		min-width: 0;
+		overflow-y: auto;
+		padding: 24px 28px 40px;
+	}
+	.toolbar {
+		display: flex;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: 16px;
+		margin-bottom: 22px;
+	}
+	.toolbar h1 {
+		margin: 0 0 4px;
+		font-size: 22px;
+		font-weight: 700;
+		letter-spacing: var(--sonora-tracking-tight);
+	}
+	.toolbar span {
+		color: var(--sonora-text-muted);
+		font-size: 13px;
+	}
+	.toolbar-actions {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.sort-select {
+		height: 36px;
+		padding: 0 10px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-bg-elevated);
+		color: var(--sonora-text);
+		font-size: 13px;
+	}
+	.sort-select:focus {
+		outline: none;
+		border-color: color-mix(in srgb, var(--sonora-accent) 55%, var(--sonora-border-strong));
+		box-shadow: 0 0 0 3px var(--sonora-accent-soft);
+	}
+	.seg {
+		display: flex;
+		gap: 2px;
+		padding: 3px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-bg-elevated);
+	}
+	.seg button {
+		width: 32px;
+		height: 30px;
+		display: grid;
+		place-items: center;
+		border: 0;
+		border-radius: 8px;
+		background: transparent;
+		color: var(--sonora-text-muted);
+		cursor: pointer;
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			color var(--sonora-duration) var(--sonora-ease);
+	}
+	.seg button:hover {
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
+	}
+	.seg button.active {
+		background: var(--sonora-bg-active);
+		color: var(--sonora-text);
+		box-shadow: var(--sonora-shadow-xs);
+	}
+	.score-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+		gap: 28px 18px;
+	}
+	.library.compact .score-grid {
+		gap: 18px 12px;
+		grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+	}
+	.score-list {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.empty {
+		position: relative;
+		max-width: 420px;
+		margin: 56px auto 0;
+		text-align: center;
+		color: var(--sonora-text-muted);
+	}
+	.empty-orb {
+		width: 72px;
+		height: 72px;
+		margin: 0 auto 18px;
+		border-radius: 50%;
+		background: radial-gradient(
+			circle at 30% 30%,
+			var(--sonora-accent-soft),
+			transparent 70%
+		);
+		border: 1px solid var(--sonora-border);
+		box-shadow: var(--sonora-accent-glow);
+	}
+	.empty h2 {
+		margin: 0 0 8px;
+		color: var(--sonora-text);
+		font-size: 18px;
+		font-weight: 650;
+		letter-spacing: var(--sonora-tracking-tight);
+	}
+	.empty p {
+		margin: 0 0 18px;
+		font-size: 13px;
+		line-height: 1.45;
+	}
+	@media (max-width: 900px) {
+		.header {
+			grid-template-columns: auto minmax(0, 1fr) auto;
+			gap: 12px;
+			padding: 0 16px;
+		}
+		.sidebar {
+			width: 190px;
+		}
+		.body {
+			grid-template-columns: 190px minmax(0, 1fr);
+		}
+		.main {
+			padding: 20px 18px 32px;
+		}
+		.folder-button span {
+			display: none;
+		}
+	}
+	@media (max-width: 680px) {
+		.header {
+			height: 60px;
+			flex-basis: 60px;
+			padding: 0 12px;
+		}
+		.brand strong {
+			display: none;
+		}
+		.body {
+			display: block;
+		}
+		.sidebar {
+			display: none;
+		}
+		.main {
+			padding: 16px 12px 28px;
+		}
+		.toolbar {
+			align-items: center;
+			margin-bottom: 16px;
+		}
+		.sort-select {
+			display: none;
+		}
+		.score-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 18px 10px;
+		}
+	}
+</style>
