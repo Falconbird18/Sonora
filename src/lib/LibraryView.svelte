@@ -1,1 +1,399 @@
-PLACEHOLDER
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import {
+		Clock3,
+		FolderOpen,
+		FolderPlus,
+		Globe,
+		Grid2X2,
+		List,
+		Music2,
+		RefreshCw,
+		Settings,
+		Star
+	} from '@lucide/svelte';
+	import SearchField from './ui/SearchField.svelte';
+	import Notice from './ui/Notice.svelte';
+	import ScoreCard from './ui/ScoreCard.svelte';
+	import ScoreListItem from './ui/ScoreListItem.svelte';
+	import MetadataDialog from './ui/MetadataDialog.svelte';
+	import ComposerPortrait from './ui/ComposerPortrait.svelte';
+	import IconButton from './ui/IconButton.svelte';
+	import SettingsPanel from './ui/SettingsPanel.svelte';
+	import ImslpSearchPanel from './ui/ImslpSearchPanel.svelte';
+	import { saveScoreMetadata } from './scoreMeta';
+	import { settings } from './settingsStore';
+	import { db } from './db';
+	import {
+		chooseAndAddFolder,
+		resolveScoreSource,
+		syncAllFolders
+	} from './folderSync';
+	import {
+		checkForUpdate,
+		shouldShowUpdateBanner,
+		dismissUpdate,
+		type UpdateInfo
+	} from './updateChecker';
+	import { refreshComposersFromRemote } from './composerDatabase';
+	import { getComposerPortrait, hydratePortraitCache } from './composerPortraits';
+	import { getPdfInfoFromSource } from './pdfUtils';
+	import { isTauri } from './paths';
+	import type { FolderSource, ScoreItem, ScoreMetadataUpdate } from './types';
+
+	const THUMBNAIL_VERSION = 2;
+	let {
+		onSelectScore,
+		paused = false
+	}: { onSelectScore: (score: ScoreItem) => void; paused?: boolean } = $props();
+	let scores = $state<ScoreItem[]>([]),
+		folder = $state<FolderSource | undefined>(),
+		search = $state('');
+	let filter = $state<'all' | 'favorites' | 'recent'>('all'),
+		composer = $state<string | null>(null),
+		sort = $state<'recent' | 'title' | 'composer'>('recent');
+	let view = $state<'grid' | 'list'>('grid'),
+		menuScoreId = $state<string | null>(null),
+		metadata = $state<ScoreItem | null>(null);
+	let syncing = $state(false),
+		notice = $state(''),
+		error = $state('');
+	let openingId = $state<string | null>(null),
+		timer: ReturnType<typeof setInterval> | undefined,
+		backfillRunning = false;
+	let settingsOpen = $state(false);
+	let imslpOpen = $state(false);
+
+	let updateInfo = $state<UpdateInfo | null>(null);
+	let updateBannerVisible = $state(false);
+
+	async function refresh() {
+		const [nextScores, nextFolder] = await Promise.all([
+			db.scores.orderBy('addedAt').reverse().toArray(),
+			db.folders.get('library-root')
+		]);
+		scores = nextScores;
+		folder = nextFolder;
+	}
+	async function sync() {
+		if (syncing || paused) return;
+		syncing = true;
+		error = '';
+		try {
+			const results = await syncAllFolders(true);
+			const result = results[0];
+			notice = result
+				? 'skipped' in result && result.skipped
+					? 'Library is up to date'
+					: result.added || result.updated || result.removed
+						? `${result.added + result.updated} updated · ${result.removed} removed`
+						: 'Library is up to date'
+				: 'Choose a score folder to begin';
+			await refresh();
+			void backfillThumbnails();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not sync the library';
+		} finally {
+			syncing = false;
+			setTimeout(() => (notice = ''), 3000);
+		}
+	}
+	async function chooseFolder() {
+		error = '';
+		try {
+			await chooseAndAddFolder();
+			await refresh();
+			void backfillThumbnails();
+		} catch (e) {
+			if ((e as DOMException)?.name !== 'AbortError')
+				error =
+					e instanceof Error ? e.message : 'Could not choose the score folder';
+		}
+	}
+	function prepareScore(score: ScoreItem): ScoreItem {
+		const source = resolveScoreSource(score, folder);
+		return {
+			...score,
+			pdfUrl: source.url || score.pdfUrl,
+			nativePath: source.nativePath || score.nativePath,
+			pdfBlob: isTauri() ? undefined : source.blob || score.pdfBlob
+		};
+	}
+	async function openScore(score: ScoreItem) {
+		closeMenu();
+		error = '';
+		openingId = score.id;
+		try {
+			const prepared = prepareScore(score);
+			if (
+				!prepared.pdfUrl &&
+				!prepared.nativePath &&
+				!(prepared.pdfBlob && prepared.pdfBlob.size > 0)
+			)
+				throw new Error(
+					`“${score.title}” has no PDF source. Try refreshing the library.`
+				);
+			const openedAt = Date.now();
+			void db.scores
+				.update(score.id, { lastOpenedAt: openedAt })
+				.catch((err) => console.warn('Could not update last opened', err));
+			scores = scores.map((item) =>
+				item.id === score.id ? { ...item, lastOpenedAt: openedAt } : item
+			);
+			onSelectScore({ ...prepared, lastOpenedAt: openedAt });
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not open this score';
+		} finally {
+			openingId = null;
+		}
+	}
+	async function toggleFavorite(score: ScoreItem, event: MouseEvent) {
+		event.stopPropagation();
+		const favorite = !score.favorite;
+		await db.scores.update(score.id, { favorite });
+		scores = scores.map((item) =>
+			item.id === score.id ? { ...item, favorite } : item
+		);
+		if (favorite) closeMenu();
+	}
+	function toggleMenu(score: ScoreItem, event: MouseEvent) {
+		event.stopPropagation();
+		menuScoreId = menuScoreId === score.id ? null : score.id;
+	}
+	function closeMenu() {
+		menuScoreId = null;
+	}
+	function editMetadata(score: ScoreItem, event?: MouseEvent) {
+		event?.stopPropagation();
+		closeMenu();
+		metadata = score;
+	}
+
+	function downloadScoreFile(score: ScoreItem, event?: MouseEvent) {
+		event?.stopPropagation();
+		menuScoreId = null;
+		let href = score.pdfUrl || '';
+		if (!href && score.pdfBlob) href = URL.createObjectURL(score.pdfBlob);
+		if (!href) {
+			error = 'No PDF available to download for this score.';
+			return;
+		}
+		const link = document.createElement('a');
+		link.href = href;
+		link.download = `${score.title || 'score'}.pdf`;
+		link.target = '_blank';
+		link.rel = 'noopener';
+		link.click();
+		if (score.pdfBlob && !score.pdfUrl)
+			setTimeout(() => URL.revokeObjectURL(href), 1000);
+	}
+
+	function printScoreFile(score: ScoreItem, event?: MouseEvent) {
+		event?.stopPropagation();
+		menuScoreId = null;
+		const href =
+			score.pdfUrl || (score.pdfBlob ? URL.createObjectURL(score.pdfBlob) : '');
+		if (!href) {
+			error = 'No PDF available to print for this score.';
+			return;
+		}
+		const win = window.open(href, '_blank', 'noopener');
+		if (win) {
+			win.addEventListener('load', () => {
+				try {
+					win.print();
+				} catch {}
+			});
+		} else {
+			const frame = document.createElement('iframe');
+			frame.style.display = 'none';
+			frame.src = href;
+			document.body.appendChild(frame);
+			frame.onload = () => {
+				try {
+					frame.contentWindow?.print();
+				} catch {}
+				setTimeout(() => frame.remove(), 2000);
+			};
+		}
+		if (score.pdfBlob && !score.pdfUrl)
+			setTimeout(() => URL.revokeObjectURL(href), 5000);
+	}
+
+	async function saveMetadata(payload: ScoreMetadataUpdate) {
+		if (!metadata) return;
+		const id = metadata.id;
+		try {
+			const next = await saveScoreMetadata(id, payload);
+			scores = scores.map((item) =>
+				item.id === id ? { ...item, ...next } : item
+			);
+			metadata = null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not save metadata';
+		}
+	}
+	async function deleteScore(score: ScoreItem, event?: MouseEvent) {
+		event?.stopPropagation();
+		closeMenu();
+		if (!confirm(`Remove “${score.title}” from Sonora?`)) return;
+		try {
+			await db.transaction('rw', db.scores, db.annotations, async () => {
+				await db.scores.delete(score.id);
+				await db.annotations.where('scoreId').equals(score.id).delete();
+			});
+			scores = scores.filter((item) => item.id !== score.id);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not remove this score';
+		}
+	}
+	async function backfillThumbnails() {
+		if (backfillRunning || paused) return;
+		backfillRunning = true;
+		try {
+			const missing = scores.filter(
+				(score) =>
+					!score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
+			);
+			for (const score of missing.slice(0, 4)) {
+				if (paused) break;
+				try {
+					const source = resolveScoreSource(score, folder);
+					if (!source.url && !source.blob && !source.nativePath) continue;
+					const info = await getPdfInfoFromSource(source);
+					if (!info.thumbnailUrl) continue;
+					await db.scores.update(score.id, {
+						thumbnailUrl: info.thumbnailUrl,
+						thumbnailVersion: THUMBNAIL_VERSION,
+						totalPages: info.totalPages || score.totalPages || 1
+					});
+					scores = scores.map((item) =>
+						item.id === score.id
+							? {
+									...item,
+									thumbnailUrl: info.thumbnailUrl,
+									thumbnailVersion: THUMBNAIL_VERSION,
+									totalPages: info.totalPages || item.totalPages || 1
+								}
+							: item
+					);
+				} catch (err) {
+					console.warn('Thumbnail backfill failed', score.title, err);
+				}
+				await new Promise<void>((resolve) => setTimeout(resolve, 24));
+			}
+			if (
+				!paused &&
+				scores.some(
+					(score) =>
+						!score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
+				)
+			)
+				setTimeout(() => void backfillThumbnails(), 700);
+		} finally {
+			backfillRunning = false;
+		}
+	}
+	onMount(() => {
+		let disposed = false;
+		const initialize = async () => {
+			await refresh();
+			// Hydrate any previously cached portraits so UI paints immediately offline.
+			void hydratePortraitCache();
+			void refreshComposersFromRemote().then((result) => {
+				if (result.updated) {
+					console.info(
+						`Composer list updated from ${result.source} (${result.count} entries)`
+					);
+				}
+			});
+			void checkForUpdate().then((info) => {
+				updateInfo = info;
+				updateBannerVisible = shouldShowUpdateBanner(info);
+			});
+			if (disposed) return;
+			const saved = localStorage.getItem('sonora-library-settings');
+			if (saved) {
+				try {
+					const value = JSON.parse(saved);
+					view = value.view === 'list' ? 'list' : 'grid';
+					sort = ['recent', 'title', 'composer'].includes(value.sort)
+						? value.sort
+						: 'recent';
+				} catch {}
+			}
+			if (disposed) return;
+			await sync();
+			if (disposed) return;
+			void backfillThumbnails();
+			// Library folder sync every 5 min; composer list/portraits every hour.
+			timer = setInterval(() => {
+				void sync();
+				void refreshComposersFromRemote();
+			}, 5 * 60 * 1000);
+		};
+		void initialize();
+		const wake = () => {
+			void sync();
+			void refreshComposersFromRemote();
+		};
+		window.addEventListener('focus', wake);
+		return () => {
+			disposed = true;
+			clearInterval(timer);
+			window.removeEventListener('focus', wake);
+		};
+	});
+	$effect(() => {
+		localStorage.setItem(
+			'sonora-library-settings',
+			JSON.stringify({ view, sort })
+		);
+	});
+	$effect(() => {
+		if (!paused) void backfillThumbnails();
+	});
+	const composers = $derived.by(() => {
+		const counts: Record<string, number> = {};
+		for (const score of scores) {
+			const name = score.composer || 'Unknown Composer';
+			counts[name] = (counts[name] ?? 0) + 1;
+		}
+		return counts;
+	});
+	const filtered = $derived(
+		scores
+			.filter((score) => !composer || score.composer === composer)
+			.filter(
+				(score) =>
+					filter === 'all' ||
+					(filter === 'favorites' ? !!score.favorite : !!score.lastOpenedAt)
+			)
+			.filter((score) => {
+				const query = search.trim().toLowerCase();
+				return (
+					!query ||
+					score.title.toLowerCase().includes(query) ||
+					score.composer.toLowerCase().includes(query) ||
+					(score.tags ?? []).some((tag) => tag.toLowerCase().includes(query))
+				);
+			})
+			.sort((a, b) =>
+				sort === 'title'
+					? a.title.localeCompare(b.title)
+					: sort === 'composer'
+						? a.composer.localeCompare(b.composer) ||
+							a.title.localeCompare(b.title)
+						: (b.lastOpenedAt || b.addedAt) - (a.lastOpenedAt || a.addedAt)
+			)
+	);
+	const currentTitle = $derived(
+		composer
+			? composer
+			: filter === 'favorites'
+				? 'Favorites'
+				: filter === 'recent'
+					? 'Recently opened'
+					: 'All scores'
+	);
+</script>
