@@ -1,12 +1,24 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import {
+		getComposerPortraitSources,
+		onPortraitUpdate,
+		type PortraitSources
+	} from '../composerPortraits';
+
 	type Props = {
 		name: string;
+		/** Optional override; when omitted we resolve from the composer database. */
 		src?: string | null;
 		size?: 'sm' | 'md';
 		class?: string;
 	};
 
 	let { name, src = null, size = 'sm', class: className = '' }: Props = $props();
+
+	let failed = $state(false);
+	let activeSrc = $state<string | null>(null);
+	let sources = $state<PortraitSources | null>(null);
 
 	const initials = $derived(
 		name
@@ -17,11 +29,50 @@
 			.join('')
 			.toUpperCase() || '?'
 	);
+
+	function resolve() {
+		failed = false;
+		sources = getComposerPortraitSources(name);
+		// Explicit prop wins; otherwise prefer cached blob / remote, then local offline.
+		activeSrc = src || sources?.src || sources?.local || null;
+	}
+
+	$effect(() => {
+		// Re-run when name or src changes
+		void name;
+		void src;
+		resolve();
+	});
+
+	onMount(() => {
+		const unsub = onPortraitUpdate((id, url) => {
+			if (sources?.id === id) {
+				failed = false;
+				activeSrc = url;
+			}
+		});
+		return unsub;
+	});
+
+	function onImgError() {
+		// Cascade: blob/remote → local bundled → initials
+		if (activeSrc && sources?.remote && activeSrc !== sources.local && activeSrc !== sources.remote) {
+			// Was blob; try remote
+			activeSrc = sources.remote;
+			return;
+		}
+		if (activeSrc && sources?.local && activeSrc !== sources.local) {
+			activeSrc = sources.local;
+			return;
+		}
+		failed = true;
+		activeSrc = null;
+	}
 </script>
 
 <div class="portrait {className}" class:md={size === 'md'} title={name} aria-hidden="true">
-	{#if src}
-		<img {src} alt="" loading="lazy" decoding="async" />
+	{#if activeSrc && !failed}
+		<img src={activeSrc} alt="" loading="lazy" decoding="async" onerror={onImgError} />
 	{:else}
 		<span>{initials}</span>
 	{/if}

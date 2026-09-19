@@ -68,18 +68,34 @@ export function searchComposers(query: string, limit = 8): ComposerRecord[] {
 		.map(({ composer }) => composer);
 }
 
+/** GitHub branch that hosts the live composer list + portraits. */
+export const COMPOSER_REMOTE_BRANCH = 'development';
+
+/** Base URL for remote portrait JPEGs (same branch as the JSON list). */
+export const REMOTE_PORTRAIT_BASE = `https://raw.githubusercontent.com/Falconbird18/Sonora/${COMPOSER_REMOTE_BRANCH}/public/composers`;
+
+/**
+ * Preferred portrait URL for a composer.
+ * Uses the remote GitHub raw URL so newly added or updated portraits appear
+ * without shipping a new app build. Bundled `/composers/{id}.jpg` remains as
+ * an offline fallback (see composerPortraits / ComposerPortrait).
+ */
 export function getComposerPortraitPath(composer: ComposerRecord): string {
+	return `${REMOTE_PORTRAIT_BASE}/${composer.id}.jpg`;
+}
+
+/** Local static path (shipped with the app) — offline fallback only. */
+export function getLocalComposerPortraitPath(composer: ComposerRecord): string {
 	return `/composers/${composer.id}.jpg`;
 }
 
 // ─── Remote composer list ───────────────────────────────────────────────────
 
-const REMOTE_URL =
-	'https://raw.githubusercontent.com/Falconbird18/Sonora/development/src/data/composers.json';
+const REMOTE_URL = `https://raw.githubusercontent.com/Falconbird18/Sonora/${COMPOSER_REMOTE_BRANCH}/src/data/composers.json`;
 const CACHE_KEY = 'sonora-composers-cache';
 const CACHE_META_KEY = 'sonora-composers-cache-meta';
-/** Re-fetch at most once per day unless forced. */
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+/** Re-fetch at most once per 6 hours unless forced (was 24h — tighter so list + portraits stay fresh). */
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 type CacheMeta = { fetchedAt: number; etag?: string; count: number };
 
@@ -142,25 +158,48 @@ export type ComposerRefreshResult = {
 	source: 'remote' | 'cache' | 'bundled';
 	count: number;
 	error?: string;
+	/** True when we kicked off a background portrait sync. */
+	portraitsSyncing?: boolean;
 };
 
+type PortraitSyncFn = (composers: ComposerRecord[], options?: { force?: boolean }) => Promise<void>;
+
+let portraitSyncHandler: PortraitSyncFn | null = null;
+
+/** Register the portrait cache sync (avoids circular imports). */
+export function registerPortraitSync(handler: PortraitSyncFn) {
+	portraitSyncHandler = handler;
+}
+
+function kickPortraitSync(list: ComposerRecord[], force = false) {
+	if (!portraitSyncHandler) return false;
+	void portraitSyncHandler(list, { force }).catch((err) =>
+		console.warn('[Sonora] Portrait sync failed', err)
+	);
+	return true;
+}
+
 /**
- * Optionally refresh COMPOSERS from the GitHub raw URL.
+ * Refresh COMPOSERS from the GitHub raw URL.
  * Falls back to localStorage cache, then the bundled JSON.
  * Safe to call on startup; network failures are non-fatal.
+ * After a successful remote (or forced) refresh, portraits are synced in the background.
  */
 export async function refreshComposersFromRemote(options?: {
 	force?: boolean;
 }): Promise<ComposerRefreshResult> {
 	const meta = getCacheMeta();
 	const cached = loadCached();
+	const force = !!options?.force;
 
 	// Prefer a still-fresh cache over a network hit
-	if (!options?.force && cached && meta && Date.now() - meta.fetchedAt < CACHE_TTL_MS) {
+	if (!force && cached && meta && Date.now() - meta.fetchedAt < CACHE_TTL_MS) {
 		if (cached.length !== COMPOSERS.length || cached[0]?.id !== COMPOSERS[0]?.id) {
 			applyComposers(cached);
 		}
-		return { updated: false, source: 'cache', count: COMPOSERS.length };
+		// Still ensure portraits for any newly cached composers are present
+		const portraitsSyncing = kickPortraitSync(COMPOSERS, false);
+		return { updated: false, source: 'cache', count: COMPOSERS.length, portraitsSyncing };
 	}
 
 	try {
@@ -168,14 +207,15 @@ export async function refreshComposersFromRemote(options?: {
 			Accept: 'application/json',
 			'User-Agent': 'Sonora-composer-refresh'
 		};
-		if (meta?.etag) headers['If-None-Match'] = meta.etag;
+		if (meta?.etag && !force) headers['If-None-Match'] = meta.etag;
 
 		const res = await fetch(REMOTE_URL, { headers });
 
 		if (res.status === 304 && cached) {
 			applyComposers(cached);
 			saveCache(cached, meta?.etag);
-			return { updated: false, source: 'cache', count: COMPOSERS.length };
+			const portraitsSyncing = kickPortraitSync(COMPOSERS, force);
+			return { updated: false, source: 'cache', count: COMPOSERS.length, portraitsSyncing };
 		}
 
 		if (!res.ok) {
@@ -188,19 +228,24 @@ export async function refreshComposersFromRemote(options?: {
 		}
 
 		const etag = res.headers.get('etag') ?? undefined;
-		const changed = data.length !== COMPOSERS.length || JSON.stringify(data) !== JSON.stringify(COMPOSERS);
+		const changed =
+			data.length !== COMPOSERS.length || JSON.stringify(data) !== JSON.stringify(COMPOSERS);
 		applyComposers(data);
 		saveCache(data, etag);
+
+		const portraitsSyncing = kickPortraitSync(data, force || changed);
 
 		return {
 			updated: changed,
 			source: 'remote',
-			count: data.length
+			count: data.length,
+			portraitsSyncing
 		};
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (cached) {
 			applyComposers(cached);
+			kickPortraitSync(COMPOSERS, false);
 			return { updated: false, source: 'cache', count: COMPOSERS.length, error: message };
 		}
 		return { updated: false, source: 'bundled', count: COMPOSERS.length, error: message };
