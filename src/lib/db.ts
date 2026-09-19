@@ -11,10 +11,18 @@ const SCORES_INDEX =
 const ANNOTATIONS_INDEX = 'id, scoreId, pageNum';
 const FOLDERS_INDEX = 'id, name, addedAt, lastSyncedAt';
 
+export type ComposerPortraitCache = {
+	id: string;
+	blob: Blob;
+	etag?: string;
+	fetchedAt: number;
+};
+
 export class MusicDatabase extends Dexie {
 	scores!: Table<ScoreItem, string>;
 	annotations!: Table<AnnotationRecord, string>;
 	folders!: Table<FolderSource, string>;
+	composerPortraits!: Table<ComposerPortraitCache, string>;
 
 	constructor() {
 		super('Sonora_MusicViewer_DB');
@@ -63,6 +71,15 @@ export class MusicDatabase extends Dexie {
 			scores: SCORES_INDEX,
 			annotations: ANNOTATIONS_INDEX,
 			folders: FOLDERS_INDEX
+		});
+
+		// Cached remote composer portraits (blob + etag) so images update without an app rebuild
+		// and still work offline after the first successful fetch.
+		this.version(8).stores({
+			scores: SCORES_INDEX,
+			annotations: ANNOTATIONS_INDEX,
+			folders: FOLDERS_INDEX,
+			composerPortraits: 'id, fetchedAt'
 		});
 	}
 }
