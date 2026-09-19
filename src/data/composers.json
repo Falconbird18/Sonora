@@ -261,7 +261,7 @@
 		"deathYear": 1857,
 		"birthPlace": "Vienna",
 		"country": "Austria",
-		"portraitFiles": ["Carl Czerny.jpg"]
+		"portraitFiles": ["Czerny 2 part.jpg"]
 	},
 	{
 		"id": "hanon",
@@ -355,6 +355,17 @@
 		"country": "Germany",
 		"portraitFiles": ["Heinrich Ernst Kayser.jpg"],
 		"portraitQuery": "Heinrich Ernst Kayser portrait"
+	},
+	{
+		"id": "cramer",
+		"name": "Johann Baptist Cramer",
+		"aliases": ["Cramer, Johann Baptist"],
+		"period": "Classical / Early Romantic",
+		"birthYear": 1771,
+		"deathYear": 1858,
+		"birthPlace": "Mannheim, Germany",
+		"country": "England",
+		"portraitFiles": ["Johann Baptist Cramer by William Sharp.jpg"]
 	},
 	{
 		"id": "schubert",
@@ -836,6 +847,17 @@
 		"birthPlace": "Brooklyn, New York, United States",
 		"country": "United States",
 		"portraitFiles": ["Aaron Copland.jpg"]
+	},
+	{
+		"id": "dohnanyi",
+		"name": "Ernst von Dohnányi",
+		"aliases": ["Dohnányi, Ernst von"],
+		"period": "Modern",
+		"birthYear": 1877,
+		"deathYear": 1960,
+		"birthPlace": "Pozsony, Hungary",
+		"country": "Hungary",
+		"portraitFiles": ["Ernő Dohnányi.jpg"]
 	},
 	{
 		"id": "shostakovich",
