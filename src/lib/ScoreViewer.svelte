@@ -698,7 +698,6 @@
 		);
 	}
 
-
 	async function paintPage(
 		pdfPage: PdfPageProxy,
 		number: number,
@@ -743,7 +742,15 @@
 		tasks.push(task);
 		await task.promise;
 		if (current !== generation || closed) return null;
-		const bmp: PageBitmap = { index, number, widthPx, heightPx, canvasW, canvasH, offscreen };
+		const bmp: PageBitmap = {
+			index,
+			number,
+			widthPx,
+			heightPx,
+			canvasW,
+			canvasH,
+			offscreen
+		};
 		touchCache(key, bmp);
 		return bmp;
 	}
@@ -1713,54 +1720,116 @@
 	}
 
 	// ── Metronome ──────────────────────────────────────────────
+	type TimeSig = {
+		label: string;
+		beats: number;
+		unit: 4 | 8;
+		accents: number[];
+	};
+
+	const TIME_SIGS: TimeSig[] = [
+		{ label: '2/4', beats: 2, unit: 4, accents: [0] },
+		{ label: '3/4', beats: 3, unit: 4, accents: [0] },
+		{ label: '4/4', beats: 4, unit: 4, accents: [0] },
+		{ label: '5/4', beats: 5, unit: 4, accents: [0] },
+		{ label: '6/8', beats: 6, unit: 8, accents: [0, 3] },
+		{ label: '7/8', beats: 7, unit: 8, accents: [0, 3, 5] },
+		{ label: '9/8', beats: 9, unit: 8, accents: [0, 3, 6] },
+		{ label: '12/8', beats: 12, unit: 8, accents: [0, 3, 6, 9] }
+	];
+
 	let metronomeOpen = $state(false);
 	let metronomeBpm = $state(120);
 	let metronomeRunning = $state(false);
-	let metronomeBeat = $state(0); // 0..3 visual pulse
-	let metronomeCtx: AudioContext | null = null;
-	let metronomeTimer: number | null = null;
+	let metronomeBeat = $state(0);
+	let metronomeSigIdx = $state(2); // 4/4
+	let metronomeMuted = $state(false);
+	let metronomeVolume = $state(1);
 
-	function metronomeClick(accent: boolean) {
-		if (!metronomeCtx) {
-			metronomeCtx = new AudioContext();
-		}
-		const ctx = metronomeCtx;
-		const t = ctx.currentTime;
+	let metroCtx: AudioContext | null = null;
+	let metroNextNoteTime = 0;
+	let metroBeatInBar = 0;
+	let metroTimerId: number | null = null;
+	let metroTapTimes: number[] = [];
+
+	const metroSig = $derived(TIME_SIGS[metronomeSigIdx] ?? TIME_SIGS[2]);
+
+	/** Seconds per beat (handles 8th-note meters). */
+	function metroSecondsPerBeat(bpm: number, sig: TimeSig) {
+		const quarter = 60 / Math.max(30, Math.min(300, bpm));
+		return sig.unit === 8 ? quarter / 2 : quarter;
+	}
+
+	function ensureMetroAudio() {
+		if (!metroCtx) metroCtx = new AudioContext();
+		if (metroCtx.state === 'suspended') void metroCtx.resume();
+		return metroCtx;
+	}
+
+	function scheduleClick(time: number, accent: boolean) {
+		if (metronomeMuted) return;
+		const ctx = ensureMetroAudio();
 		const osc = ctx.createOscillator();
 		const gain = ctx.createGain();
 		osc.type = 'sine';
-		osc.frequency.value = accent ? 1200 : 800;
-		gain.gain.setValueAtTime(0.0001, t);
-		gain.gain.exponentialRampToValueAtTime(0.35, t + 0.005);
-		gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+		osc.frequency.setValueAtTime(accent ? 1320 : 880, time);
+		const vol =
+			Math.max(0.05, Math.min(1, metronomeVolume)) * (accent ? 0.45 : 0.28);
+		gain.gain.setValueAtTime(0.0001, time);
+		gain.gain.exponentialRampToValueAtTime(vol, time + 0.004);
+		gain.gain.exponentialRampToValueAtTime(
+			0.0001,
+			time + (accent ? 0.09 : 0.06)
+		);
 		osc.connect(gain);
 		gain.connect(ctx.destination);
-		osc.start(t);
-		osc.stop(t + 0.09);
+		osc.start(time);
+		osc.stop(time + 0.1);
+	}
+
+	function metroScheduler() {
+		if (!metroCtx || !metronomeRunning) return;
+		const sig = metroSig;
+		const lookAhead = 0.12;
+		while (metroNextNoteTime < metroCtx.currentTime + lookAhead) {
+			const accent = sig.accents.includes(metroBeatInBar);
+			scheduleClick(metroNextNoteTime, accent);
+			// Visual beat slightly early is fine; schedule visual via rAF offset
+			const beat = metroBeatInBar;
+			const when = metroNextNoteTime;
+			const delayMs = Math.max(0, (when - metroCtx.currentTime) * 1000);
+			window.setTimeout(() => {
+				if (metronomeRunning) metronomeBeat = beat;
+			}, delayMs);
+
+			metroBeatInBar = (metroBeatInBar + 1) % sig.beats;
+			metroNextNoteTime += metroSecondsPerBeat(metronomeBpm, sig);
+		}
+		metroTimerId = window.setTimeout(metroScheduler, 25);
 	}
 
 	function stopMetronome() {
-		if (metronomeTimer != null) {
-			clearInterval(metronomeTimer);
-			metronomeTimer = null;
+		if (metroTimerId != null) {
+			clearTimeout(metroTimerId);
+			metroTimerId = null;
 		}
 		metronomeRunning = false;
 		metronomeBeat = 0;
+		metroBeatInBar = 0;
 	}
 
 	function startMetronome() {
+		const ctx = ensureMetroAudio();
 		stopMetronome();
-		const bpm = Math.max(30, Math.min(300, Math.round(metronomeBpm) || 120));
+		const bpm = Math.max(
+			30,
+			Math.min(300, Math.round(Number(metronomeBpm)) || 120)
+		);
 		metronomeBpm = bpm;
 		metronomeRunning = true;
-		let beat = 0;
-		const tick = () => {
-			metronomeClick(beat === 0);
-			metronomeBeat = beat;
-			beat = (beat + 1) % 4;
-		};
-		tick();
-		metronomeTimer = window.setInterval(tick, (60_000 / bpm));
+		metroBeatInBar = 0;
+		metroNextNoteTime = ctx.currentTime + 0.05;
+		metroScheduler();
 	}
 
 	function toggleMetronome() {
@@ -1768,7 +1837,47 @@
 		else startMetronome();
 	}
 
-	// Clean up on leave / destroy
+	/** Live BPM change while running — reschedule from “now”. */
+	function setMetroBpm(next: number) {
+		const bpm = Math.max(30, Math.min(300, Math.round(next) || 120));
+		metronomeBpm = bpm;
+		if (metronomeRunning && metroCtx) {
+			// Keep current beat index; only shift the next note time
+			metroNextNoteTime = metroCtx.currentTime + 0.05;
+		}
+	}
+
+	function nudgeBpm(delta: number) {
+		setMetroBpm(metronomeBpm + delta);
+	}
+
+	function setTimeSig(idx: number) {
+		metronomeSigIdx = idx;
+		metroBeatInBar = 0;
+		metronomeBeat = 0;
+		if (metronomeRunning && metroCtx) {
+			metroNextNoteTime = metroCtx.currentTime + 0.05;
+		}
+	}
+
+	function tapTempo() {
+		const now = performance.now();
+		metroTapTimes = metroTapTimes.filter((t) => now - t < 3000);
+		metroTapTimes.push(now);
+		if (metroTapTimes.length >= 2) {
+			const intervals: number[] = [];
+			for (let i = 1; i < metroTapTimes.length; i++) {
+				intervals.push(metroTapTimes[i] - metroTapTimes[i - 1]);
+			}
+			const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+			setMetroBpm(Math.round(60000 / avg));
+		}
+	}
+
+	function closeMetronome() {
+		metronomeOpen = false;
+	}
+
 	$effect(() => {
 		return () => stopMetronome();
 	});
@@ -1863,58 +1972,12 @@
 					onclick={() => {
 						needsCenter = true;
 						setZoom(1, { immediate: true });
-					}}
-					>{Math.round(zoom * 100)}%</button>
+					}}>{Math.round(zoom * 100)}%</button>
 				<button
 					class="icon-button"
 					title="Zoom in"
 					onclick={() => setZoom(zoom + 0.08)}><ZoomIn size={17} /></button>
 			</div>
-			<button
-				type="button"
-				class="tool-btn"
-				class:active={metronomeOpen || metronomeRunning}
-				title="Metronome"
-				aria-label="Metronome"
-				onclick={() => (metronomeOpen = !metronomeOpen)}>
-				<!-- simple metronome icon via SVG or use a Lucide icon if available -->
-				<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-					<path d="M12 3v3M9 21h6M12 6l-4 12h8L12 6z" />
-					<path d="M10 14h4" />
-				</svg>
-			</button>
-
-			{#if metronomeOpen}
-				<div class="metronome-popover" role="dialog" aria-label="Metronome">
-					<label class="metro-row">
-						<span>BPM</span>
-						<input
-							type="number"
-							min="30"
-							max="300"
-							bind:value={metronomeBpm}
-							oninput={() => {
-								if (metronomeRunning) startMetronome();
-							}} />
-					</label>
-					<input
-						type="range"
-						min="30"
-						max="240"
-						bind:value={metronomeBpm}
-						oninput={() => {
-							if (metronomeRunning) startMetronome();
-						}} />
-					<div class="metro-beats">
-						{#each [0, 1, 2, 3] as i}
-							<span class="beat" class:on={metronomeRunning && metronomeBeat === i}></span>
-						{/each}
-					</div>
-					<button type="button" class="metro-go" onclick={toggleMetronome}>
-						{metronomeRunning ? 'Stop' : 'Start'}
-					</button>
-				</div>
-			{/if}
 			<div class="footer-section">
 				<button
 					class:active={dual}
@@ -2071,6 +2134,156 @@
 			title="Annotation tools"
 			aria-label="Open annotation tools"
 			onclick={toggleControls}><Pencil size={18} /></button>
+	{/if}
+
+	{#if !reading && !controls}
+		<div
+			class="metro-dock"
+			class:open={metronomeOpen}
+			class:running={metronomeRunning}>
+			<button
+				type="button"
+				class="metro-toggle icon-button"
+				class:active={metronomeOpen || metronomeRunning}
+				title="Metronome"
+				aria-label="Metronome"
+				aria-expanded={metronomeOpen}
+				onclick={() => (metronomeOpen = !metronomeOpen)}>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					width="22"
+					height="22"
+					fill="currentColor"
+					viewBox="0 0 256 256"
+					><path
+						d="M187.14,114.84l26.78-29.46a8,8,0,0,0-11.84-10.76l-20.55,22.6-17.2-54.07A15.94,15.94,0,0,0,149.08,32H106.91A15.94,15.94,0,0,0,91.66,43.15l-50.91,160A16,16,0,0,0,56,224H200a16,16,0,0,0,15.25-20.85ZM184.72,160H146.08l28.62-31.48ZM106.91,48h42.17l20,62.9L124.46,160H71.27ZM56,208l10.18-32H189.81L200,208Z"
+					></path
+					></svg>
+				{#if metronomeRunning}
+					<span class="metro-pulse-dot" aria-hidden="true"></span>
+				{/if}
+			</button>
+
+			{#if metronomeOpen}
+				<div class="metro-panel" role="dialog" aria-label="Metronome controls">
+					<div class="metro-panel-top">
+						<div class="metro-bpm-display">
+							<button
+								type="button"
+								class="metro-nudge"
+								aria-label="Decrease tempo by 5"
+								onclick={() => nudgeBpm(-5)}>−5</button>
+							<button
+								type="button"
+								class="metro-nudge"
+								aria-label="Decrease tempo"
+								onclick={() => nudgeBpm(-1)}>−</button>
+							<div class="metro-bpm-core">
+								<input
+									class="metro-bpm-input"
+									type="number"
+									min="30"
+									max="300"
+									inputmode="numeric"
+									aria-label="Tempo in BPM"
+									value={metronomeBpm}
+									oninput={(e) => setMetroBpm(Number((e.currentTarget as HTMLInputElement).value))} />
+								<span class="metro-bpm-label">BPM</span>
+							</div>
+							<button
+								type="button"
+								class="metro-nudge"
+								aria-label="Increase tempo"
+								onclick={() => nudgeBpm(1)}>+</button>
+							<button
+								type="button"
+								class="metro-nudge"
+								aria-label="Increase tempo by 5"
+								onclick={() => nudgeBpm(5)}>+5</button>
+						</div>
+						<button
+							type="button"
+							class="metro-play"
+							class:on={metronomeRunning}
+							aria-label={metronomeRunning
+								? 'Stop metronome'
+								: 'Start metronome'}
+							onclick={toggleMetronome}>
+							{#if metronomeRunning}
+								<svg
+									width="22"
+									height="22"
+									viewBox="0 0 24 24"
+									fill="currentColor"
+									><rect x="6" y="5" width="4" height="14" rx="1" /><rect
+										x="14"
+										y="5"
+										width="4"
+										height="14"
+										rx="1" /></svg>
+							{:else}
+								<svg
+									width="22"
+									height="22"
+									viewBox="0 0 24 24"
+									fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+							{/if}
+						</button>
+					</div>
+
+					<input
+						class="metro-slider"
+						type="range"
+						min="30"
+						max="240"
+						step="1"
+						aria-label="Tempo slider"
+						value={metronomeBpm}
+						oninput={(e) => setMetroBpm(Number((e.currentTarget as HTMLInputElement).value))} />
+
+					<div class="metro-beats" style="--beat-count: {metroSig.beats}">
+						{#each Array.from({ length: metroSig.beats }, (_, i) => i) as i}
+							<span
+								class="beat"
+								class:accent={metroSig.accents.includes(i)}
+								class:on={metronomeRunning && metronomeBeat === i}></span>
+						{/each}
+					</div>
+
+					<div class="metro-sigs" role="group" aria-label="Time signature">
+						{#each TIME_SIGS as sig, idx}
+							<button
+								type="button"
+								class="metro-sig"
+								class:active={metronomeSigIdx === idx}
+								onclick={() => setTimeSig(idx)}>{sig.label}</button>
+						{/each}
+					</div>
+
+					<div class="metro-actions">
+						<button
+							type="button"
+							class="metro-action"
+							onclick={tapTempo}
+							title="Tap several times to set tempo">
+							Tap tempo
+						</button>
+						<button
+							type="button"
+							class="metro-action"
+							class:active={metronomeMuted}
+							onclick={() => (metronomeMuted = !metronomeMuted)}
+							aria-pressed={metronomeMuted}>
+							{metronomeMuted ? 'Unmute' : 'Mute'}
+						</button>
+						<button
+							type="button"
+							class="metro-action ghost"
+							onclick={closeMetronome}>Done</button>
+					</div>
+				</div>
+			{/if}
+		</div>
 	{/if}
 
 	{#if !reading && controls}
@@ -3316,62 +3529,305 @@
 		padding: 12px;
 	}
 
-	.metronome-popover {
+	.metro-dock {
 		position: absolute;
-		top: 100%;
-		right: 0;
-		margin-top: 8px;
-		padding: 12px 14px;
-		min-width: 180px;
+		z-index: 32;
+		left: 16px;
+		bottom: 76px;
+		width: 44px;
+		height: 44px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 14px;
+		background: rgba(28, 28, 25, 0.94);
+		color: #ddd;
+		display: grid;
+		place-items: center;
+		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+		cursor: pointer;
+	}
+	.metro-toggle {
+		position: relative;
+		width: 44px;
+		height: 44px;
 		border-radius: 12px;
-		border: 1px solid var(--sonora-border-strong);
-		background: var(--sonora-bg-elevated);
-		box-shadow: var(--sonora-shadow-lg);
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		background: rgba(25, 25, 22, 0.78);
+		backdrop-filter: blur(18px);
+		color: var(--sonora-text, #e8e6e1);
+		display: grid;
+		place-items: center;
+		cursor: pointer;
+		touch-action: manipulation;
+	}
+	.metro-toggle.active {
+		border-color: color-mix(
+			in srgb,
+			var(--sonora-accent, #d4a574) 50%,
+			transparent
+		);
+		color: var(--sonora-accent, #d4a574);
+	}
+	.metro-pulse-dot {
+		position: absolute;
+		top: 7px;
+		right: 7px;
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: var(--sonora-accent, #d4a574);
+		box-shadow: 0 0 0 0
+			color-mix(in srgb, var(--sonora-accent, #d4a574) 55%, transparent);
+		animation: metro-pulse 1s ease-out infinite;
+	}
+	@keyframes metro-pulse {
+		0% {
+			box-shadow: 0 0 0 0
+				color-mix(in srgb, var(--sonora-accent, #d4a574) 55%, transparent);
+		}
+		70% {
+			box-shadow: 0 0 0 8px transparent;
+		}
+		100% {
+			box-shadow: 0 0 0 0 transparent;
+		}
+	}
+
+	.metro-panel {
+		position: fixed;
+		top: 50%;
+		transform: translateY(-50%);
+		left: 16px;
+		width: min(420px, calc(100vw - 24px));
+		padding: 16px 16px 14px;
+		border-radius: 18px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: rgba(22, 22, 20, 0.94);
+		backdrop-filter: blur(22px);
+		box-shadow:
+			0 18px 50px rgba(0, 0, 0, 0.45),
+			0 0 0 1px rgba(255, 255, 255, 0.04) inset;
 		display: flex;
 		flex-direction: column;
-		gap: 10px;
-		z-index: 40;
+		gap: 14px;
+		z-index: 50;
+		color: var(--sonora-text, #e8e6e1);
+		user-select: none;
+		-webkit-user-select: none;
 	}
-	.metro-row {
+
+	.metro-panel-top {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 10px;
-		font-size: 12px;
-		color: var(--sonora-text-muted);
+		gap: 12px;
 	}
-	.metro-row input[type='number'] {
-		width: 64px;
-		height: 32px;
-		border-radius: 8px;
-		border: 1px solid var(--sonora-border);
-		background: var(--sonora-bg-workspace);
-		color: var(--sonora-text);
+	.metro-bpm-display {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+	}
+	.metro-nudge {
+		min-width: 44px;
+		height: 44px;
+		padding: 0 8px;
+		border-radius: 12px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		background: rgba(255, 255, 255, 0.04);
+		color: inherit;
+		font-size: 14px;
+		font-weight: 650;
+		cursor: pointer;
+		touch-action: manipulation;
+	}
+	.metro-nudge:active {
+		background: rgba(255, 255, 255, 0.1);
+	}
+	.metro-bpm-core {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		min-width: 88px;
+	}
+	.metro-bpm-input {
+		width: 88px;
+		height: 44px;
+		border: 0;
+		border-radius: 12px;
+		background: transparent;
+		color: inherit;
+		font-size: 28px;
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
 		text-align: center;
+		outline: none;
+		-moz-appearance: textfield;
 	}
+	.metro-bpm-input::-webkit-outer-spin-button,
+	.metro-bpm-input::-webkit-inner-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
+	}
+	.metro-bpm-label {
+		font-size: 11px;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: rgba(255, 255, 255, 0.45);
+		margin-top: -2px;
+	}
+
+	.metro-play {
+		flex: 0 0 auto;
+		width: 56px;
+		height: 56px;
+		border-radius: 16px;
+		border: 0;
+		background: var(--sonora-accent, #d4a574);
+		color: #1a1510;
+		display: grid;
+		place-items: center;
+		cursor: pointer;
+		touch-action: manipulation;
+		box-shadow: 0 6px 18px
+			color-mix(in srgb, var(--sonora-accent, #d4a574) 35%, transparent);
+	}
+	.metro-play.on {
+		background: #e85d5d;
+		color: #fff;
+		box-shadow: 0 6px 18px rgba(232, 93, 93, 0.35);
+	}
+
+	.metro-slider {
+		width: 100%;
+		height: 36px;
+		margin: 0;
+		accent-color: var(--sonora-accent, #d4a574);
+		cursor: pointer;
+		touch-action: none;
+	}
+
 	.metro-beats {
 		display: flex;
+		justify-content: center;
+		align-items: center;
+		gap: clamp(6px, 2vw, 12px);
+		min-height: 28px;
+		flex-wrap: wrap;
+	}
+	.metro-beats .beat {
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		background: rgba(255, 255, 255, 0.12);
+		transition:
+			background 0.08s ease,
+			transform 0.08s ease,
+			box-shadow 0.08s ease;
+	}
+	.metro-beats .beat.accent {
+		background: rgba(255, 255, 255, 0.22);
+		width: 16px;
+		height: 16px;
+	}
+	.metro-beats .beat.on {
+		background: var(--sonora-accent, #d4a574);
+		transform: scale(1.25);
+		box-shadow: 0 0 0 4px
+			color-mix(in srgb, var(--sonora-accent, #d4a574) 25%, transparent);
+	}
+	.metro-beats .beat.accent.on {
+		background: #fff;
+		box-shadow: 0 0 0 4px color-mix(in srgb, #fff 20%, transparent);
+	}
+
+	.metro-sigs {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		justify-content: center;
+	}
+	.metro-sig {
+		min-width: 48px;
+		height: 40px;
+		padding: 0 10px;
+		border-radius: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		background: rgba(255, 255, 255, 0.04);
+		color: inherit;
+		font-size: 13px;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		cursor: pointer;
+		touch-action: manipulation;
+	}
+	.metro-sig.active {
+		border-color: color-mix(
+			in srgb,
+			var(--sonora-accent, #d4a574) 55%,
+			transparent
+		);
+		background: color-mix(
+			in srgb,
+			var(--sonora-accent, #d4a574) 18%,
+			transparent
+		);
+		color: var(--sonora-accent, #d4a574);
+	}
+
+	.metro-actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
 		gap: 8px;
 		justify-content: center;
 	}
-	.metro-beats .beat {
-		width: 10px;
-		height: 10px;
-		border-radius: 50%;
-		background: var(--sonora-bg-active);
-	}
-	.metro-beats .beat.on {
-		background: var(--sonora-accent);
-		box-shadow: 0 0 0 3px var(--sonora-accent-soft);
-	}
-	.metro-go {
-		height: 34px;
-		border: 0;
-		border-radius: 9px;
-		background: var(--sonora-accent);
-		color: #fff;
+	.metro-action {
+		height: 40px;
+		padding: 0 14px;
+		border-radius: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: rgba(255, 255, 255, 0.05);
+		color: inherit;
+		font-size: 13px;
 		font-weight: 600;
 		cursor: pointer;
+		touch-action: manipulation;
+	}
+	.metro-action.active {
+		border-color: rgba(232, 93, 93, 0.5);
+		color: #ffb4b4;
+	}
+	.metro-action.ghost {
+		border-color: transparent;
+		background: transparent;
+		color: rgba(255, 255, 255, 0.5);
+	}
+
+	/* Tablet / narrow: full-width bar feel */
+	@media (max-width: 720px) {
+		.metro-panel {
+			width: min(100vw - 16px, 440px);
+			padding: 14px 12px 12px;
+			border-radius: 16px;
+		}
+		.metro-nudge {
+			min-width: 40px;
+			height: 42px;
+		}
+		.metro-play {
+			width: 52px;
+			height: 52px;
+		}
+		.metro-sig {
+			min-width: 44px;
+			height: 42px;
+		}
+	}
+
+	/* Keep bottombar spacing balanced with center dock */
+	.bottombar {
+		align-items: flex-end;
+		gap: 10px;
 	}
 	@keyframes settings-in {
 		from {
