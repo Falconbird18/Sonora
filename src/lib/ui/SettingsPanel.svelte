@@ -40,11 +40,14 @@
 		composerStatus = 'Refreshing…';
 		try {
 			const result = await refreshComposersFromRemote({ force: true });
-			composerStatus = result.error
+			const base = result.error
 				? `Using ${result.source} (${result.count}). ${result.error}`
 				: result.updated
 					? `Updated from ${result.source} — ${result.count} composers`
 					: `Already current (${result.source}, ${result.count})`;
+			composerStatus = result.portraitsSyncing
+				? `${base}. Syncing portraits…`
+				: base;
 		} catch (e) {
 			composerStatus = e instanceof Error ? e.message : 'Refresh failed';
 		}
@@ -244,7 +247,7 @@
 					<div class="row" style="cursor: default; flex-wrap: wrap; gap: 8px;">
 						<div class="row-copy" style="flex: 1;">
 							<strong>Composer database</strong>
-							<span>{composerStatus || 'Fetched from GitHub so the list can grow without an app update'}</span>
+							<span>{composerStatus || 'List and portraits sync from GitHub automatically — no app update needed'}</span>
 						</div>
 						<button
 							type="button"
