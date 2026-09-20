@@ -6,6 +6,8 @@
  *  - Deliberate blink / wink (optional)
  *
  * All processing is on-device. Camera is only started when enabled.
+ * Tries GPU (WebGL) first, then falls back to CPU if the GPU service
+ * cannot be created (common in some Tauri / WebView environments).
  */
 
 import {
@@ -18,7 +20,7 @@ export type GestureAction = 'next' | 'previous';
 
 export type HandsFreeOptions = {
 	/** Master enable */
-enabled: boolean;
+	enabled: boolean;
 	/** Detect head yaw left/right */
 	headYaw: boolean;
 	/** Detect deliberate blinks (both eyes) as next */
@@ -83,6 +85,23 @@ function estimateYaw(landmarks: { x: number; y: number; z: number }[]): number {
 	return ratio * 45;
 }
 
+async function createLandmarker(
+	vision: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>,
+	delegate: 'GPU' | 'CPU'
+): Promise<FaceLandmarker> {
+	return FaceLandmarker.createFromOptions(vision, {
+		baseOptions: {
+			modelAssetPath:
+				'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+			delegate
+		},
+		runningMode: 'VIDEO',
+		numFaces: 1,
+		outputFaceBlendshapes: true,
+		outputFacialTransformationMatrixes: false
+	});
+}
+
 export class HandsFreeController {
 	private landmarker: FaceLandmarker | null = null;
 	private video: HTMLVideoElement | null = null;
@@ -97,6 +116,7 @@ export class HandsFreeController {
 	private errorMessage = '';
 	private lastBlinkOpen = true;
 	private blinkClosedAt = 0;
+	private usingCpu = false;
 
 	on(listener: Listener) {
 		this.listeners.add(listener);
@@ -104,7 +124,11 @@ export class HandsFreeController {
 	}
 
 	getStatus() {
-		return { status: this.status, error: this.errorMessage };
+		return {
+			status: this.status,
+			error: this.errorMessage,
+			delegate: this.usingCpu ? 'CPU' : 'GPU'
+		};
 	}
 
 	updateOptions(partial: Partial<HandsFreeOptions>) {
@@ -128,17 +152,20 @@ export class HandsFreeController {
 				const vision = await FilesetResolver.forVisionTasks(
 					'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm'
 				);
-				this.landmarker = await FaceLandmarker.createFromOptions(vision, {
-					baseOptions: {
-						modelAssetPath:
-							'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-						delegate: 'GPU'
-					},
-					runningMode: 'VIDEO',
-					numFaces: 1,
-					outputFaceBlendshapes: true,
-					outputFacialTransformationMatrixes: false
-				});
+
+				// Prefer GPU; fall back to CPU when WebGL / kGpuService is unavailable
+				// (common in Tauri webviews and some locked-down browsers).
+				try {
+					this.landmarker = await createLandmarker(vision, 'GPU');
+					this.usingCpu = false;
+				} catch (gpuErr) {
+					console.warn(
+						'[HandsFree] GPU delegate failed, falling back to CPU:',
+						gpuErr
+					);
+					this.landmarker = await createLandmarker(vision, 'CPU');
+					this.usingCpu = true;
+				}
 			}
 
 			this.stream = await navigator.mediaDevices.getUserMedia({
@@ -164,6 +191,15 @@ export class HandsFreeController {
 			this.errorMessage =
 				err instanceof Error ? err.message : 'Failed to start camera / MediaPipe';
 			console.error('[HandsFree]', err);
+			// If landmarker creation partially succeeded, drop it so next start retries
+			if (this.landmarker) {
+				try {
+					this.landmarker.close();
+				} catch {
+					/* ignore */
+				}
+				this.landmarker = null;
+			}
 			await this.cleanup();
 		}
 	}
@@ -195,8 +231,13 @@ export class HandsFreeController {
 		if (now - this.lastProcess < this.options.processIntervalMs) return;
 		this.lastProcess = now;
 
-		const result = this.landmarker.detectForVideo(this.video, now);
-		this.handleResult(result, now);
+		try {
+			const result = this.landmarker.detectForVideo(this.video, now);
+			this.handleResult(result, now);
+		} catch (e) {
+			// Avoid spamming console on transient frame errors
+			console.warn('[HandsFree] detectForVideo failed', e);
+		}
 	};
 
 	private handleResult(result: FaceLandmarkerResult, now: number) {
@@ -258,8 +299,10 @@ export class HandsFreeController {
 				this.tryHold('next', now);
 			} else {
 				// Neutral – clear hold
-				if (this.holdStart && (this.holdStart.action === 'next' || this.holdStart.action === 'previous')) {
-					// only clear if it was a yaw hold
+				if (
+					this.holdStart &&
+					(this.holdStart.action === 'next' || this.holdStart.action === 'previous')
+				) {
 					this.holdStart = null;
 				}
 			}
