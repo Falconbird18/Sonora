@@ -5,6 +5,9 @@ use std::{
     time::UNIX_EPOCH,
 };
 
+#[cfg(target_os = "linux")]
+mod linux_media;
+
 #[derive(Debug, Serialize)]
 struct NativeScoreFile {
     path: String,
@@ -1399,12 +1402,22 @@ fn read_text_file(path: String) -> Result<String, String> {
 }
 
 
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
+        .setup(|app| {
+            #[cfg(target_os = "linux")]
+            {
+                use tauri::Manager;
+                if let Some(webview) = app.get_webview_window("main") {
+                    // Enable getUserMedia (camera) on WebKitGTK
+                    linux_media::enable_media_capture(webview.as_ref());
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             pick_score_folder,
             list_score_files,
