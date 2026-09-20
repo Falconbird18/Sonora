@@ -1,4 +1,8 @@
 import { writable, derived, get } from 'svelte/store';
+import {
+	DEFAULT_HANDS_FREE,
+	type HandsFreeOptions
+} from './handsFreeGestures';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
 export type ViewerFit = 'page' | 'width';
@@ -16,6 +20,8 @@ export type AppSettings = {
 	defaultFit: ViewerFit;
 	annotationsVisible: boolean;
 	textSize: number;
+	/** Hands-free camera gestures */
+	handsFree: HandsFreeOptions;
 };
 
 const STORAGE_KEY = 'sonora-app-settings';
@@ -30,7 +36,8 @@ const defaults: AppSettings = {
 	keepAwake: true,
 	defaultFit: 'page',
 	annotationsVisible: true,
-	textSize: 18
+	textSize: 18,
+	handsFree: { ...DEFAULT_HANDS_FREE }
 };
 
 function load(): AppSettings {
@@ -39,6 +46,7 @@ function load(): AppSettings {
 		const raw = localStorage.getItem(STORAGE_KEY);
 		if (!raw) return { ...defaults };
 		const parsed = JSON.parse(raw) as Partial<AppSettings>;
+		const hf = (parsed.handsFree ?? {}) as Partial<HandsFreeOptions>;
 		return {
 			theme: ['system', 'dark', 'light'].includes(parsed.theme as string)
 				? (parsed.theme as ThemePreference)
@@ -57,7 +65,29 @@ function load(): AppSettings {
 			textSize:
 				typeof parsed.textSize === 'number'
 					? Math.max(10, Math.min(36, parsed.textSize))
-					: defaults.textSize
+					: defaults.textSize,
+			handsFree: {
+				enabled: !!hf.enabled,
+				headYaw: hf.headYaw !== false,
+				blinkNext: !!hf.blinkNext,
+				wink: !!hf.wink,
+				yawThreshold:
+					typeof hf.yawThreshold === 'number'
+						? Math.max(8, Math.min(40, hf.yawThreshold))
+						: DEFAULT_HANDS_FREE.yawThreshold,
+				holdMs:
+					typeof hf.holdMs === 'number'
+						? Math.max(100, Math.min(1000, hf.holdMs))
+						: DEFAULT_HANDS_FREE.holdMs,
+				cooldownMs:
+					typeof hf.cooldownMs === 'number'
+						? Math.max(300, Math.min(3000, hf.cooldownMs))
+						: DEFAULT_HANDS_FREE.cooldownMs,
+				processIntervalMs:
+					typeof hf.processIntervalMs === 'number'
+						? Math.max(40, Math.min(200, hf.processIntervalMs))
+						: DEFAULT_HANDS_FREE.processIntervalMs
+			}
 		};
 	} catch {
 		return { ...defaults };
@@ -144,11 +174,17 @@ function createSettingsStore() {
 				textSize: Math.max(10, Math.min(36, textSize))
 			}));
 		},
+		setHandsFree(partial: Partial<HandsFreeOptions>) {
+			update((s) => ({
+				...s,
+				handsFree: { ...s.handsFree, ...partial }
+			}));
+		},
 		patch(partial: Partial<AppSettings>) {
 			update((s) => ({ ...s, ...partial }));
 		},
 		reset() {
-			set({ ...defaults });
+			set({ ...defaults, handsFree: { ...DEFAULT_HANDS_FREE } });
 		}
 	};
 }
