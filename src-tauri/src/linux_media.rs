@@ -19,8 +19,9 @@
 #![cfg(target_os = "linux")]
 
 use tauri::Webview;
+use webkit2gtk::glib::Cast;
 use webkit2gtk::{
-    gio::Cancellable, prelude::*, PermissionRequestExt, SettingsExt, URIRequestExt, WebViewExt,
+    PermissionRequestExt, SettingsExt, UserMediaPermissionRequestExt, WebViewExt,
 };
 
 /// Origins we trust for camera / mic (dev server + production asset protocol).
@@ -52,10 +53,9 @@ pub fn enable_media_capture(webview: &Webview) {
         // origin; deny everything else (still returning `true` so WebKit's
         // auto-deny default does not also run).
         wk_webview.connect_permission_request(move |_wv, request| {
-            use webkit2gtk::PermissionRequest;
-
             // Only handle UserMediaPermissionRequest specially.
-            let Ok(user_media) = request.clone().downcast::<webkit2gtk::UserMediaPermissionRequest>()
+            let Ok(user_media) =
+                request.clone().downcast::<webkit2gtk::UserMediaPermissionRequest>()
             else {
                 request.deny();
                 return true;
@@ -65,10 +65,7 @@ pub fn enable_media_capture(webview: &Webview) {
                 user_media.is_for_audio_device() || user_media.is_for_video_device();
 
             // Best-effort origin check via the main frame URI.
-            let uri = _wv
-                .uri()
-                .map(|u| u.to_string())
-                .unwrap_or_default();
+            let uri = _wv.uri().map(|u| u.to_string()).unwrap_or_default();
 
             if for_device && is_trusted_media_origin(&uri) {
                 request.allow();
