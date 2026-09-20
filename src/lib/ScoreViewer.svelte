@@ -16,6 +16,7 @@
 	import { MUSIC_SYMBOLS, MUSIC_SYMBOL_CATEGORIES } from './musicSymbols';
 	import { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';
 	import { acquireScreenWakeLock, releaseScreenWakeLock } from './wakeLock';
+	import { handsFree } from './handsFreeGestures';
 	import { settings } from './settingsStore';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
 	import { get } from 'svelte/store';
@@ -387,6 +388,18 @@
 		requestPersistentStorage();
 		void load();
 		void requestWakeLock();
+
+		// Hands-free camera gestures
+		const unsubHandsFree = handsFree.on((action) => {
+			if (action === 'next') next();
+			else previous();
+		});
+		const currentSettings = get(settings);
+		handsFree.updateOptions(currentSettings.handsFree);
+		if (currentSettings.handsFree.enabled) {
+			void handsFree.start();
+		}
+
 		const onVisibility = () => {
 			if (document.visibilityState === 'visible') void requestWakeLock();
 			else void releaseWakeLock();
@@ -500,6 +513,9 @@
 			stopPanMomentum();
 			cancelRender();
 			void releaseWakeLock();
+
+			unsubHandsFree();
+			void handsFree.stop();
 			// Flush annotations before marking closed / tearing down canvases.
 			void flushPendingAnnotations().finally(() => {
 				closed = true;
