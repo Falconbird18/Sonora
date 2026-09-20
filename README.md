@@ -11,6 +11,7 @@ Import a folder of PDF scores, browse by composer, annotate with pen, highlighte
 - **Undo / redo** per page, eraser (strokes, symbols, and notes), move tool
 - **Library** — one synced score folder (native desktop or browser File System Access), favorites, search, grid/list, sort filters
 - **Focus mode** (`F`), keyboard page turns, thumbnail-friendly layout
+- **Hands-free page turns** — optional webcam + MediaPipe Face Landmarker (head yaw, blink, wink). All processing is on-device.
 - **Desktop app** via Tauri with native folder picking and file access
 
 ## Develop (web)
@@ -66,9 +67,23 @@ Musical symbols use **Leland** (SIL OFL) from [MuseScoreFonts/Leland](https://gi
 | `Esc` | Close panels, then return to the library |
 | `Ctrl/Cmd + scroll` | Zoom |
 
+## Hands-free gestures
+
+Open **Settings → Hands-free page turns** and enable camera gestures.
+
+| Gesture | Action |
+| --- | --- |
+| Head turn left (yaw) | Previous page |
+| Head turn right (yaw) | Next page |
+| Deliberate blink (both eyes) | Next page (optional) |
+| Left wink | Previous page (optional) |
+| Right wink | Next page (optional) |
+
+Sensitivity, hold time, and cooldown are adjustable. Camera access is requested only when the feature is enabled; models run fully on-device via MediaPipe.
+
 ## Stack
 
-Svelte 5 · Vite · PDF.js · Dexie · Lucide · Tauri 2
+Svelte 5 · Vite · PDF.js · Dexie · Lucide · MediaPipe Tasks Vision · Tauri 2
 
 ## Contributing
 
