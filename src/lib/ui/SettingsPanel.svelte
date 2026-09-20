@@ -6,19 +6,22 @@
 	import Toggle from './Toggle.svelte';
 	import { checkForUpdate, CURRENT_VERSION, type UpdateInfo } from '../updateChecker';
 	import { refreshComposersFromRemote } from '../composerDatabase';
+	import { handsFree } from '../handsFreeGestures';
 
 	let updateStatus = $state<'idle' | 'checking' | 'done'>('idle');
 	let lastUpdate = $state<UpdateInfo | null>(null);
 	let composerStatus = $state('');
+	let handsFreeStatus = $state(handsFree.getStatus());
 
 	type Props = {
 		open?: boolean;
-		focusSection?: 'theme' | 'experience' | 'viewer' | null;
+		focusSection?: 'theme' | 'experience' | 'viewer' | 'handsfree' | null;
 		onClose: () => void;
 	};
 
 	let { open = false, focusSection = null, onClose }: Props = $props();
 	let viewerSectionEl = $state<HTMLElement | null>(null);
+	let handsFreeSectionEl = $state<HTMLElement | null>(null);
 
 	const themes: { value: ThemePreference; label: string; icon: 'system' | 'dark' | 'light' }[] = [
 		{ value: 'system', label: 'System', icon: 'system' },
@@ -54,13 +57,36 @@
 		if (event.key === 'Escape' && open) onClose();
 	}
 
+	function toggleHandsFree(enabled: boolean) {
+		settings.setHandsFree({ enabled });
+		handsFree.updateOptions({ enabled });
+		handsFreeStatus = handsFree.getStatus();
+	}
+
+	function patchHandsFree(partial: Parameters<typeof settings.setHandsFree>[0]) {
+		settings.setHandsFree(partial);
+		handsFree.updateOptions(partial);
+		handsFreeStatus = handsFree.getStatus();
+	}
+
 	$effect(() => {
 		if (!open) return;
 		void tick().then(() => {
 			if (focusSection === 'viewer' && viewerSectionEl) {
 				viewerSectionEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+			} else if (focusSection === 'handsfree' && handsFreeSectionEl) {
+				handsFreeSectionEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 			}
 		});
+	});
+
+	// Keep status fresh while panel is open
+	$effect(() => {
+		if (!open) return;
+		const id = setInterval(() => {
+			handsFreeStatus = handsFree.getStatus();
+		}, 500);
+		return () => clearInterval(id);
 	});
 </script>
 
@@ -199,6 +225,129 @@
 				</label>
 			</section>
 
+			<section class="section" class:focus-ring={focusSection === 'handsfree'} bind:this={handsFreeSectionEl}>
+				<h3>Hands-free page turns</h3>
+				<p class="section-note">
+					Use the front camera + MediaPipe to turn pages with head turns, blinks, or winks.
+					Processing stays on-device. Grant camera permission when prompted.
+				</p>
+				<div class="rows">
+					<label class="row">
+						<div class="row-copy">
+							<strong>Enable camera gestures</strong>
+							<span>
+								{#if handsFreeStatus.status === 'running'}
+									Camera active
+								{:else if handsFreeStatus.status === 'starting'}
+									Starting…
+								{:else if handsFreeStatus.status === 'error'}
+									Error: {handsFreeStatus.error || 'unknown'}
+								{:else}
+									Off — no camera access
+								{/if}
+							</span>
+						</div>
+						<Toggle
+							checked={$settings.handsFree.enabled}
+							ariaLabel="Enable camera gestures"
+							onchange={toggleHandsFree}
+						/>
+					</label>
+					<label class="row" class:disabled={!$settings.handsFree.enabled}>
+						<div class="row-copy">
+							<strong>Head turn (yaw)</strong>
+							<span>Look left → previous, look right → next</span>
+						</div>
+						<Toggle
+							checked={$settings.handsFree.headYaw}
+							disabled={!$settings.handsFree.enabled}
+							ariaLabel="Head turn"
+							onchange={(v) => patchHandsFree({ headYaw: v })}
+						/>
+					</label>
+					<label class="row" class:disabled={!$settings.handsFree.enabled}>
+						<div class="row-copy">
+							<strong>Blink for next</strong>
+							<span>Deliberate both-eye blink turns the page forward</span>
+						</div>
+						<Toggle
+							checked={$settings.handsFree.blinkNext}
+							disabled={!$settings.handsFree.enabled}
+							ariaLabel="Blink for next"
+							onchange={(v) => patchHandsFree({ blinkNext: v })}
+						/>
+					</label>
+					<label class="row" class:disabled={!$settings.handsFree.enabled}>
+						<div class="row-copy">
+							<strong>Wink</strong>
+							<span>Left wink = previous, right wink = next</span>
+						</div>
+						<Toggle
+							checked={$settings.handsFree.wink}
+							disabled={!$settings.handsFree.enabled}
+							ariaLabel="Wink gestures"
+							onchange={(v) => patchHandsFree({ wink: v })}
+						/>
+					</label>
+				</div>
+
+				{#if $settings.handsFree.enabled}
+					<label class="text-size-row">
+						<span class="row-copy">
+							<strong>Yaw sensitivity</strong>
+							<span>{$settings.handsFree.yawThreshold}° (lower = easier)</span>
+						</span>
+						<input
+							type="range"
+							min="8"
+							max="40"
+							value={$settings.handsFree.yawThreshold}
+							oninput={(e) =>
+								patchHandsFree({
+									yawThreshold: Number((e.currentTarget as HTMLInputElement).value)
+								})
+							}
+						/>
+					</label>
+					<label class="text-size-row">
+						<span class="row-copy">
+							<strong>Hold time</strong>
+							<span>{$settings.handsFree.holdMs} ms</span>
+						</span>
+						<input
+							type="range"
+							min="100"
+							max="800"
+							step="20"
+							value={$settings.handsFree.holdMs}
+							oninput={(e) =>
+								patchHandsFree({
+									holdMs: Number((e.currentTarget as HTMLInputElement).value)
+								})
+							}
+						/>
+					</label>
+					<label class="text-size-row">
+						<span class="row-copy">
+							<strong>Cooldown</strong>
+							<span>{$settings.handsFree.cooldownMs} ms after each turn</span>
+						</span>
+						<input
+							type="range"
+							min="400"
+							max="2000"
+							step="50"
+							value={$settings.handsFree.cooldownMs}
+							oninput={(e) =>
+								patchHandsFree({
+									cooldownMs: Number((e.currentTarget as HTMLInputElement).value)
+								})
+							}
+						/>
+					</label>
+				{/if}
+			</section>
+
 			<section class="section">
 				<h3>About</h3>
 				<div class="rows">
@@ -277,6 +426,7 @@
 	.section { padding: 18px 22px; border-bottom: 1px solid var(--sonora-border); }
 	.section.focus-ring { box-shadow: inset 3px 0 0 var(--sonora-accent); background: color-mix(in srgb, var(--sonora-accent-soft) 40%, transparent); }
 	.section h3 { margin: 0 0 12px; font-size: var(--sonora-text-xs); font-weight: 650; letter-spacing: var(--sonora-tracking-wide); text-transform: uppercase; color: var(--sonora-text-faint); }
+	.section-note { margin: -4px 0 14px; font-size: var(--sonora-text-sm); color: var(--sonora-text-muted); line-height: 1.45; }
 	.theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 	.theme-card { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 10px; border: 1px solid var(--sonora-border); border-radius: var(--sonora-radius-lg); background: var(--sonora-bg-elevated); color: var(--sonora-text-muted); cursor: pointer; transition: background var(--sonora-duration) var(--sonora-ease), border-color var(--sonora-duration) var(--sonora-ease), color var(--sonora-duration) var(--sonora-ease), box-shadow var(--sonora-duration) var(--sonora-ease), transform var(--sonora-duration) var(--sonora-ease); }
 	.theme-card:hover { background: var(--sonora-bg-hover); color: var(--sonora-text); border-color: var(--sonora-border-strong); transform: translateY(-1px); }
