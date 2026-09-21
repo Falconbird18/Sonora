@@ -5,6 +5,10 @@
  *  - Head yaw (left / right turn) for previous / next page
  *  - Deliberate blink / wink (optional)
  *
+ * Design: each gesture is one-shot. After a page turn fires, the user must
+ * return to a neutral pose before another turn can trigger. This prevents
+ * continuous auto-advancing while the head stays slightly turned.
+ *
  * All processing is on-device. Camera is only started when enabled.
  * Tries GPU (WebGL) first, then falls back to CPU if the GPU service
  * cannot be created (common in some Tauri / WebView environments).
@@ -42,9 +46,9 @@ export const DEFAULT_HANDS_FREE: HandsFreeOptions = {
 	headYaw: true,
 	blinkNext: false,
 	wink: false,
-	yawThreshold: 18,
-	holdMs: 280,
-	cooldownMs: 900,
+	yawThreshold: 22,
+	holdMs: 320,
+	cooldownMs: 1200,
 	processIntervalMs: 80
 };
 
@@ -59,6 +63,9 @@ const NOSE_TIP = 1;
 const LEFT_CHEEK = 234;
 const RIGHT_CHEEK = 454;
 
+/** Fraction of yawThreshold treated as "neutral" (hysteresis). */
+const NEUTRAL_FRACTION = 0.45;
+
 function eyeAspectRatio(
 	landmarks: { x: number; y: number; z: number }[],
 	upper: number,
@@ -67,20 +74,18 @@ function eyeAspectRatio(
 	const u = landmarks[upper];
 	const l = landmarks[lower];
 	if (!u || !l) return 1;
-	// Simple vertical distance as proxy for openness (normalized)
 	return Math.abs(u.y - l.y);
 }
 
 function estimateYaw(landmarks: { x: number; y: number; z: number }[]): number {
-	// Rough yaw from cheek asymmetry relative to nose tip
 	const nose = landmarks[NOSE_TIP];
 	const left = landmarks[LEFT_CHEEK];
 	const right = landmarks[RIGHT_CHEEK];
 	if (!nose || !left || !right) return 0;
 	const leftDist = Math.hypot(nose.x - left.x, nose.y - left.y);
 	const rightDist = Math.hypot(nose.x - right.x, nose.y - right.y);
-	// Positive = turned left (from user's perspective when looking at camera),
-	// negative = turned right. Scale roughly to degrees.
+	// Positive = turned left (user's left when facing camera),
+	// negative = turned right.
 	const ratio = (rightDist - leftDist) / ((leftDist + rightDist) / 2 || 1);
 	return ratio * 45;
 }
@@ -109,7 +114,13 @@ export class HandsFreeController {
 	private raf = 0;
 	private lastProcess = 0;
 	private lastActionAt = 0;
+	/** Current accumulating hold (must stay past threshold for holdMs). */
 	private holdStart: { action: GestureAction; at: number } | null = null;
+	/**
+	 * After a successful fire we lock until the user returns to neutral.
+	 * This is the main fix for repeated page turns while the head stays turned.
+	 */
+	private armed = true;
 	private listeners = new Set<Listener>();
 	private options: HandsFreeOptions = { ...DEFAULT_HANDS_FREE };
 	private status: 'idle' | 'starting' | 'running' | 'error' = 'idle';
@@ -117,6 +128,9 @@ export class HandsFreeController {
 	private lastBlinkOpen = true;
 	private blinkClosedAt = 0;
 	private usingCpu = false;
+	/** Simple exponential moving average for yaw stability. */
+	private yawEma = 0;
+	private yawEmaInitialized = false;
 
 	on(listener: Listener) {
 		this.listeners.add(listener);
@@ -146,6 +160,9 @@ export class HandsFreeController {
 
 		this.status = 'starting';
 		this.errorMessage = '';
+		this.armed = true;
+		this.holdStart = null;
+		this.yawEmaInitialized = false;
 
 		try {
 			if (!this.landmarker) {
@@ -153,8 +170,6 @@ export class HandsFreeController {
 					'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm'
 				);
 
-				// Prefer GPU; fall back to CPU when WebGL / kGpuService is unavailable
-				// (common in Tauri webviews and some locked-down browsers).
 				try {
 					this.landmarker = await createLandmarker(vision, 'GPU');
 					this.usingCpu = false;
@@ -191,7 +206,6 @@ export class HandsFreeController {
 			this.errorMessage =
 				err instanceof Error ? err.message : 'Failed to start camera / MediaPipe';
 			console.error('[HandsFree]', err);
-			// If landmarker creation partially succeeded, drop it so next start retries
 			if (this.landmarker) {
 				try {
 					this.landmarker.close();
@@ -209,6 +223,8 @@ export class HandsFreeController {
 		this.raf = 0;
 		await this.cleanup();
 		this.status = 'idle';
+		this.holdStart = null;
+		this.armed = true;
 	}
 
 	private async cleanup() {
@@ -220,7 +236,6 @@ export class HandsFreeController {
 			this.video.srcObject = null;
 			this.video = null;
 		}
-		// Keep landmarker around for faster restarts
 	}
 
 	private loop = () => {
@@ -235,7 +250,6 @@ export class HandsFreeController {
 			const result = this.landmarker.detectForVideo(this.video, now);
 			this.handleResult(result, now);
 		} catch (e) {
-			// Avoid spamming console on transient frame errors
 			console.warn('[HandsFree] detectForVideo failed', e);
 		}
 	};
@@ -243,73 +257,106 @@ export class HandsFreeController {
 	private handleResult(result: FaceLandmarkerResult, now: number) {
 		if (!result.faceLandmarks?.length) {
 			this.holdStart = null;
+			// No face → treat as neutral so we can re-arm
+			this.armed = true;
 			return;
 		}
 
 		const landmarks = result.faceLandmarks[0];
 		const blendshapes = result.faceBlendshapes?.[0]?.categories ?? [];
 
-		// Prefer blendshapes when available (more accurate for blinks)
 		const getScore = (name: string) =>
 			blendshapes.find((c) => c.categoryName === name)?.score ?? 0;
 
 		const eyeBlinkLeft = getScore('eyeBlinkLeft');
 		const eyeBlinkRight = getScore('eyeBlinkRight');
 
-		// Fallback EAR if blendshapes missing
 		const leftEar = eyeAspectRatio(landmarks, LEFT_EYE_UPPER, LEFT_EYE_LOWER);
 		const rightEar = eyeAspectRatio(landmarks, RIGHT_EYE_UPPER, RIGHT_EYE_LOWER);
 
-		const leftClosed = eyeBlinkLeft > 0.5 || leftEar < 0.018;
-		const rightClosed = eyeBlinkRight > 0.5 || rightEar < 0.018;
+		const leftClosed = eyeBlinkLeft > 0.55 || leftEar < 0.016;
+		const rightClosed = eyeBlinkRight > 0.55 || rightEar < 0.016;
 
-		// --- Blink / wink logic ---
-		if (this.options.blinkNext || this.options.wink) {
-			const bothClosed = leftClosed && rightClosed;
-			const onlyLeft = leftClosed && !rightClosed;
-			const onlyRight = rightClosed && !leftClosed;
+		// --- Smoothed yaw ---
+		const rawYaw = estimateYaw(landmarks);
+		if (!this.yawEmaInitialized) {
+			this.yawEma = rawYaw;
+			this.yawEmaInitialized = true;
+		} else {
+			this.yawEma = this.yawEma * 0.65 + rawYaw * 0.35;
+		}
+		const yaw = this.yawEma;
+		const threshold = this.options.yawThreshold;
+		const neutralBand = threshold * NEUTRAL_FRACTION;
 
+		const yawLeft = yaw > threshold;
+		const yawRight = yaw < -threshold;
+		const yawNeutral = Math.abs(yaw) < neutralBand;
+
+		const bothClosed = leftClosed && rightClosed;
+		const onlyLeft = leftClosed && !rightClosed;
+		const onlyRight = rightClosed && !leftClosed;
+		const eyesOpen = !leftClosed && !rightClosed;
+
+		// Re-arm only when fully neutral (head centered + both eyes open).
+		// This is what stops the "keeps turning right" loop.
+		if (yawNeutral && eyesOpen) {
+			this.armed = true;
+			this.holdStart = null;
+		}
+
+		// While disarmed, ignore gesture accumulation entirely.
+		if (!this.armed) {
+			this.holdStart = null;
+			return;
+		}
+
+		// --- Blink (both eyes) ---
+		if (this.options.blinkNext) {
 			if (bothClosed && this.lastBlinkOpen) {
 				this.blinkClosedAt = now;
 			}
 			if (!bothClosed && !this.lastBlinkOpen && this.blinkClosedAt) {
 				const duration = now - this.blinkClosedAt;
-				// Deliberate blink: 80–400 ms
-				if (this.options.blinkNext && duration >= 80 && duration <= 400) {
+				if (duration >= 80 && duration <= 400) {
 					this.fire('next', now);
 				}
 				this.blinkClosedAt = 0;
 			}
 			this.lastBlinkOpen = !bothClosed;
-
-			if (this.options.wink) {
-				if (onlyLeft) this.tryHold('previous', now);
-				else if (onlyRight) this.tryHold('next', now);
-				else if (!bothClosed) this.holdStart = null;
-			}
 		}
 
-		// --- Head yaw ---
-		if (this.options.headYaw) {
-			const yaw = estimateYaw(landmarks);
-			// User looking at camera: positive yaw ≈ turned to their left → previous page
-			if (yaw > this.options.yawThreshold) {
-				this.tryHold('previous', now);
-			} else if (yaw < -this.options.yawThreshold) {
-				this.tryHold('next', now);
-			} else {
-				// Neutral – clear hold
+		// --- Wink ---
+		if (this.options.wink) {
+			if (onlyLeft) this.tryHold('previous', now);
+			else if (onlyRight) this.tryHold('next', now);
+			else if (!bothClosed) {
+				// Eyes not in a wink state — cancel wink hold only
 				if (
 					this.holdStart &&
-					(this.holdStart.action === 'next' || this.holdStart.action === 'previous')
+					!yawLeft &&
+					!yawRight
 				) {
 					this.holdStart = null;
 				}
 			}
 		}
+
+		// --- Head yaw ---
+		if (this.options.headYaw) {
+			if (yawLeft) {
+				this.tryHold('previous', now);
+			} else if (yawRight) {
+				this.tryHold('next', now);
+			} else if (!onlyLeft && !onlyRight) {
+				// Not holding a yaw gesture anymore
+				this.holdStart = null;
+			}
+		}
 	}
 
 	private tryHold(action: GestureAction, now: number) {
+		if (!this.armed) return;
 		if (now - this.lastActionAt < this.options.cooldownMs) return;
 
 		if (!this.holdStart || this.holdStart.action !== action) {
@@ -319,13 +366,18 @@ export class HandsFreeController {
 
 		if (now - this.holdStart.at >= this.options.holdMs) {
 			this.fire(action, now);
-			this.holdStart = null;
 		}
 	}
 
 	private fire(action: GestureAction, now: number) {
+		if (!this.armed) return;
 		if (now - this.lastActionAt < this.options.cooldownMs) return;
+
 		this.lastActionAt = now;
+		this.holdStart = null;
+		// Disarm until the user returns to neutral (centered head + open eyes).
+		this.armed = false;
+
 		for (const l of this.listeners) {
 			try {
 				l(action);
