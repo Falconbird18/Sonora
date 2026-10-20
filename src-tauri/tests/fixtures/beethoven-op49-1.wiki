@@ -1,0 +1,385 @@
+{{#fte:imslppage
+
+| *****AUDIO***** =
+{{#fte:imslpaudio
+|File Name 1=PMLP01471-Beethoven_Op49_No1_complete.mp3
+|File Description 1=Complete Performance
+|Performers=
+|Performer Categories=Bradley-Fulgoni, Peter=piano
+|Uploader=[[User:Lumineux|Lumineux]]
+|Date Submitted=2019/7/3
+|Publisher Information=Peter Bradley-Fulgoni
+|Copyright=Creative Commons Attribution-NonCommercial-NoDerivs 4.0
+|Misc. Notes=recorded in June 2019 at St. Paul's Hall, Huddersfield University: Peter Hill, sound engineer
+}}
+{{#fte:imslpaudio
+|File Name 1=PMLP01471-beethoven_op49no1.mp3
+|File Description 1=Complete Performance
+|Performers=
+|Performer Categories=Jumppanen, Paavali=piano
+|Uploader=[[User:Cypressdome|Cypressdome]]
+|Date Submitted=2012/7/22
+|Publisher Information={{GardnerMus}}
+|Copyright=Creative Commons Attribution Non-commercial No Derivatives 3.0
+|Misc. Notes=
+}}
+{{#fte:imslpaudio
+|File Name 1=PMLP1471-02.01._Andante.mp3
+|File Name 2=PMLP1471-02.02._Rondo_(Allegro).mp3
+|File Description 1=1. Andante
+|File Description 2=2. ''Rondo''. Allegro
+|Performers=
+|Performer Categories=Richter, Sviatoslav=piano
+|Uploader=[[User:Lucas-coelho|Lucas-coelho]]
+|Date Submitted=2021/7/31
+|Publisher Information={{RC||Philips|||1963||PHM 500-076}}
+|Copyright=Public Domain
+|Thumb Filename=TN-PMLP1425-01.01._Allegro_Con_Brio-4864.png
+|Misc. Notes=Source: {{plain|https://archive.org/details/lp_piano-sonatas_ludwig-van-beethoven-sviatoslav-richter|Internet Archive}}
+}}
+{{#fte:imslpaudio
+|File Name 1=PMLP1471-Beethoven_-_Sonata_No.19_(Op.49_No.1).mp3
+|File Description 1=Complete Performance
+|Performers=
+|Performer Categories=Jank, Fritz=piano
+|Uploader=[[User:Lucas-coelho|Lucas-coelho]]
+|Date Submitted=2021/6/6
+|Publisher Information={{P||Recorded at Theatro Municipal|São Paulo||1962||}} (March 1).
+|Copyright=Public Domain
+|Misc. Notes=Source: {{YT|NpOXq-CyFi4|Instituto Piano Brasileiro}}
+}}
+
+| *****FILES***** =
+{{#fte:imslpfile
+|File Name 1=PMLP01471-Op.49-1.pdf
+|File Description 1=Complete Score
+|Editor={{FE}}
+|Image Type=Normal Scan
+|Scanner={{BeethBonn}}
+|Uploader=[[User:Ivdruiz|Ivdruiz]]
+|Date Submitted=2009/12/28
+|Publisher Information=''Deux sonates faciles pour le pianoforte'', No.1 (pp.2-9)<br>{{P|Kunst- und Industrie-Comptoir|Bureau des Arts et d'Industrie|Vienna|n.d.[1805]|||399}}
+|Copyright=Public Domain
+|Thumb Filename=Beethoven_deux_sonates_faciles_op.49.jpg
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP1471-D1666-18_001.pdf
+|File Description 1=Complete Score
+|Editor=
+|Image Type=Normal Scan
+|Scanner={{IArch|d-1666-18-images|GB-Lcm}}
+|Uploader=[[User:Royal College of Music Library|RCM Library]]
+|Date Submitted=2021/4/8
+|Publisher Information={{P|Tobias Haslinger||Wien|n.d.(ca.1835)|||}}
+|Copyright=Public Domain
+|Thumb Filename=TN-PMLP1471-D1666-18_001-6545.jpg
+|Misc. Notes={{MiscLib|GBLcm|2||{{GB-Lcm|49602|D1666/18}}}}
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP1471-420.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Ignaz|Moscheles|1794|1870}}
+|Image Type=Normal Scan
+|Scanner={{SDL|127405}}
+|Uploader=[[User:Feduol|Feduol]]
+|Date Submitted=2023/5/17
+|Publisher Information=''2 Leichte Sonaten für das Pianoforte'', No.1<br>{{P|Hallberger|Eduard Hallberger|Stuttgart|n.d.(ca.1860)|||B. XIX}}
+|Copyright=Public Domain
+|Misc. Notes={{SubmissionProject}}
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP01471-Beethoven_Werke_Breitkopf_Serie_16_No_142_Op_49_No_1.pdf
+|File Name 2=PMLP1471-Beethoven,_L._van_-_19._Sonata_for_Piano_in_G_minor,_Op._49.1.pdf
+|File Description 1=Complete Score
+|File Description 2=Complete Score
+|Editor=
+|Image Type=Normal Scan
+|Scanner 1={{BSB}}
+|Scanner 2=
+|Uploader 1=[[User:Piupianissimo|piupianissimo]]
+|Uploader 2=[[User:M.kowalski49|M.kowalski49]]
+|Date Submitted 1=2010/1/1
+|Date Submitted 2=2025/10/6
+|Publisher Information={{BeethovenComplete|16|142|1862|109-16}}
+|Copyright=Public Domain
+|Thumb Filename=TN-Beethoven_Werke_Breitkopf_Serie_16_No_142_Op_49_No_1.jpg
+|Sample Filename=PV-Beethoven_Werke_Breitkopf_Serie_16_No_142_Op_49_No_1.jpg
+|Misc. Notes=Complete Score is 9 x 12 scan, scanned in from newer source at 600dpi (file #994725)
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP1471-Sonata_No._19.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Sigmund|Lebert|1822|1884}}<br>{{LinkEd|Hans von|Bülow|1830|1894}}
+|Image Type=Normal Scan
+|Thumb Filename=Complete_Piano_Sonatas_(Beethoven)(Von_Bülow,_Lebert)(Schirmer).jpg
+|Scanner=
+|Uploader=[[User:HaydnSymphonien|HaydnSymphonien]]
+|Date Submitted=2024/1/20
+|Publisher Information=''[[Complete_Piano_Sonatas_(Beethoven,_Ludwig_van)|Complete Piano Sonatas]]''<br>{{P|Schirmer|G. Schirmer|New York|n.d.(1895-96)|||12589}}
+|Reprint={{P|Schirmer|G. Schirmer|New York|2015||2103|}}
+|Copyright=Public Domain
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP01471-120_IMSLP363242-PMLP586489-sonataalbumtwent01lebe_bw.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Sigmund|Lebert|1822|1884}}<br>{{LinkEd|Hans von|Bülow|1830|1894}}
+|Image Type=Normal Scan
+|Scanner={{IArchS|sonataalbumtwent01lebe#page/n120}}
+|Uploader=[[User:Igor stravinsky|IS]]
+|Date Submitted=2017/5/22
+|Publisher Information={{BulowLebertAlbumSch|I|11|11622|112-19}}
+|Copyright=Public Domain
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP01471-beethoven-sonate19-op49n1-dalbert-forberg2811-270x340.pdf
+|File Description 1=Complete Score
+|Thumb Filename=TN-beethoven-sonate19-op49n1-dalbert-forberg2811.png
+|Sample Filename=PV-beethoven-sonate19-op49n1-dalbert-forberg2811.png
+|Editor={{LinkEd|Eugen d'|Albert|1864|1932}}
+|Image Type=Normal Scan
+|Scanner=auahz
+|Uploader=[[User:Auahz|auahz]]
+|Date Submitted=2014/9/25
+|Publisher Information={{P|Otto Forberg||Leipzig||1902||2811}}
+|Copyright=Public Domain
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP01471-Beethoven_Sonaten_Piano_Band_1_Peters_9427_19_Op49_No1.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Louis|Köhler|1820|1886}}<br>{{LinkEd|Adolf|Ruthardt|1849|1934}}
+|Image Type=Normal Scan
+|Scanner=piupianissimo
+|Uploader=[[User:Piupianissimo|piupianissimo]]
+|Date Submitted=2009/11/5
+|Publisher Information=''Sonaten für Pianoforte solo, Bd.2'' (pp.355-62)<br>{{P|Edition Peters|C.F. Peters|Leipzig|n.d.(ca.1910)|||9427}}
+|Copyright=Public Domain
+|Thumb Filename=TN-Beethoven_Sonaten_Piano_Band_1_Peters_9427_19_Op49_No1.jpg
+|Sample Filename=PV-Beethoven_Sonaten_Piano_Band_1_Peters_9427_19_Op49_No1.jpg
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP01471-Opus_49_no_1.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Alfredo|Casella|1883|1947}}
+|Image Type=Normal Scan
+|Scanner={{IArch|sonateperpianofo02beet}}
+|Uploader=[[User:Worov|worov]]
+|Date Submitted=2010/7/1
+|Publisher Information={{BeethPfsonCasella|2|1919|154-63}}
+|Copyright=Public Domain
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=Beethoven, L.v. - Piano Sonata 19.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Heinrich|Schenker|1868|1935}}
+|Engraver={{Eberle|1}}
+|Image Type=Normal Scan
+|Scanner=
+|Uploader=[[User:Feldmahler|Feldmahler]]
+|Date Submitted=2006/2/17
+|Publisher Information={{P|Universal Edition||Vienna|{{WC|1391429356|1922}}|||U.E. 4028}}
+|Reprint={{P|Dover Publications||New York||1975}}
+|Copyright=Public Domain
+|Misc. Notes=
+|Thumb Filename=BeethSonatas.v2dov.jpg
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP1471-Beeth_op49_no1_EB4342.pdf
+|File Description 1=Complete Score (600dpi)
+|Editor={{LinkEd|Frederic|Lamond|1868|1948}}
+|Image Type=Normal Scan
+|Scanner 1=[[User:Pusteblumi|Pusteblumi]]
+|Uploader 1=[[User:Pusteblumi|Pusteblumi]]
+|Date Submitted=2021/9/1
+|Publisher Information=''Sämtliche Sonaten, Band II'' (pp.65-72)<br>{{P|Breitkopf und Härtel||Leipzig||1923|4342|28727}}
+|Copyright=Public Domain
+|Sample Filename=PV-Beeth_op49_no1_EB4342.png
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=Beethoven_-_Piano_Sonatas_Lamond_-_19.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Frederic|Lamond|1868|1948}}
+|Image Type=Normal Scan
+|Scanner=alenmusic
+|Uploader=[[User:Peter|Peter]]
+|Date Submitted=2007/2/24
+|Publisher Information={{P|Muzgiz|Musytschna Ukraina|Kiev||1969||}}
+|Copyright=Public Domain
+|Sample Filename=Beethoven_-_Piano_Sonatas_Lamond_-_19.png
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=Btsn49_1.pdf
+|File Description 1=Complete Score
+|File Name 2=PMLP01471-Sonata_in_G_minor_Opus_49_no_1.pdf
+|File Description 2=Complete Score
+|Editor={{LinkEd|Max|Pauer|1866|1945}}<br>{{LinkEd|Carl Adolf|Martienssen|1881|1955}}, ''revision''
+|Image Type=Normal Scan
+|Scanner 1=
+|Uploader 1=[[User:Funper|Funper]]
+|Date Submitted 1=2007/4/29
+|Scanner 2={{Piano.ru}}
+|Uploader 2=[[User:Worov|worov]]
+|Date Submitted 2=2010/6/6
+|Publisher Information=''Sonaten für Klavier zu zwei Händen, Bd.2'' (pp.355-62)<br>{{P|Edition Peters|C.F. Peters|Leipzig|n.d.[1926-27]|||10555}}
+|Reprint={{P||Martienssen revision||n.d.[1927]|||}}
+|Copyright=Public Domain
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP01471-TA141-Op49n1mt.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Artur|Schnabel|1882|1951}} 
+|Engraver={{Eberle|1}}
+|Image Type=Normal Scan
+|Scanner=
+|Uploader=[[User:Alaric|Alaric]]
+|Date Submitted=2026/8/9
+|Publisher Information={{P|Ullstein|Verlag Ullstein A.G.|Berlin||1924-27||T.A. 141}} 
+|Reprint={{LinkWork|32 Piano Sonatas||Beethoven|Ludwig van|0}}, ''Vol.II'' (pp.447-56)<br>{{P||Simon & Schuster|New York|1935}}
+|Copyright=Public Domain
+|Thumb Filename=Schnabelv2cv.jpg
+|Misc. Notes=Notes in German, French, English.
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP1471-Beethoven_(ed._Schnabel)_.49_no.1.pdf
+|File Name 2=PMLP1471-Beethoven_sonata_op_49_.pdf
+|File Description 1=Complete Score
+|File Description 2=Complete Score
+|Editor={{LinkEd|Artur|Schnabel|1882|1951}}
+|Image Type=Normal Scan
+|Scanner 1=
+|Uploader 1=[[User:Worov|Worov]]
+|Date Submitted 1=2017/11/29
+|Scanner 2=Jacopo Tore
+|Uploader 2=[[User:JacopoTore|JacopoTore]]
+|Date Submitted 2=2017/3/17
+|Publisher Information={{P|Curci||Milan|1949|||E. 4280, 10246 C}}
+|Copyright=Public Domain
+|Misc. Notes=Notes in Italian, English and German.
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP01471-E533779_73-80-Beethoven_Piano-Sonatas_Henle-vol2-excerpts.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Bertha Antonia|Wallner|1876|1956}}
+|Image Type=Normal Scan
+|Scanner=Fugalicious
+|Uploader=[[User:Fugalicious|Fugalicious]]
+|Date Submitted 1=2020/4/25
+|Publisher Information={{LinkWork|Klaviersonaten||Beethoven|Ludwig van|0}}, ''Band II'' (pp.73-80)<br>{{P|G. Henle Verlag||Munich||1953|1034|}} {{Urtext}}
+|Copyright=Public Domain
+|Thumb Filename=TN-Beethov-Sonatas-Henle-vol2.png
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP1471-beethoven_hoehn_sonata_op.49_no.1.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Alfred|Hoehn|1887|1945}}
+|Image Type=Normal Scan
+|Scanner=
+|Uploader=[[User:Feduol|Feduol]]
+|Date Submitted=2024/10/3
+|Publisher Information={{P|Schott|Schott Musik International|Mainz|1956||0239|}}
+|Copyright=Public Domain
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP1471-Beethoven.op49no1.sonata.no19.wiener.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Leo|Weiner|1885|1960}}
+|Image Type=Normal Scan
+|Scanner=
+|Uploader=[[User:Ermak|Ermak]]
+|Date Submitted=2018/1/11
+|Publisher Information=''Zongoraszonáták, II'' (pp.146-54)<br>{{P|Editio Musica Budapest||Budapest|n.d.[1959]|||Z. 2347}}
+|Copyright=Public Domain
+|Misc. Notes=
+}}
+{{#fte:imslpfile
+|File Name 1=PMLP01471-beethoven_piano-sonata-op49-no1_henle-pp121-128.pdf
+|File Description 1=Complete Score
+|Editor={{LinkEd|Hans|Schmidt-Görg|1930|2019}}<br>{{LinkEd|Joseph|Schmidt-Görg|1897|1981}}
+|Image Type=Normal Scan
+|Scanner=
+|Uploader=[[User:Fugalicious|Fugalicious]]
+|Date Submitted=2018/7/02
+|Publisher Information=''Klaviersonaten, Band II'' (pp.121-128)<br>{{P|G. Henle Verlag||Munich||1976||}} {{Urtext}}
+|Copyright=Public Domain
+|Misc. Notes=
+}}
+
+===Arrangements and Transcriptions===
+=====For Strings (Choe)=====
+{{#fte:imslpfile
+|File Name 1=PMLP1471-Score_1_(etc).pdf
+|File Name 2=PMLP1471-Vl1_1_(etc).pdf
+|File Name 3=PMLP1471-Vl2_1_(etc).pdf
+|File Name 4=PMLP1471-Va_1_(etc).pdf
+|File Name 5=PMLP1471-Vc_1_(etc).pdf
+|File Name 6=PMLP1471-Cb_1_(etc).pdf
+|File Description 1=Complete Score
+|File Description 2=Violins I
+|File Description 3=Violins II
+|File Description 4=Violas
+|File Description 5=Cellos
+|File Description 6=Basses
+|Arranger={{LinkArr|Joshua|Choe||}}
+|Editor=
+|Image Type=Typeset
+|Scanner=arranger
+|Uploader=[[User:TradViolin|TradViolin]]
+|Date Submitted=2021/9/8
+|Publisher Information=Joshua Choe, 2020.
+|Copyright=Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+|Misc. Notes={{plain|https://bit.ly/3jTdZYu|YouTube playlist}}
+}}
+=====For Violin, Viola and Cello (Brinkmann)=====
+{{#fte:imslpfile
+|File Name 1=PMLP01471-LvBStreichtrioPart.pdf
+|File Name 2=PMLP01471-LvBStreichtrioSt.pdf
+|File Description 1=Complete Score
+|File Description 2=Complete Parts
+|Arranger={{LinkArr|Boris|Brinkmann}}
+|Editor=
+|Image Type=Typeset
+|Scanner=arranger
+|Uploader=[[User:LinBoHe|LinBoHe]]
+|Date Submitted=2015/9/17
+|Publisher Information=Boris Brinkmann
+|Copyright=Creative Commons Attribution 4.0
+|Misc. Notes=
+}}
+
+| *****WORK INFO*****
+
+|Work Title=Piano Sonata No.19
+|Alternative Title=Leichte Sonaten
+|Opus/Catalogue Number=Op.49 No.1
+|Key={{Key|g}}
+|Movements Header=2 movements
+|Number of Movements/Sections=2 movements:
+# Andante ({{K|g}}, 110 bars)
+# Rondo. Allegro ({{K|G}}, 164 bars)
+|Incipit=
+'''I:''' <score>\relative c' { \time 2/4 \key g \minor \clef treble \tempo "Andante." \partial 8 << { d8^\p bes'([ g fis g]) <d c'>2^\fp } \\ { r8 r <d bes>([ <c a> <bes g>] <a fis>[ <fis' d> <g e> <a fis>]) } >> }</score>
+|Dedication=
+|Year/Date of Composition=1797
+|Year of First Publication=1805
+|Librettist=
+|Language=
+|Piece Style=Classical
+|External Links=[[wikipedia:Piano_Sonatas_Nos._19_and_20_(Beethoven)|Wikipedia article (Nos.19, 20)]]
+|Instrumentation=piano
+|Tags=sonatas ; pf
+
+| *****COMMENTS***** =
+
+{{Piano Sonatas (Beethoven, Ludwig van)}}
+
+| *****END OF TEMPLATE***** }}

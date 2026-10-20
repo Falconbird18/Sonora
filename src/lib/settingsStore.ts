@@ -1,10 +1,18 @@
 import { writable, derived, get } from 'svelte/store';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
+export type Accent = 'oxblood' | 'forest' | 'ocean' | 'plum' | 'ochre';
+export type ComposerDisplay = 'full' | 'surname-first' | 'surname' | 'initials';
+export type FileOrganization = 'composer' | 'composer-work' | 'flat';
 export type ViewerFit = 'page' | 'width';
 
 export type AppSettings = {
 	theme: ThemePreference;
+	accent: Accent;
+	density: 'comfortable' | 'compact' | 'spacious';
+	composerDisplay: ComposerDisplay;
+	fileOrganization: FileOrganization;
+	paperTexture: boolean;
 	reduceMotion: boolean;
 	compactLibrary: boolean;
 	/** When true, changing a score's composer moves its PDF into {library}/{composerId}/. */
@@ -22,6 +30,11 @@ const STORAGE_KEY = 'sonora-app-settings';
 
 const defaults: AppSettings = {
 	theme: 'system',
+	accent: 'oxblood',
+	density: 'comfortable',
+	composerDisplay: 'full',
+	fileOrganization: 'composer-work',
+	paperTexture: true,
 	reduceMotion: false,
 	compactLibrary: false,
 	organizeByComposer: true,
@@ -40,6 +53,32 @@ function load(): AppSettings {
 		if (!raw) return { ...defaults };
 		const parsed = JSON.parse(raw) as Partial<AppSettings>;
 		return {
+			accent: ['oxblood', 'forest', 'ocean', 'plum', 'ochre'].includes(
+				parsed.accent ?? ''
+			)
+				? parsed.accent!
+				: defaults.accent,
+			density: ['comfortable', 'compact', 'spacious'].includes(
+				parsed.density ?? ''
+			)
+				? parsed.density!
+				: parsed.compactLibrary
+					? 'compact'
+					: defaults.density,
+			composerDisplay: [
+				'full',
+				'surname-first',
+				'surname',
+				'initials'
+			].includes(parsed.composerDisplay ?? '')
+				? parsed.composerDisplay!
+				: defaults.composerDisplay,
+			fileOrganization: ['composer', 'composer-work', 'flat'].includes(
+				parsed.fileOrganization ?? ''
+			)
+				? parsed.fileOrganization!
+				: defaults.fileOrganization,
+			paperTexture: parsed.paperTexture !== false,
 			theme: ['system', 'dark', 'light'].includes(parsed.theme as string)
 				? (parsed.theme as ThemePreference)
 				: defaults.theme,
@@ -77,13 +116,19 @@ function resolveTheme(pref: ThemePreference): 'dark' | 'light' {
 function applyDom(settings: AppSettings) {
 	if (typeof document === 'undefined') return;
 	const resolved = resolveTheme(settings.theme);
+	document.documentElement.dataset.accent = settings.accent;
+	document.documentElement.dataset.density = settings.density;
+	document.documentElement.dataset.texture = String(settings.paperTexture);
 	document.documentElement.dataset.theme = resolved;
 	document.documentElement.style.colorScheme = resolved;
 	const meta = document.querySelector('meta[name="theme-color"]');
 	if (meta) {
-		meta.setAttribute('content', resolved === 'light' ? '#f4f3f8' : '#0c0c0e');
+		meta.setAttribute('content', resolved === 'light' ? '#f5f0e6' : '#191714');
 	}
-	document.documentElement.classList.toggle('reduce-motion', settings.reduceMotion);
+	document.documentElement.classList.toggle(
+		'reduce-motion',
+		settings.reduceMotion
+	);
 }
 
 function createSettingsStore() {
@@ -118,7 +163,11 @@ function createSettingsStore() {
 			update((s) => ({ ...s, reduceMotion }));
 		},
 		setCompactLibrary(compactLibrary: boolean) {
-			update((s) => ({ ...s, compactLibrary }));
+			update((s) => ({
+				...s,
+				compactLibrary,
+				density: compactLibrary ? 'compact' : 'comfortable'
+			}));
 		},
 		setOrganizeByComposer(organizeByComposer: boolean) {
 			update((s) => ({ ...s, organizeByComposer }));

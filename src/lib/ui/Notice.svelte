@@ -106,7 +106,7 @@
 		display: grid;
 		place-items: center;
 		flex-shrink: 0;
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 	}
 	.body {
 		min-width: 0;
@@ -119,7 +119,7 @@
 		display: grid;
 		place-items: center;
 		border: 0;
-		border-radius: 9px;
+		border-radius: var(--sonora-radius-md);
 		background: transparent;
 		color: var(--sonora-text-muted);
 		cursor: pointer;

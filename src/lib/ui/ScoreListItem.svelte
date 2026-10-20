@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { formatComposer } from "../composerDisplay";
+	import { settings } from "../settingsStore";
 	import { FileText, Star } from '@lucide/svelte';
 	import type { ScoreItem } from '../types';
 	import ScoreActionsMenu from './ScoreActionsMenu.svelte';
@@ -40,8 +42,9 @@
 			{/if}
 		</div>
 		<div class="list-info">
-			<h3 title={score.title}>{score.title}</h3>
-			<p>{score.composer}</p>
+			<h3 title={score.title}>{score.edition || score.title}</h3>
+			<p>{formatComposer(score.composer, $settings.composerDisplay)}</p>
+            {#if score.publisher || score.editor}<p class="edition-details">{[score.publisher, score.editor].filter(Boolean).join(" · ")}</p>{/if}
 			{#if score.tags?.length}
 				<div class="tags">
 					{#each score.tags.slice(0, 3) as tag}
@@ -81,6 +84,7 @@
 </div>
 
 <style>
+    .edition-details {font-size:var(--sonora-text-sm);color:var(--sonora-text-muted);display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 	.list-row {
 		display: grid;
 		grid-template-columns: 1fr auto;
@@ -165,11 +169,11 @@
 		border-radius: 999px;
 		background: var(--sonora-accent-soft);
 		color: #93c5fd;
-		font-size: 10px;
+		font-size: var(--sonora-text-sm);
 	}
 	.list-meta {
 		color: var(--sonora-text-faint);
-		font-size: 11px;
+		font-size: var(--sonora-text-sm);
 	}
 	.list-actions {
 		display: flex;
@@ -182,7 +186,7 @@
 		display: grid;
 		place-items: center;
 		border: 1px solid transparent;
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 		background: transparent;
 		color: var(--sonora-text-muted);
 		cursor: pointer;

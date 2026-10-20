@@ -25,6 +25,7 @@
 		border-radius: var(--sonora-radius-lg);
 		background: var(--sonora-bg-panel);
 		backdrop-filter: var(--sonora-blur);
+		-webkit-backdrop-filter: var(--sonora-blur);
 		box-shadow: var(--sonora-shadow-md);
 	}
 </style>

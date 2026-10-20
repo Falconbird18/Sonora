@@ -50,15 +50,15 @@
 			color var(--sonora-duration) ease;
 	}
 	.sonora-text-btn:hover:not(:disabled) {
-		background: rgba(255, 255, 255, 0.08);
+		background: var(--sonora-bg-hover);
 		color: var(--sonora-text);
 	}
 	.sonora-text-btn.primary {
-		background: rgba(255, 255, 255, 0.06);
-		color: var(--sonora-text);
+		background: var(--sonora-accent);
+		color: var(--sonora-accent-contrast);
 	}
 	.sonora-text-btn.primary:hover:not(:disabled) {
-		background: rgba(255, 255, 255, 0.12);
+		background: var(--sonora-accent-hover);
 	}
 	.sonora-text-btn:disabled {
 		opacity: 0.3;

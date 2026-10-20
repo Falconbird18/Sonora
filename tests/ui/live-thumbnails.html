@@ -1,0 +1,12 @@
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Native IMSLP thumbnail verification</title></head><body><div id="app"></div><script type="module">
+import {mount} from 'svelte';
+import LiveThumbnails from './LiveThumbnails.svelte';
+import {db} from '/src/lib/db.ts';
+import '/src/app.css';
+if(!import.meta.env.DEV)throw new Error('Development review only.');
+const samples=await fetch('./live-imslp.local.json').then(r=>r.json());
+// Evict old fixtures so the actual native payload is the only possible source.
+await db.imslpThumbnails.bulkDelete(samples.map(sample=>sample.url));
+Object.assign(window,{__TAURI_INTERNALS__:{invoke:async(command,args)=>{if(command==='imslp_thumbnail'){const sample=samples.find(sample=>sample.url===args.url);if(sample)return sample.data;}throw new Error('Unsupported review operation');}}});
+mount(LiveThumbnails,{target:document.getElementById('app'),props:{samples}});
+</script></body></html>

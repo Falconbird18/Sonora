@@ -25,3 +25,6 @@ dist-ssr
 src-tauri/target/
 src-tauri/gen/schemas/
 src-tauri/Cargo.lock
+
+# Generated live IMSLP browser proof
+tests/ui/live-imslp.local.json

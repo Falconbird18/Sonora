@@ -50,10 +50,12 @@ button {
 @media (pointer: coarse) {
 	button {
 		min-height: var(--sonora-touch-target);
+		min-width: var(--sonora-touch-target);
 	}
 	input,
 	select {
 		min-height: var(--sonora-touch-target);
+		min-width: var(--sonora-touch-target);
 	}
 }
 
@@ -73,4 +75,23 @@ html.reduce-motion *::after {
 	animation-duration: 0.01ms !important;
 	animation-iteration-count: 1 !important;
 	transition-duration: 0.01ms !important;
+}
+
+h1, h2, h3 { font-family: var(--sonora-font-display); text-wrap: balance; }
+button, input, select, textarea { accent-color: var(--sonora-accent); }
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--sonora-accent);
+  outline-offset: 3px;
+}
+::selection { background: var(--sonora-accent-soft); color: var(--sonora-text); }
+html[data-texture='true'] .library {
+  background-image: repeating-linear-gradient(0deg, transparent, transparent 3px, #9b805408 3px, #9b805408 4px), var(--sonora-bg-workspace);
+}
+
+/* Laid lines and grain stay on the surrounding material, never on a PDF canvas. */
+html[data-texture='true'] .library {
+  background-image: var(--sonora-grain), repeating-linear-gradient(0deg, transparent 0 3px, color-mix(in srgb,var(--sonora-text) 2%,transparent) 3px 4px), var(--sonora-bg-workspace);
+}
+html[data-texture='true'] .library .sidebar {
+  background-image: var(--sonora-grain), linear-gradient(90deg, transparent 85%, color-mix(in srgb,var(--sonora-bg-deep) 9%,transparent));
 }

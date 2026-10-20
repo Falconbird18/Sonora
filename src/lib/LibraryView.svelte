@@ -2,6 +2,9 @@
 	import { onMount } from 'svelte';
 	import {
 		Clock3,
+		Plus,
+		ListMusic,
+		Share2,
 		FolderOpen,
 		FolderPlus,
 		Globe,
@@ -14,6 +17,12 @@
 	} from '@lucide/svelte';
 	import SearchField from './ui/SearchField.svelte';
 	import Notice from './ui/Notice.svelte';
+	import ListEditor from './ui/ListEditor.svelte';
+	import AppSelect from './ui/AppSelect.svelte';
+	import { createList } from './lists';
+	import WorkCard from './ui/WorkCard.svelte';
+	import { groupWorks, repairMetadata } from './works';
+	import { formatComposer } from './composerDisplay';
 	import ScoreCard from './ui/ScoreCard.svelte';
 	import ScoreListItem from './ui/ScoreListItem.svelte';
 	import MetadataDialog from './ui/MetadataDialog.svelte';
@@ -21,7 +30,7 @@
 	import IconButton from './ui/IconButton.svelte';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
 	import ImslpSearchPanel from './ui/ImslpSearchPanel.svelte';
-	import { saveScoreMetadata } from './scoreMeta';
+	import { maybeOrganizeScoreFile, saveScoreMetadata } from './scoreMeta';
 	import { settings } from './settingsStore';
 	import { db } from './db';
 	import {
@@ -36,16 +45,30 @@
 		type UpdateInfo
 	} from './updateChecker';
 	import { refreshComposersFromRemote } from './composerDatabase';
-	import { getComposerPortrait, hydratePortraitCache } from './composerPortraits';
+	import {
+		getComposerPortrait,
+		hydratePortraitCache
+	} from './composerPortraits';
 	import { getPdfInfoFromSource } from './pdfUtils';
 	import { isTauri } from './paths';
-	import type { FolderSource, ScoreItem, ScoreMetadataUpdate } from './types';
+	import type {
+		FolderSource,
+		ScoreItem,
+		ScoreMetadataUpdate,
+		ScoreList
+	} from './types';
 
 	const THUMBNAIL_VERSION = 2;
 	let {
 		onSelectScore,
 		paused = false
-	}: { onSelectScore: (score: ScoreItem) => void; paused?: boolean } = $props();
+	}: {
+		onSelectScore: (
+			score: ScoreItem,
+			context?: { listId: string; entryId: string }
+		) => void;
+		paused?: boolean;
+	} = $props();
 	let scores = $state<ScoreItem[]>([]),
 		folder = $state<FolderSource | undefined>(),
 		search = $state('');
@@ -55,6 +78,7 @@
 	let view = $state<'grid' | 'list'>('grid'),
 		menuScoreId = $state<string | null>(null),
 		metadata = $state<ScoreItem | null>(null);
+	let syncPending = false;
 	let syncing = $state(false),
 		notice = $state(''),
 		error = $state('');
@@ -62,7 +86,45 @@
 		timer: ReturnType<typeof setInterval> | undefined,
 		backfillRunning = false;
 	let settingsOpen = $state(false);
+	let settingsSection = $state<'sharing' | null>(null);
 	let imslpOpen = $state(false);
+	let selectedWorkId = $state<string | null>(null);
+	let lists = $state<ScoreList[]>([]);
+	let selectedListId = $state<string | null>(null);
+	const selectedList = $derived(
+		lists.find((list) => list.id === selectedListId)
+	);
+	async function newList() {
+		try {
+			const list = await createList('Untitled program');
+			await refresh();
+			selectedListId = list.id;
+			selectedWorkId = null;
+		} catch (e) {
+			error = String(e);
+		}
+	}
+
+	let organizing = $state(false);
+	let organizationStatus = $state('');
+	async function organizeExistingFiles() {
+		if (organizing || syncing) return;
+		organizing = true;
+		organizationStatus = 'Organizing…';
+		let moved = 0;
+		try {
+			for (const score of scores) {
+				await maybeOrganizeScoreFile(score, score, true);
+				moved++;
+			}
+			organizationStatus = `Organized ${moved} scores. Annotations and metadata preserved.`;
+		} catch (e) {
+			organizationStatus = `${moved} scores organized. ${String(e)}`;
+		} finally {
+			await refresh();
+			organizing = false;
+		}
+	}
 
 	let updateInfo = $state<UpdateInfo | null>(null);
 	let updateBannerVisible = $state(false);
@@ -72,11 +134,23 @@
 			db.scores.orderBy('addedAt').reverse().toArray(),
 			db.folders.get('library-root')
 		]);
+		for (const score of nextScores) {
+			const patch = repairMetadata(score, nextScores);
+			if (Object.keys(patch).length) {
+				await db.scores.update(score.id, patch);
+				Object.assign(score, patch);
+			}
+		}
+		lists = await db.lists.orderBy('updatedAt').reverse().toArray();
 		scores = nextScores;
 		folder = nextFolder;
 	}
 	async function sync() {
-		if (syncing || paused) return;
+		if (paused || organizing) return;
+		if (syncing) {
+			syncPending = true;
+			return;
+		}
 		syncing = true;
 		error = '';
 		try {
@@ -96,6 +170,10 @@
 		} finally {
 			syncing = false;
 			setTimeout(() => (notice = ''), 3000);
+			if (syncPending) {
+				syncPending = false;
+				void sync();
+			}
 		}
 	}
 	async function chooseFolder() {
@@ -119,7 +197,10 @@
 			pdfBlob: isTauri() ? undefined : source.blob || score.pdfBlob
 		};
 	}
-	async function openScore(score: ScoreItem) {
+	async function openScore(
+		score: ScoreItem,
+		context?: { listId: string; entryId: string }
+	) {
 		closeMenu();
 		error = '';
 		openingId = score.id;
@@ -140,7 +221,7 @@
 			scores = scores.map((item) =>
 				item.id === score.id ? { ...item, lastOpenedAt: openedAt } : item
 			);
-			onSelectScore({ ...prepared, lastOpenedAt: openedAt });
+			onSelectScore({ ...prepared, lastOpenedAt: openedAt }, context);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Could not open this score';
 		} finally {
@@ -327,10 +408,13 @@
 			if (disposed) return;
 			void backfillThumbnails();
 			// Library folder sync every 5 min; composer list/portraits every hour.
-			timer = setInterval(() => {
-				void sync();
-				void refreshComposersFromRemote();
-			}, 5 * 60 * 1000);
+			timer = setInterval(
+				() => {
+					void sync();
+					void refreshComposersFromRemote();
+				},
+				5 * 60 * 1000
+			);
 		};
 		void initialize();
 		const wake = () => {
@@ -355,8 +439,8 @@
 	});
 	const composers = $derived.by(() => {
 		const counts: Record<string, number> = {};
-		for (const score of scores) {
-			const name = score.composer || 'Unknown Composer';
+		for (const work of groupWorks(scores)) {
+			const name = work.composer || 'Unknown Composer';
 			counts[name] = (counts[name] ?? 0) + 1;
 		}
 		return counts;
@@ -375,6 +459,15 @@
 					!query ||
 					score.title.toLowerCase().includes(query) ||
 					score.composer.toLowerCase().includes(query) ||
+					[
+						score.workTitle,
+						score.edition,
+						score.catalogue,
+						score.key,
+						score.instruments,
+						score.publisher,
+						score.editor
+					].some((value) => value?.toLowerCase().includes(query)) ||
 					(score.tags ?? []).some((tag) => tag.toLowerCase().includes(query))
 				);
 			})
@@ -387,14 +480,31 @@
 						: (b.lastOpenedAt || b.addedAt) - (a.lastOpenedAt || a.addedAt)
 			)
 	);
+	const works = $derived.by(() => {
+		const all = new Map(groupWorks(scores).map((work) => [work.id, work]));
+		return groupWorks(filtered).map((work) => all.get(work.id) ?? work);
+	});
+	$effect(() => {
+		search;
+		selectedListId = null;
+		selectedWorkId = null;
+	});
+	const selectedWork = $derived(
+		groupWorks(scores).find((work) => work.id === selectedWorkId)
+	);
+	const editions = $derived(selectedWork?.scores ?? []);
 	const currentTitle = $derived(
-		composer
-			? composer
-			: filter === 'favorites'
-				? 'Favorites'
-				: filter === 'recent'
-					? 'Recently opened'
-					: 'All scores'
+		selectedList
+			? selectedList.name
+			: selectedWork
+				? selectedWork.title
+				: composer
+					? formatComposer(composer, $settings.composerDisplay)
+					: filter === 'favorites'
+						? 'Favorites'
+						: filter === 'recent'
+							? 'Recently opened'
+							: 'All works'
 	);
 </script>
 
@@ -405,6 +515,7 @@
 			closeMenu();
 			if (metadata) metadata = null;
 			if (imslpOpen) imslpOpen = false;
+			else if (selectedWorkId) selectedWorkId = null;
 			else if (settingsOpen) settingsOpen = false;
 		}
 	}} />
@@ -412,10 +523,7 @@
 <div class="library" class:compact={$settings.compactLibrary}>
 	<header class="header">
 		<div class="brand">
-			<img
-				src="/icon.svg"
-				alt="Sonora logo"
-				class="brand-mark" />
+			<span class="brand-mark" aria-hidden="true"><Music2 size={24} /></span>
 			<strong>Sonora</strong>
 		</div>
 		<SearchField
@@ -440,9 +548,19 @@
 				<Globe size={18} />
 			</IconButton>
 			<IconButton
+				title="Share library"
+				ariaLabel="Share or import library"
+				onclick={() => {
+					settingsSection = 'sharing';
+					settingsOpen = true;
+				}}><Share2 size={18} /></IconButton>
+			<IconButton
 				title="Settings"
 				ariaLabel="Open settings"
-				onclick={() => (settingsOpen = true)}>
+				onclick={() => {
+					settingsSection = null;
+					settingsOpen = true;
+				}}>
 				<Settings size={18} />
 			</IconButton>
 		</div>
@@ -463,17 +581,15 @@
 			ondismiss={() => {
 				if (updateInfo?.tagName) dismissUpdate(updateInfo.tagName);
 				updateBannerVisible = false;
-			}}
-		>
+			}}>
 			<span>
-				Sonora {updateInfo.latestVersion} is available
-				(you have {updateInfo.currentVersion}).
+				Sonora {updateInfo.latestVersion} is available (you have {updateInfo.currentVersion}).
 				<a
-					href={updateInfo.htmlUrl || 'https://github.com/Falconbird18/Sonora/releases'}
+					href={updateInfo.htmlUrl ||
+						'https://github.com/Falconbird18/Sonora/releases'}
 					target="_blank"
 					rel="noopener noreferrer"
-					style="color: var(--sonora-accent); font-weight: 600;"
-				>
+					style="color: var(--sonora-accent); font-weight: 600;">
 					View release
 				</a>
 			</span>
@@ -484,26 +600,57 @@
 		<aside class="sidebar">
 			<nav aria-label="Library filters">
 				<button
-					class:active={filter === 'all' && !composer}
+					class:active={!selectedList && filter === 'all' && !composer}
 					onclick={() => {
+						selectedWorkId = null;
+						selectedListId = null;
 						filter = 'all';
 						composer = null;
 					}}>
-					<Grid2X2 size={16} /><span>All scores</span><b>{scores.length}</b>
+					<Grid2X2 size={16} /><span>All works</span><b
+						>{groupWorks(scores).length}</b>
 				</button>
 				<button
-					class:active={filter === 'recent'}
+					class:active={!selectedList && filter === 'recent'}
 					onclick={() => {
+						selectedWorkId = null;
+						selectedListId = null;
 						filter = 'recent';
 						composer = null;
 					}}><Clock3 size={16} /><span>Recently opened</span></button>
 				<button
-					class:active={filter === 'favorites'}
+					class:active={!selectedList && filter === 'favorites'}
 					onclick={() => {
+						selectedWorkId = null;
+						selectedListId = null;
 						filter = 'favorites';
 						composer = null;
 					}}><Star size={16} /><span>Favorites</span></button>
 			</nav>
+			<section class="list-section">
+				<div class="list-heading">
+					<h2>Lists</h2>
+					<IconButton
+						title="Create list"
+						ariaLabel="Create list"
+						size="sm"
+						onclick={() => void newList()}><Plus size={16} /></IconButton>
+				</div>
+				{#each lists as list (list.id)}<button
+						class:active={selectedListId === list.id}
+						onclick={() => {
+							selectedListId = list.id;
+							selectedWorkId = null;
+						}}
+						><ListMusic size={16} /><span>{list.name}</span><b
+							>{list.entries.length}</b
+						></button
+					>{/each}
+				{#if !lists.length}<button onclick={() => void newList()}
+						><Plus size={16} /><span>Create your first list</span></button
+					>{/if}
+			</section>
+
 			{#if folder}
 				<div class="folder-summary">
 					<FolderOpen size={16} />
@@ -522,13 +669,16 @@
 						.slice(0, 16) as [name, count]}
 						{@const portrait = getComposerPortrait(name)}
 						<button
-							class:active={composer === name}
+							class:active={!selectedList && composer === name}
 							onclick={() => {
+								selectedWorkId = null;
+								selectedListId = null;
 								composer = name;
 								filter = 'all';
 							}}>
 							<ComposerPortrait {name} src={portrait} />
-							<span>{name}</span><b>{count}</b>
+							<span>{formatComposer(name, $settings.composerDisplay)}</span><b
+								>{count}</b>
 						</button>
 					{/each}
 				</section>
@@ -537,20 +687,34 @@
 		<main class="main">
 			<div class="toolbar">
 				<div>
+					{#if selectedWork}<button
+							class="work-back"
+							onclick={() => (selectedWorkId = null)}>← All works</button
+						>{/if}
 					<h1>{currentTitle}</h1>
 					<span
-						>{filtered.length}
-						{filtered.length === 1 ? 'score' : 'scores'}</span>
+						>{selectedList
+							? selectedList.entries.length
+							: selectedWork
+								? editions.length
+								: works.length}
+						{selectedList
+							? 'scores in performance order'
+							: selectedWork
+								? 'editions & parts'
+								: works.length === 1
+									? 'work'
+									: 'works'}</span>
 				</div>
 				<div class="toolbar-actions">
-					<select
-						class="sort-select"
-						bind:value={sort}
-						aria-label="Sort scores">
-						<option value="recent">Recently used</option>
-						<option value="title">Title</option>
-						<option value="composer">Composer</option>
-					</select>
+					{#if !selectedList}<AppSelect
+							bind:value={sort}
+							label="Sort scores"
+							options={[
+								{ value: 'recent', label: 'Recently used' },
+								{ value: 'title', label: 'Title' },
+								{ value: 'composer', label: 'Composer' }
+							]} />{/if}
 					<div class="seg">
 						<button
 							class:active={view === 'grid'}
@@ -563,7 +727,15 @@
 					</div>
 				</div>
 			</div>
-			{#if !folder}
+			{#if selectedList}
+				<ListEditor
+					list={selectedList}
+					{scores}
+					onChanged={refresh}
+					onDeleted={() => (selectedListId = null)}
+					onOpen={(score, entryId) =>
+						void openScore(score, { listId: selectedList.id, entryId })} />
+			{:else if !folder}
 				<div class="empty">
 					<div class="empty-orb" aria-hidden="true"></div>
 					<h2>Choose a score folder</h2>
@@ -580,9 +752,18 @@
 					<h2>No scores match</h2>
 					<p>Try another search or filter, or refresh the library.</p>
 				</div>
+			{:else if !selectedWork}
+				<div
+					class:score-grid={view === 'grid'}
+					class:score-list={view === 'list'}>
+					{#each works as work (work.id)}<WorkCard
+							{work}
+							list={view === 'list'}
+							onOpen={() => (selectedWorkId = work.id)} />{/each}
+				</div>
 			{:else if view === 'list'}
 				<div class="score-list">
-					{#each filtered as score (score.id)}
+					{#each editions as score (score.id)}
 						<ScoreListItem
 							{score}
 							opening={openingId === score.id}
@@ -598,7 +779,7 @@
 				</div>
 			{:else}
 				<div class="score-grid">
-					{#each filtered as score (score.id)}
+					{#each editions as score (score.id)}
 						<ScoreCard
 							{score}
 							opening={openingId === score.id}
@@ -618,6 +799,15 @@
 
 	{#if metadata}
 		<MetadataDialog
+			workTitle={metadata.workTitle}
+			edition={metadata.edition}
+			publisher={metadata.publisher}
+			editor={metadata.editor}
+			arranger={metadata.arranger}
+			catalogue={metadata.catalogue}
+			key={metadata.key}
+			compositionDate={metadata.compositionDate}
+			movements={metadata.movements}
 			title={metadata.title}
 			composer={metadata.composer}
 			year={metadata.year}
@@ -628,7 +818,16 @@
 			onClose={() => (metadata = null)} />
 	{/if}
 
-	<SettingsPanel open={settingsOpen} onClose={() => (settingsOpen = false)} />
+	<SettingsPanel
+		focusSection={settingsSection}
+		libraryRoot={folder?.nativePath ?? null}
+		onImported={refresh}
+		onOrganize={folder?.nativePath ? organizeExistingFiles : undefined}
+		{organizing}
+		{organizationStatus}
+		scoreCount={scores.length}
+		open={settingsOpen}
+		onClose={() => (settingsOpen = false)} />
 
 	<ImslpSearchPanel
 		bind:open={imslpOpen}
@@ -641,6 +840,35 @@
 </div>
 
 <style>
+	.list-heading {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+	}
+	.sidebar .list-heading h2 {
+		margin: 0;
+	}
+	.sidebar .list-section {
+		margin-top: 20px;
+		padding-top: 14px;
+		border-top: 1px solid var(--sonora-border);
+	}
+	span.brand-mark {
+		display: grid;
+		place-items: center;
+		background: var(--sonora-accent-soft);
+		color: var(--sonora-accent);
+		border: 1px solid var(--sonora-border-focus);
+		border-radius: var(--sonora-radius-md);
+	}
+	.work-back {
+		background: transparent;
+		border: 0;
+		color: var(--sonora-accent);
+		padding: 4px 0;
+		margin-bottom: 8px;
+		cursor: pointer;
+	}
 	.library {
 		height: 100%;
 		width: 100%;
@@ -660,7 +888,8 @@
 		padding: 0 20px;
 		border-bottom: 1px solid var(--sonora-border);
 		background: color-mix(in srgb, var(--sonora-bg-elevated) 92%, transparent);
-		backdrop-filter: blur(16px);
+		backdrop-filter: var(--sonora-blur);
+		-webkit-backdrop-filter: var(--sonora-blur);
 	}
 	.brand {
 		display: flex;
@@ -672,7 +901,7 @@
 		height: 34px;
 		display: grid;
 		place-items: center;
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 		background: var(--sonora-accent-soft);
 		color: var(--sonora-accent);
 	}
@@ -694,9 +923,9 @@
 		padding: 0 12px;
 		border: 1px solid var(--sonora-border-strong);
 		border-radius: var(--sonora-radius-md);
-		background: var(--sonora-bg-elevated);
+		background: var(--sonora-surface-raised);
 		color: var(--sonora-text);
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		font-weight: 550;
 		cursor: pointer;
 		transition:
@@ -705,7 +934,11 @@
 	}
 	.folder-button:hover {
 		background: var(--sonora-bg-hover);
-		border-color: color-mix(in srgb, var(--sonora-accent) 35%, var(--sonora-border-strong));
+		border-color: color-mix(
+			in srgb,
+			var(--sonora-accent) 35%,
+			var(--sonora-border-strong)
+		);
 	}
 	.body {
 		flex: 1;
@@ -734,10 +967,10 @@
 		gap: 10px;
 		padding: 9px 10px;
 		border: 0;
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 		background: transparent;
 		color: var(--sonora-text-muted);
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		text-align: left;
 		cursor: pointer;
 		transition:
@@ -765,7 +998,7 @@
 	.sidebar nav button b,
 	.sidebar section button b {
 		font-weight: 600;
-		font-size: 12px;
+		font-size: var(--sonora-text-sm);
 		opacity: 0.7;
 	}
 	.folder-summary {
@@ -774,22 +1007,22 @@
 		gap: 10px;
 		padding: 12px 10px;
 		margin-bottom: 16px;
-		border-radius: 12px;
+		border-radius: var(--sonora-radius-md);
 		background: rgba(255, 255, 255, 0.03);
 		color: var(--sonora-text-muted);
 	}
 	.folder-summary strong {
 		display: block;
 		color: var(--sonora-text);
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		font-weight: 600;
 	}
 	.folder-summary span {
-		font-size: 12px;
+		font-size: var(--sonora-text-sm);
 	}
 	.sidebar section h2 {
 		margin: 0 0 8px 10px;
-		font-size: 11px;
+		font-size: var(--sonora-text-sm);
 		font-weight: 650;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
@@ -815,26 +1048,12 @@
 	}
 	.toolbar span {
 		color: var(--sonora-text-muted);
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 	}
 	.toolbar-actions {
 		display: flex;
 		align-items: center;
 		gap: 10px;
-	}
-	.sort-select {
-		height: 36px;
-		padding: 0 10px;
-		border: 1px solid var(--sonora-border-strong);
-		border-radius: var(--sonora-radius-md);
-		background: var(--sonora-bg-elevated);
-		color: var(--sonora-text);
-		font-size: 13px;
-	}
-	.sort-select:focus {
-		outline: none;
-		border-color: color-mix(in srgb, var(--sonora-accent) 55%, var(--sonora-border-strong));
-		box-shadow: 0 0 0 3px var(--sonora-accent-soft);
 	}
 	.seg {
 		display: flex;
@@ -842,7 +1061,7 @@
 		padding: 3px;
 		border: 1px solid var(--sonora-border-strong);
 		border-radius: var(--sonora-radius-md);
-		background: var(--sonora-bg-elevated);
+		background: var(--sonora-surface-raised);
 	}
 	.seg button {
 		width: 32px;
@@ -870,7 +1089,7 @@
 	.score-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-		gap: 28px 18px;
+		gap: calc(var(--sonora-space) * 2) var(--sonora-space);
 	}
 	.library.compact .score-grid {
 		gap: 18px 12px;
@@ -910,7 +1129,7 @@
 	}
 	.empty p {
 		margin: 0 0 18px;
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		line-height: 1.45;
 	}
 	@media (max-width: 900px) {
@@ -953,9 +1172,6 @@
 		.toolbar {
 			align-items: center;
 			margin-bottom: 16px;
-		}
-		.sort-select {
-			display: none;
 		}
 		.score-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
