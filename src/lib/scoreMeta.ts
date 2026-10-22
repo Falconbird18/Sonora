@@ -17,6 +17,7 @@ export function plainScore(input: ScoreItem): ScoreItem {
 		addedAt: Number(input.addedAt) || Date.now()
 	};
 	for (const key of [
+		'contentHash',
 		'workId',
 		'workTitle',
 		'edition',
@@ -31,6 +32,12 @@ export function plainScore(input: ScoreItem): ScoreItem {
 	] as const) {
 		if (input[key]) out[key] = String(input[key]);
 	}
+	if (input.annotationLayers)
+		out.annotationLayers = input.annotationLayers.map((l) => ({
+			id: String(l.id),
+			name: String(l.name),
+			visible: l.visible !== false
+		}));
 	if (input.metadataEdited) out.metadataEdited = true;
 	if (input.composerId) out.composerId = String(input.composerId);
 	if (input.composerPeriod) out.composerPeriod = String(input.composerPeriod);

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { formatComposer } from "./composerDisplay";
+	import { formatComposer } from './composerDisplay';
 	import { onMount, tick } from 'svelte';
 	import {
 		loadAnnotations,
@@ -19,6 +19,11 @@
 	import { acquireScreenWakeLock, releaseScreenWakeLock } from './wakeLock';
 	import { settings } from './settingsStore';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
+	import PracticeTools from './ui/PracticeTools.svelte';
+	import AnnotationLayersPanel from './ui/AnnotationLayersPanel.svelte';
+	import { db } from './db';
+	import { replaceLayerMarks, recoverLayers } from './annotationLayers';
+	import type { AnnotationLayer } from './types';
 	import { get } from 'svelte/store';
 	import type {
 		PdfDocumentProxy,
@@ -35,8 +40,6 @@
 		Columns2,
 		Download,
 		Eraser,
-		Eye,
-		EyeOff,
 		Highlighter,
 		Maximize2,
 		Minimize2,
@@ -54,12 +57,40 @@
 		ZoomOut,
 		Pencil,
 		Check,
+		Layers,
+		Metronome,
+		AudioLines,
+		PanelTopClose,
+		PanelTopOpen,
 		Scan,
-		StretchHorizontal
+		StretchHorizontal,
+		Eye,
+		EyeOff
 	} from '@lucide/svelte';
-	let { score, onClose, sequenceLabel='', onPreviousScore, onNextScore }: { score: ScoreItem; onClose: () => void; sequenceLabel?:string;onPreviousScore?:()=>Promise<void>;onNextScore?:()=>Promise<void> } = $props();
-    let switchingScore=$state(false);
-    async function switchProgram(action?:()=>Promise<void>){if(!action||switchingScore)return;switchingScore=true;try{await flushPendingAnnotations();await action();}finally{switchingScore=false;}}
+	let {
+		score,
+		onClose,
+		sequenceLabel = '',
+		onPreviousScore,
+		onNextScore
+	}: {
+		score: ScoreItem;
+		onClose: () => void;
+		sequenceLabel?: string;
+		onPreviousScore?: () => Promise<void>;
+		onNextScore?: () => Promise<void>;
+	} = $props();
+	let switchingScore = $state(false);
+	async function switchProgram(action?: () => Promise<void>) {
+		if (!action || switchingScore) return;
+		switchingScore = true;
+		try {
+			await flushPendingAnnotations();
+			await action();
+		} finally {
+			switchingScore = false;
+		}
+	}
 
 	type Tool =
 		| 'pan'
@@ -119,13 +150,71 @@
 	let loadingText = $state('Opening score…');
 	let error = $state('');
 	let controls = $state(false);
-	let reading = $state(false);
+	let reading = $state(get(settings).viewerMode === 'reading');
+	let practicePanel = $state<'metronome' | 'tuner' | null>(null);
+	let practiceState = $state({ metronome: false, tuner: false });
+	function togglePractice(panel: 'metronome' | 'tuner') {
+		practicePanel = practicePanel === panel ? null : panel;
+		layersOpen = false;
+		searchOpen = false;
+	}
 	let searchOpen = $state(false);
 	let searchText = $state('');
 	let searchStatus = $state('');
 	let settingsOpen = $state(false);
 	let bookmarked = $state(false);
 	let annotationsVisible = $state(true);
+	let layers = $state<AnnotationLayer[]>([
+		{ id: 'default', name: 'Annotations', visible: true }
+	]);
+	let activeLayer = $state('default');
+	let layersOpen = $state(false);
+	let layerError = $state('');
+	function historyKey(page: number) {
+		return `${page}:${activeLayer}`;
+	}
+	function editable(mark: { layerId?: string }) {
+		return (
+			(mark.layerId || 'default') === activeLayer &&
+			layers.some((l) => l.id === activeLayer && l.visible)
+		);
+	}
+	let layerWrites: Promise<unknown> = Promise.resolve();
+	function saveLayers() {
+		layers = layers.map((l) => ({
+			...l,
+			name: l.name.trim() || 'Untitled layer'
+		}));
+		const snapshot = $state.snapshot(layers),
+			id = score.id;
+		layerWrites = layerWrites
+			.catch(() => {})
+			.then(() => db.scores.update(id, { annotationLayers: snapshot }))
+			.catch((e) => {
+				layerError = `Could not save layers: ${String(e)}`;
+			});
+		redraw(visiblePages[0], leftInk);
+		if (visiblePages[1]) redraw(visiblePages[1], rightInk);
+	}
+	function addLayer() {
+		const layer = {
+			id: crypto.randomUUID(),
+			name: `Layer ${layers.length + 1}`,
+			visible: true
+		};
+		layers = [...layers, layer];
+		activeLayer = layer.id;
+		saveLayers();
+	}
+	function moveLayer(index: number, direction: number) {
+		const target = index + direction;
+		if (target < 0 || target >= layers.length) return;
+		const next = [...layers];
+		[next[index], next[target]] = [next[target], next[index]];
+		layers = next;
+		saveLayers();
+	}
+
 	let isDrawing = $state(false);
 	let tool = $state<Tool>('pan');
 	let annotating = $derived(controls && tool !== 'pan' && !reading);
@@ -183,9 +272,10 @@
 	let strokes = $state<Record<number, Stroke[]>>({});
 	let stamps = $state<Record<number, SymbolStamp[]>>({});
 	let notes = $state<Record<number, TextNote[]>>({});
-	let histories = $state<Record<number, Snapshot[]>>({});
-	let historyIndex = $state<Record<number, number>>({});
+	let histories = $state<Record<string, Snapshot[]>>({});
+	let historyIndex = $state<Record<string, number>>({});
 	let host = $state<HTMLElement | null>(null);
+	let workspace = $state<HTMLElement | null>(null);
 	let leftPdf = $state<HTMLCanvasElement | null>(null);
 	let rightPdf = $state<HTMLCanvasElement | null>(null);
 	let leftInk = $state<HTMLCanvasElement | null>(null);
@@ -264,6 +354,7 @@
 			if (hasData) await saveAnnotations(number);
 		}
 		await flushAnnotationSaves();
+		await layerWrites;
 	}
 
 	const prefs = $derived(`sonora-viewer-${score.id}`);
@@ -306,12 +397,16 @@
 		return MUSIC_SYMBOLS.filter((s) => s.category === symbolCategory);
 	});
 	const canUndo = $derived(
-		visiblePages.some((p) => (historyIndex[p] ?? 0) > 0)
+		layers.some((l) => l.id === activeLayer && l.visible) &&
+			visiblePages.some((p) => (historyIndex[historyKey(p)] ?? 0) > 0)
 	);
 	const canRedo = $derived(
-		visiblePages.some(
-			(p) => (historyIndex[p] ?? 0) < (histories[p]?.length ?? 1) - 1
-		)
+		layers.some((l) => l.id === activeLayer && l.visible) &&
+			visiblePages.some(
+				(p) =>
+					(historyIndex[historyKey(p)] ?? 0) <
+					(histories[historyKey(p)]?.length ?? 1) - 1
+			)
 	);
 
 	async function requestWakeLock() {
@@ -403,9 +498,17 @@
 				}
 				return;
 			}
+			if (event.key === 'Escape' && (practicePanel || layersOpen)) {
+				event.preventDefault();
+				practicePanel = null;
+				layersOpen = false;
+				return;
+			}
 			if (
 				event.target instanceof HTMLInputElement ||
-				event.target instanceof HTMLTextAreaElement
+				event.target instanceof HTMLTextAreaElement ||
+				event.target instanceof HTMLSelectElement ||
+				(event.target instanceof HTMLElement && event.target.isContentEditable)
 			)
 				return;
 			if (
@@ -451,8 +554,17 @@
 				event.preventDefault();
 				redo();
 			} else if (event.key === 'Escape') {
-				if (settingsOpen || searchOpen || controls || reading) {
+				if (
+					settingsOpen ||
+					searchOpen ||
+					controls ||
+					reading ||
+					layersOpen ||
+					practicePanel
+				) {
 					settingsOpen = false;
+					layersOpen = false;
+					practicePanel = null;
 					searchOpen = false;
 					controls = false;
 					if (reading) exitReading();
@@ -469,9 +581,13 @@
 		document.addEventListener('fullscreenchange', onFullscreen);
 		const observer = new ResizeObserver(() => {
 			clearTimeout(resizeTimer);
-			resizeTimer = setTimeout(() => void render({ quiet: true }), 100);
+			resizeTimer = setTimeout(() => {
+				needsCenter = true;
+				void render({ quiet: true });
+			}, 100);
 		});
 		if (host) observer.observe(host);
+		if (workspace) observer.observe(workspace);
 		// Pinch-to-zoom for tablets (two-finger). passive:false so we can preventDefault.
 		const pinchOpts: AddEventListenerOptions = { passive: false };
 		if (host) {
@@ -544,19 +660,20 @@
 				page = 1;
 				pageInput = '1';
 			}
+			const storedScore = await db.scores.get(score.id);
+			layers = storedScore?.annotationLayers?.length
+				? storedScore.annotationLayers
+				: [{ id: 'default', name: 'Annotations', visible: true }];
+			activeLayer = layers.find((l) => l.visible)?.id || layers[0].id;
 			const records = await loadAnnotations(score.id);
+			layers = recoverLayers(
+				storedScore?.annotationLayers,
+				records.flatMap((r) => [...r.strokes, ...r.stamps, ...r.notes])
+			);
 			for (const record of records) {
 				strokes[record.pageNum] = record.strokes || [];
 				stamps[record.pageNum] = record.stamps || [];
 				notes[record.pageNum] = record.notes || [];
-				histories[record.pageNum] = [
-					{
-						strokes: structuredClone(record.strokes || []),
-						stamps: structuredClone(record.stamps || []),
-						notes: structuredClone(record.notes || [])
-					}
-				];
-				historyIndex[record.pageNum] = 0;
 			}
 			await tick();
 			ensureHistory(page);
@@ -626,13 +743,13 @@
 		try {
 			if (autoLayout) {
 				const landscape = window.matchMedia('(orientation: landscape)').matches;
-				const wideEnough = host.clientWidth >= 720;
+				const wideEnough = (workspace?.clientWidth ?? host.clientWidth) >= 720;
 				const nextDual = landscape && wideEnough;
 				if (nextDual !== dual) {
 					dual = nextDual;
 					persistPrefs();
 				}
-			} else if (host.clientWidth < 720) {
+			} else if ((workspace?.clientWidth ?? host.clientWidth) < 720) {
 				dual = false;
 			}
 			// Parallelize left/right page rasterization — dual mode was sequential before.
@@ -673,9 +790,14 @@
 		const base = pdfPage.getViewport({ scale: 1 });
 		const availableWidth = Math.max(
 			280,
-			dual ? (host.clientWidth - 92) / 2 : host.clientWidth - 58
+			dual
+				? ((workspace?.clientWidth ?? host.clientWidth) - 92) / 2
+				: (workspace?.clientWidth ?? host.clientWidth) - 58
 		);
-		const availableHeight = Math.max(280, host.clientHeight - 72);
+		const availableHeight = Math.max(
+			280,
+			(workspace?.clientHeight ?? host.clientHeight) - 72
+		);
 		// Layout size is always the un-zoomed fit size; zoom is applied via CSS transform.
 		const fitScale =
 			fit === 'width'
@@ -700,7 +822,6 @@
 			current
 		);
 	}
-
 
 	async function paintPage(
 		pdfPage: PdfPageProxy,
@@ -746,7 +867,15 @@
 		tasks.push(task);
 		await task.promise;
 		if (current !== generation || closed) return null;
-		const bmp: PageBitmap = { index, number, widthPx, heightPx, canvasW, canvasH, offscreen };
+		const bmp: PageBitmap = {
+			index,
+			number,
+			widthPx,
+			heightPx,
+			canvasW,
+			canvasH,
+			offscreen
+		};
 		touchCache(key, bmp);
 		return bmp;
 	}
@@ -800,8 +929,11 @@
 		const gap = showRight && rightW ? 20 : 0;
 		const contentW = leftW + gap + rightW;
 		const contentH = leftH;
-		panX = (host.clientWidth - contentW * zoom) / 2;
-		panY = Math.max(12, (host.clientHeight - contentH * zoom) / 2);
+		panX = ((workspace?.clientWidth ?? host.clientWidth) - contentW * zoom) / 2;
+		panY = Math.max(
+			12,
+			((workspace?.clientHeight ?? host.clientHeight) - contentH * zoom) / 2
+		);
 	}
 
 	function schedulePrefetch() {
@@ -869,11 +1001,13 @@
 	): { kind: 'stamp' | 'note'; id: string } | null {
 		for (let i = (stamps[number] || []).length - 1; i >= 0; i--) {
 			const stamp = stamps[number][i];
+			if (!editable(stamp)) continue;
 			if (Math.hypot(stamp.x - point.x, stamp.y - point.y) <= radius)
 				return { kind: 'stamp', id: stamp.id };
 		}
 		for (let i = (notes[number] || []).length - 1; i >= 0; i--) {
 			const note = notes[number][i];
+			if (!editable(note)) continue;
 			if (Math.hypot(note.x - point.x, note.y - point.y) <= radius)
 				return { kind: 'note', id: note.id };
 		}
@@ -885,8 +1019,11 @@
 		point: Point,
 		canvas: HTMLCanvasElement | null
 	) {
+		if (!layers.some((l) => l.id === activeLayer && l.visible)) return;
+		ensureHistory(number);
 		const stamp = {
 			id: crypto.randomUUID(),
+			layerId: activeLayer,
 			symbol: selectedSymbol.glyph,
 			label: selectedSymbol.name,
 			x: point.x,
@@ -915,12 +1052,18 @@
 		number: number,
 		canvas: HTMLCanvasElement
 	) {
-		if (reading || !annotating) return;
+		if (
+			reading ||
+			!annotating ||
+			!layers.some((l) => l.id === activeLayer && l.visible)
+		)
+			return;
 		if (textEditor) {
 			commitText();
 			return;
 		}
 		event.preventDefault();
+		ensureHistory(number);
 		const point = position(event, canvas);
 		if (tool !== 'eraser') {
 			const hit = hitAnnotation(
@@ -957,6 +1100,7 @@
 		}
 		const stroke: Stroke = {
 			id: crypto.randomUUID(),
+			layerId: activeLayer,
 			tool: tool === 'highlighter' ? 'highlighter' : 'pen',
 			kind: tool === 'line' ? 'line' : tool === 'arrow' ? 'arrow' : 'freehand',
 			color,
@@ -971,8 +1115,10 @@
 	}
 
 	function openTextEditor(number: number, point: Point) {
+		ensureHistory(number);
 		const existing = (notes[number] || []).find(
-			(note) => Math.hypot(note.x - point.x, note.y - point.y) < 0.04
+			(note) =>
+				editable(note) && Math.hypot(note.x - point.x, note.y - point.y) < 0.04
 		);
 		const x = Math.min(0.92, Math.max(0.04, point.x));
 		const y = Math.min(0.92, Math.max(0.04, point.y));
@@ -1026,6 +1172,7 @@
 					...(notes[editor.page] || []),
 					{
 						id: crypto.randomUUID(),
+						layerId: activeLayer,
 						text,
 						x: editor.x,
 						y: editor.y,
@@ -1173,21 +1320,25 @@
 		let changed = false;
 		const before = strokes[number] || [];
 		const after = before.filter(
-			(stroke) => !strokeHitsEraser(stroke, point, radius)
+			(stroke) => !editable(stroke) || !strokeHitsEraser(stroke, point, radius)
 		);
 		if (after.length !== before.length) {
 			strokes[number] = after;
 			changed = true;
 		}
 		const nextStamps = (stamps[number] || []).filter(
-			(stamp) => Math.hypot(stamp.x - point.x, stamp.y - point.y) > radius * 1.6
+			(stamp) =>
+				!editable(stamp) ||
+				Math.hypot(stamp.x - point.x, stamp.y - point.y) > radius * 1.6
 		);
 		if (nextStamps.length !== (stamps[number] || []).length) {
 			stamps[number] = nextStamps;
 			changed = true;
 		}
 		const nextNotes = (notes[number] || []).filter(
-			(note) => Math.hypot(note.x - point.x, note.y - point.y) > radius * 1.8
+			(note) =>
+				!editable(note) ||
+				Math.hypot(note.x - point.x, note.y - point.y) > radius * 1.8
 		);
 		if (nextNotes.length !== (notes[number] || []).length) {
 			notes[number] = nextNotes;
@@ -1209,30 +1360,40 @@
 		context.setTransform(scale, 0, 0, scale, 0, 0);
 		context.clearRect(0, 0, layoutW, layoutH);
 		if (!annotationsVisible) return;
-		for (const stroke of strokes[number] || [])
-			drawStroke(context, stroke, canvas);
-		context.save();
-		context.textAlign = 'center';
-		context.textBaseline = 'middle';
-		for (const stamp of stamps[number] || []) {
-			const p = pointToCanvas({ x: stamp.x, y: stamp.y }, canvas);
-			context.font = `${stamp.fontSize}px Leland, serif`;
-			context.fillStyle = stamp.color;
-			context.fillText(stamp.symbol, p.x, p.y);
-		}
-		context.restore();
-		for (const note of notes[number] || []) {
-			const p = pointToCanvas({ x: note.x, y: note.y }, canvas);
+		for (const layer of [...layers].reverse()) {
+			if (!layer.visible) continue;
+			for (const stroke of (strokes[number] || []).filter(
+				(m) => (m.layerId || 'default') === layer.id
+			))
+				drawStroke(context, stroke, canvas);
 			context.save();
-			context.font = `600 ${note.fontSize}px system-ui,sans-serif`;
-			context.fillStyle = note.color;
-			context.textBaseline = 'top';
-			context.shadowColor = 'rgba(255,255,255,.85)';
-			context.shadowBlur = 3;
-			context.fillText(note.text, p.x, p.y);
+			context.textAlign = 'center';
+			context.textBaseline = 'middle';
+			for (const stamp of (stamps[number] || []).filter(
+				(m) => (m.layerId || 'default') === layer.id
+			)) {
+				const p = pointToCanvas({ x: stamp.x, y: stamp.y }, canvas);
+				context.font = `${stamp.fontSize}px Leland, serif`;
+				context.fillStyle = stamp.color;
+				context.fillText(stamp.symbol, p.x, p.y);
+			}
 			context.restore();
+			for (const note of (notes[number] || []).filter(
+				(m) => (m.layerId || 'default') === layer.id
+			)) {
+				const p = pointToCanvas({ x: note.x, y: note.y }, canvas);
+				context.save();
+				context.font = `600 ${note.fontSize}px system-ui,sans-serif`;
+				context.fillStyle = note.color;
+				context.textBaseline = 'top';
+				context.shadowColor = 'rgba(255,255,255,.85)';
+				context.shadowBlur = 3;
+				context.fillText(note.text, p.x, p.y);
+				context.restore();
+			}
 		}
 	}
+
 	function drawStroke(
 		context: CanvasRenderingContext2D,
 		stroke: Stroke,
@@ -1292,24 +1453,48 @@
 		};
 	}
 	function ensureHistory(number: number) {
-		if (!histories[number]) {
-			histories = { ...histories, [number]: [snapshot(number)] };
-			historyIndex = { ...historyIndex, [number]: 0 };
+		if (!histories[historyKey(number)]) {
+			histories = { ...histories, [historyKey(number)]: [snapshot(number)] };
+			historyIndex = { ...historyIndex, [historyKey(number)]: 0 };
 		}
 	}
 	function checkpoint(number: number) {
 		ensureHistory(number);
-		const list = histories[number];
-		const index = historyIndex[number] ?? list.length - 1;
+		const list = histories[historyKey(number)];
+		const index = historyIndex[historyKey(number)] ?? list.length - 1;
 		const nextList = [...list.slice(0, index + 1), snapshot(number)].slice(-80);
-		histories = { ...histories, [number]: nextList };
-		historyIndex = { ...historyIndex, [number]: nextList.length - 1 };
+		histories = { ...histories, [historyKey(number)]: nextList };
+		historyIndex = {
+			...historyIndex,
+			[historyKey(number)]: nextList.length - 1
+		};
 		scheduleSave(number);
 	}
 	function applySnapshot(number: number, state: Snapshot) {
-		strokes = { ...strokes, [number]: cloneData(state.strokes) };
-		stamps = { ...stamps, [number]: cloneData(state.stamps) };
-		notes = { ...notes, [number]: cloneData(state.notes) };
+		strokes = {
+			...strokes,
+			[number]: replaceLayerMarks(
+				strokes[number] || [],
+				cloneData(state.strokes),
+				activeLayer
+			)
+		};
+		stamps = {
+			...stamps,
+			[number]: replaceLayerMarks(
+				stamps[number] || [],
+				cloneData(state.stamps),
+				activeLayer
+			)
+		};
+		notes = {
+			...notes,
+			[number]: replaceLayerMarks(
+				notes[number] || [],
+				cloneData(state.notes),
+				activeLayer
+			)
+		};
 		const canvas =
 			number === visiblePages[0]
 				? leftInk
@@ -1320,22 +1505,24 @@
 		scheduleSave(number);
 	}
 	function undo() {
+		if (!layers.some((l) => l.id === activeLayer && l.visible)) return;
 		for (const p of visiblePages) {
 			ensureHistory(p);
-			const index = historyIndex[p] ?? 0;
+			const index = historyIndex[historyKey(p)] ?? 0;
 			if (index > 0) {
-				historyIndex = { ...historyIndex, [p]: index - 1 };
-				applySnapshot(p, histories[p][index - 1]);
+				historyIndex = { ...historyIndex, [historyKey(p)]: index - 1 };
+				applySnapshot(p, histories[historyKey(p)][index - 1]);
 			}
 		}
 	}
 	function redo() {
+		if (!layers.some((l) => l.id === activeLayer && l.visible)) return;
 		for (const p of visiblePages) {
 			ensureHistory(p);
-			const index = historyIndex[p] ?? 0;
-			const list = histories[p];
+			const index = historyIndex[historyKey(p)] ?? 0;
+			const list = histories[historyKey(p)];
 			if (index < list.length - 1) {
-				historyIndex = { ...historyIndex, [p]: index + 1 };
+				historyIndex = { ...historyIndex, [historyKey(p)]: index + 1 };
 				applySnapshot(p, list[index + 1]);
 			}
 		}
@@ -1378,8 +1565,12 @@
 		// Keep the focal point fixed in the workspace (cursor for wheel, center otherwise).
 		// transform: translate(pan) scale(zoom) with origin 0 0
 		//   workspace = pan + local * zoom  ⇒  local = (workspace - pan) / zoom
-		const fx = opts.focusX ?? (host ? host.clientWidth / 2 : 0);
-		const fy = opts.focusY ?? (host ? host.clientHeight / 2 : 0);
+		const fx =
+			opts.focusX ??
+			(host ? (workspace?.clientWidth ?? host.clientWidth) / 2 : 0);
+		const fy =
+			opts.focusY ??
+			(host ? (workspace?.clientHeight ?? host.clientHeight) / 2 : 0);
 		if (prev > 0.0001) {
 			const localX = (fx - panX) / prev;
 			const localY = (fy - panY) / prev;
@@ -1557,7 +1748,7 @@
 		const a = event.touches[0];
 		const b = event.touches[1];
 		const mid = touchMidpoint(a, b);
-		const rect = host.getBoundingClientRect();
+		const rect = (workspace ?? host).getBoundingClientRect();
 		pinch = {
 			lastDist: Math.max(1, touchDistance(a, b)),
 			lastMidX: mid.x - rect.left,
@@ -1570,7 +1761,7 @@
 		const a = event.touches[0];
 		const b = event.touches[1];
 		const dist = Math.max(1, touchDistance(a, b));
-		const rect = host.getBoundingClientRect();
+		const rect = (workspace ?? host).getBoundingClientRect();
 		const mid = touchMidpoint(a, b);
 		const midX = mid.x - rect.left;
 		const midY = mid.y - rect.top;
@@ -1650,7 +1841,7 @@
 			const factor = Math.exp(-pixelDelta * 0.0016);
 			zoomPending = Math.max(0.35, Math.min(3, zoom * factor));
 			if (host) {
-				const rect = host.getBoundingClientRect();
+				const rect = (workspace ?? host).getBoundingClientRect();
 				zoomFocusX = event.clientX - rect.left;
 				zoomFocusY = event.clientY - rect.top;
 			}
@@ -1728,9 +1919,31 @@
 					aria-label="Back to library"
 					onclick={() => void leave()}><ArrowLeft size={19} /></button>
 				<div class="score-title">
-					<strong>{score.title}</strong><span>{formatComposer(score.composer, $settings.composerDisplay)}</span>
+					<strong>{score.title}</strong><span
+						>{formatComposer(score.composer, $settings.composerDisplay)}</span>
 				</div>
-                {#if sequenceLabel}<div class="sequence-controls" aria-label="Concert program navigation"><button class="icon-button" aria-label="Previous score in list" title="Previous score in list" disabled={!onPreviousScore||switchingScore} onclick={()=>void switchProgram(onPreviousScore)}><ChevronLeft size={15}/></button><span class="sequence-full" title={sequenceLabel}>{sequenceLabel}</span><span class="sequence-short" title={sequenceLabel}>{sequenceLabel.split('·').at(-1)?.trim()}</span><button class="icon-button" aria-label="Next score in list" title="Next score in list" disabled={!onNextScore||switchingScore} onclick={()=>void switchProgram(onNextScore)}><ChevronRight size={15}/></button></div>{/if}
+				{#if sequenceLabel}<div
+						class="sequence-controls"
+						aria-label="Concert program navigation">
+						<button
+							class="icon-button"
+							aria-label="Previous score in list"
+							title="Previous score in list"
+							disabled={!onPreviousScore || switchingScore}
+							onclick={() => void switchProgram(onPreviousScore)}
+							><ChevronLeft size={15} /></button
+						><span class="sequence-full" title={sequenceLabel}
+							>{sequenceLabel}</span
+						><span class="sequence-short" title={sequenceLabel}
+							>{sequenceLabel.split('·').at(-1)?.trim()}</span
+						><button
+							class="icon-button"
+							aria-label="Next score in list"
+							title="Next score in list"
+							disabled={!onNextScore || switchingScore}
+							onclick={() => void switchProgram(onNextScore)}
+							><ChevronRight size={15} /></button>
+					</div>{/if}
 			</div>
 			<div class="page-controls">
 				<button
@@ -1753,97 +1966,177 @@
 					disabled={!pdf || page >= pdf.numPages}
 					><ChevronRight size={19} /></button>
 			</div>
-			<div class="topbar-right">
+			<div class="topbar-right" role="toolbar" aria-label="Score tools">
+				<button
+					class="icon-button"
+					class:active={controls}
+					title="Annotate (P)"
+					aria-label="Annotation tools"
+					aria-pressed={controls}
+					onclick={toggleControls}><Pencil size={18} /></button>
+				<button
+					class="icon-button"
+					class:active={layersOpen}
+					title="Annotation layers"
+					aria-label="Annotation layers"
+					aria-expanded={layersOpen}
+					onclick={() => {
+						layersOpen = !layersOpen;
+						practicePanel = null;
+						searchOpen = false;
+					}}><Layers size={18} /></button>
+				<span class="toolbar-divider"></span>
+				<button
+					class="icon-button tool-indicator"
+					class:active={practicePanel === 'metronome'}
+					class:running={practiceState.metronome}
+					title="Metronome"
+					aria-label="Metronome"
+					aria-expanded={practicePanel === 'metronome'}
+					onclick={() => togglePractice('metronome')}
+					><Metronome size={19} />{#if practiceState.metronome}<i></i
+						>{/if}</button>
+				<button
+					class="icon-button tool-indicator"
+					class:active={practicePanel === 'tuner'}
+					class:running={practiceState.tuner}
+					title="Tuner"
+					aria-label="Tuner"
+					aria-expanded={practicePanel === 'tuner'}
+					onclick={() => togglePractice('tuner')}
+					><AudioLines size={19} />{#if practiceState.tuner}<i></i
+						>{/if}</button>
+				<span class="toolbar-divider"></span>
+				<button
+					class="icon-button"
+					class:active={searchOpen}
+					title="Find in score"
+					aria-label="Find in score"
+					aria-expanded={searchOpen}
+					onclick={() => {
+						searchOpen = !searchOpen;
+						layersOpen = false;
+						practicePanel = null;
+					}}><Search size={18} /></button>
 				<button
 					class="icon-button"
 					class:active={bookmarked}
 					title={bookmarked ? 'Remove bookmark' : 'Bookmark score'}
+					aria-label={bookmarked ? 'Remove bookmark' : 'Bookmark score'}
 					onclick={toggleBookmark}
 					>{#if bookmarked}<BookmarkCheck size={18} />{:else}<Bookmark
 							size={18} />{/if}</button>
 				<button
 					class="icon-button"
-					title="Search score"
-					onclick={() => (searchOpen = !searchOpen)}
-					><Search size={18} /></button>
-				<button
-					class="icon-button"
-					title="Reading mode (F)"
-					onclick={enterReading}><Eye size={18} /></button>
+					title="Hide interface (F)"
+					aria-label="Hide interface"
+					onclick={enterReading}><PanelTopClose size={18} /></button>
 			</div>
 		</header>
 	{:else}
 		<button
 			class="reading-exit"
-			title="Exit reading mode"
-			aria-label="Exit reading mode"
-			onclick={exitReading}
-			><Minimize2 size={17} /><span>Exit reading</span></button>
+			title="Show interface (F)"
+			aria-label="Show interface"
+			onclick={exitReading}><PanelTopOpen size={18} /></button>
 	{/if}
 
 	{#if !reading}
-		<footer class="bottombar">
-			<div class="footer-section">
-				<button
-					class="icon-button"
-					class:active={fit === 'page'}
-					title="Fit page"
-					onclick={() => setFit('page')}><Scan size={16} /></button>
-				<button
-					class="icon-button"
-					class:active={fit === 'width'}
-					title="Fit width"
-					onclick={() => setFit('width')}
-					><StretchHorizontal size={17} /></button>
-				<button
-					class="icon-button"
-					title="Zoom out"
-					onclick={() => setZoom(zoom - 0.08)}><ZoomOut size={17} /></button>
-				<button
-					class="zoom-reset"
-					title="Reset zoom to 100%"
-					aria-label="Reset zoom to 100%"
-					onclick={() => {
-						needsCenter = true;
-						setZoom(1, { immediate: true });
-					}}
-					>{Math.round(zoom * 100)}%</button>
-				<button
-					class="icon-button"
-					title="Zoom in"
-					onclick={() => setZoom(zoom + 0.08)}><ZoomIn size={17} /></button>
-			</div>
-			<div class="footer-section">
-				<button
-					class:active={dual}
-					class="text-button"
-					onclick={() => {
-						autoLayout = false;
-						dual = !dual;
-						persistPrefs();
-						void render({ quiet: hasPainted });
-					}}><Columns2 size={15} />{dual ? 'Single page' : 'Two pages'}</button>
-				<button
-					class="icon-button"
-					title="Show/hide annotations"
-					onclick={toggleAnnotations}
-					>{#if annotationsVisible}<Eye size={17} />{:else}<EyeOff
-							size={17} />{/if}</button>
-				<button
-					class="icon-button"
-					title="Fullscreen"
-					onclick={toggleFullScreen}
-					>{#if isFullscreen}<Minimize2 size={17} />{:else}<Maximize2
-							size={17} />{/if}</button>
-				<button
-					class="icon-button"
-					title="Settings"
-					onclick={() => (settingsOpen = !settingsOpen)}
-					><Settings2 size={17} /></button>
-			</div>
+		<footer class="bottombar" aria-label="View controls">
+			<button
+				class="icon-button"
+				title="Zoom out"
+				aria-label="Zoom out"
+				onclick={() => setZoom(zoom - 0.08)}><ZoomOut size={17} /></button>
+			<button
+				class="zoom-reset"
+				title="Reset zoom"
+				aria-label="Reset zoom to 100%"
+				onclick={() => {
+					needsCenter = true;
+					setZoom(1, { immediate: true });
+				}}>{Math.round(zoom * 100)}<span>%</span></button>
+			<button
+				class="icon-button"
+				title="Zoom in"
+				aria-label="Zoom in"
+				onclick={() => setZoom(zoom + 0.08)}><ZoomIn size={17} /></button>
+			<span class="toolbar-divider"></span>
+			<button
+				class="icon-button"
+				class:active={fit === 'page'}
+				title="Fit entire page"
+				aria-label="Fit entire page"
+				onclick={() => setFit('page')}><Scan size={17} /></button>
+			<button
+				class="icon-button"
+				class:active={fit === 'width'}
+				title="Fit page width"
+				aria-label="Fit page width"
+				onclick={() => setFit('width')}><StretchHorizontal size={18} /></button>
+			<button
+				class="icon-button"
+				class:active={dual}
+				title={dual ? 'Switch to single page' : 'Switch to two pages'}
+				aria-label={dual ? 'Switch to single page' : 'Switch to two pages'}
+				onclick={() => {
+					autoLayout = false;
+					dual = !dual;
+					persistPrefs();
+					void render({ quiet: hasPainted });
+				}}><Columns2 size={17} /></button>
+			<span class="toolbar-divider"></span>
+			<button
+				class="icon-button"
+				title={annotationsVisible ? 'Hide annotations' : 'Show annotations'}
+				aria-label={annotationsVisible
+					? 'Hide annotations'
+					: 'Show annotations'}
+				aria-pressed={annotationsVisible}
+				onclick={toggleAnnotations}
+				>{#if annotationsVisible}<Eye size={17} />{:else}<EyeOff
+						size={17} />{/if}</button>
+			<button
+				class="icon-button"
+				title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+				aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+				onclick={toggleFullScreen}
+				>{#if isFullscreen}<Minimize2 size={17} />{:else}<Maximize2
+						size={17} />{/if}</button>
+			<button
+				class="icon-button"
+				title="Viewer settings"
+				aria-label="Viewer settings"
+				onclick={() => (settingsOpen = !settingsOpen)}
+				><Settings2 size={17} /></button>
 		</footer>
 	{/if}
-
+	{#if !reading && layersOpen}<AnnotationLayersPanel
+			{layers}
+			{activeLayer}
+			error={layerError}
+			onSelect={(id) => {
+				activeLayer = id;
+			}}
+			onRename={(id, name) => {
+				layers = layers.map((l) => (l.id === id ? { ...l, name } : l));
+				saveLayers();
+			}}
+			onVisibility={(id) => {
+				layers = layers.map((l) =>
+					l.id === id ? { ...l, visible: !l.visible } : l
+				);
+				saveLayers();
+			}}
+			onMove={moveLayer}
+			onAdd={addLayer}
+			onClose={() => (layersOpen = false)} />{/if}
+	<div hidden={reading}>
+		<PracticeTools
+			panel={practicePanel}
+			onClose={() => (practicePanel = null)}
+			onStateChange={(state) => (practiceState = state)} />
+	</div>
 	{#if searchOpen && !reading}<div class="search-panel">
 			<Search size={17} /><input
 				bind:value={searchText}
@@ -1859,6 +2152,7 @@
 
 	<main
 		class="workspace"
+		bind:this={workspace}
 		class:fit-page={fit === 'page'}
 		class:is-panning={!!panDrag}
 		class:is-annotating={annotating}
@@ -1963,20 +2257,19 @@
 		</div>
 	{/if}
 
-	{#if !reading && !controls}
-		<button
-			class="annotation-toggle"
-			title="Annotation tools"
-			aria-label="Open annotation tools"
-			onclick={toggleControls}><Pencil size={18} /></button>
-	{/if}
-
 	{#if !reading && controls}
 		<div
 			class="palette"
 			class:is-away={paletteAway}
 			class:symbol-open={tool === 'symbol' && !symbolSheetCollapsed}>
 			<aside class="tool-rail" aria-label="Annotation tools">
+				<span
+					class="layer-chip"
+					title={layers.find((l) => l.id === activeLayer)?.name}
+					>{layers.find((l) => l.id === activeLayer)?.name}</span
+				>{#if !layers.some((l) => l.id === activeLayer && l.visible)}<span
+						class="layer-chip">Hidden layer</span
+					>{/if}
 				<div class="rail-group" role="toolbar" aria-label="Draw">
 					<button
 						type="button"
@@ -1994,7 +2287,8 @@
 						title="Highlighter (H)"
 						aria-label="Highlighter"
 						onclick={() => choose('highlighter')}
-						><Highlighter size={18} /></button>
+						><Highlighter size={18} /><span class="rail-label">Highlight</span
+						></button>
 					<button
 						type="button"
 						class:active={tool === 'line'}
@@ -2010,7 +2304,9 @@
 						data-tool="arrow"
 						title="Arrow"
 						aria-label="Arrow"
-						onclick={() => choose('arrow')}><ArrowUpRight size={18} /></button>
+						onclick={() => choose('arrow')}
+						><ArrowUpRight size={18} /><span class="rail-label">Arrow</span
+						></button>
 					<button
 						type="button"
 						class:active={tool === 'eraser'}
@@ -2232,11 +2528,209 @@
 </div>
 
 <style>
-.sequence-short{display:none;}
-.topbar-left{min-width:0;}
-@media(max-width:900px){.sequence-full{display:none;}.sequence-short{display:inline;}}
-.sequence-controls{display:flex;align-items:center;border:1px solid var(--sonora-border-strong);border-radius:var(--sonora-radius-sm);background:var(--sonora-surface-raised);}
-.sequence-controls span{font-size:var(--sonora-text-sm);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+	.toolbar-divider {
+		height: 18px;
+		width: 1px;
+		background: var(--sonora-border-strong);
+		margin: 0 5px;
+		flex-shrink: 0;
+	}
+	.topbar {
+		height: 64px;
+		box-sizing: border-box;
+		padding: 0 18px !important;
+		display: grid !important;
+		grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+		gap: 16px;
+		background: var(--sonora-bg-header) !important;
+	}
+	.topbar-left {
+		min-width: 0;
+	}
+	.score-title {
+		min-width: 0;
+		max-width: 260px;
+	}
+	.topbar-right {
+		justify-content: flex-end;
+		gap: 2px !important;
+		white-space: nowrap;
+	}
+	.topbar .icon-button,
+	.bottombar .icon-button {
+		width: 34px;
+		height: 34px;
+		border-radius: 8px;
+		flex-shrink: 0;
+	}
+	.topbar .icon-button {
+		color: var(--sonora-text-secondary);
+	}
+	.icon-button.active {
+		background: var(--sonora-accent-soft) !important;
+		color: var(--sonora-accent) !important;
+	}
+	.tool-indicator {
+		position: relative;
+	}
+	.tool-indicator i {
+		position: absolute;
+		width: 4px;
+		height: 4px;
+		bottom: 3px;
+		left: calc(50% - 2px);
+		border-radius: 50%;
+		background: var(--sonora-accent);
+	}
+	.bottombar {
+		position: absolute !important;
+		top: auto !important;
+		bottom: 18px;
+		left: 50% !important;
+		transform: translateX(-50%);
+		width: auto !important;
+		display: flex !important;
+		align-items: center;
+		gap: 2px;
+		padding: 5px 8px !important;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: 13px;
+		background: var(--sonora-bg-panel);
+		box-shadow: 0 4px 24px #0002;
+		backdrop-filter: blur(18px);
+	}
+	.zoom-reset {
+		min-width: 48px !important;
+		font-size: 11px;
+	}
+	.zoom-reset span {
+		font-size: 9px;
+		color: var(--sonora-text-muted);
+		margin-left: 1px;
+	}
+	.workspace {
+		inset: 64px 0 0 !important;
+	}
+	.viewer.reading .workspace {
+		inset: 0 !important;
+	}
+	.page-controls {
+		gap: 3px !important;
+	}
+	.page-controls input {
+		border-color: transparent !important;
+		background: var(--sonora-bg-hover) !important;
+		width: 34px !important;
+		font-size: 11px;
+	}
+	.page-controls > span {
+		font-size: 10px;
+	}
+	.layer-chip {
+		font-size: 9px;
+		max-width: 40px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--sonora-text-muted);
+	}
+	.rail-btn {
+		width: 36px !important;
+		height: 36px !important;
+	}
+	.tool-rail {
+		border-radius: 13px !important;
+		gap: 3px !important;
+		padding: 7px 5px !important;
+	}
+	.reading-exit {
+		padding: 10px !important;
+		opacity: 0.7;
+	}
+	.search-panel {
+		top: 76px !important;
+		right: 16px !important;
+		left: auto !important;
+		transform: none !important;
+		width: min(440px, calc(100% - 32px));
+	}
+	.palette {
+		top: calc(50% + 20px) !important;
+	}
+	.viewer {
+		font-family: var(--sonora-font-ui, Inter, system-ui, sans-serif);
+	}
+	@media (max-width: 900px) {
+		.topbar {
+			grid-template-columns: minmax(0, 1fr) auto;
+			gap: 5px;
+		}
+		.page-controls {
+			grid-column: 1;
+			grid-row: 2;
+			justify-content: flex-start !important;
+		}
+		.topbar-right {
+			grid-column: 2;
+			grid-row: 1 / 3;
+		}
+		.topbar {
+			height: 88px;
+			padding: 8px 12px !important;
+		}
+		.score-title strong {
+			font-size: 12px;
+		}
+		.score-title span {
+			font-size: 9px;
+		}
+		.workspace {
+			inset: 88px 0 0 !important;
+		}
+		.topbar .icon-button {
+			width: 30px;
+			height: 32px;
+		}
+		.toolbar-divider {
+			margin: 0 3px;
+		}
+		.bottombar {
+			bottom: 12px;
+			max-width: calc(100% - 24px);
+		}
+		.bottombar .icon-button {
+			width: 30px;
+		}
+	}
+
+	.sequence-short {
+		display: none;
+	}
+	.topbar-left {
+		min-width: 0;
+	}
+	@media (max-width: 900px) {
+		.sequence-full {
+			display: none;
+		}
+		.sequence-short {
+			display: inline;
+		}
+	}
+	.sequence-controls {
+		display: flex;
+		align-items: center;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-sm);
+		background: var(--sonora-surface-raised);
+	}
+	.sequence-controls span {
+		font-size: var(--sonora-text-sm);
+		max-width: 130px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
 	@font-face {
 		font-family: Leland;
 		src:
@@ -2283,24 +2777,9 @@
 		z-index: 30;
 	}
 
-	.footer-section {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		z-index: 30;
-		min-height: 44px;
-		padding: 5px;
-		border: 1px solid var(--sonora-border-strong);
-		border-radius: 14px;
-		background: var(--sonora-surface-glass);
-		backdrop-filter: var(--sonora-blur);
-		-webkit-backdrop-filter: var(--sonora-blur);
-	}
-
 	.topbar-left,
 	.topbar-right,
-	.page-controls,
-	.footer-section {
+	.page-controls {
 		display: flex;
 		align-items: center;
 		gap: 5px;
@@ -2640,27 +3119,6 @@
 		background: var(--sonora-accent);
 		color: var(--sonora-accent-contrast);
 	}
-	.annotation-toggle {
-		position: absolute;
-		z-index: 32;
-		left: 16px;
-		bottom: 16px;
-		width: 44px;
-		height: 44px;
-		border: 1px solid var(--sonora-border-strong);
-		border-radius: 14px;
-		background: var(--sonora-surface-glass);
-		color: var(--sonora-text);
-		display: grid;
-		place-items: center;
-		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-		cursor: pointer;
-	}
-	.annotation-toggle:hover {
-		background: rgba(40, 40, 36, 0.98);
-		color: var(--sonora-text);
-	}
-
 	/* —— Annotation palette (redesign) —— */
 	.palette {
 		position: absolute;
@@ -3242,7 +3700,7 @@
 			transform: rotate(360deg);
 		}
 	}
-	@media (max-width: 900px) {
+	@media (max-width: 900px), (max-height: 740px) {
 		.palette {
 			left: 8px;
 			top: auto;
@@ -3256,6 +3714,8 @@
 			transform: translateY(10px);
 		}
 		.tool-rail {
+			max-width: calc(100vw - 48px);
+			overflow-x: auto;
 			flex-direction: row;
 			padding: 6px 8px;
 			border-radius: 16px;
@@ -3297,10 +3757,6 @@
 			width: auto;
 			max-height: min(52vh, 380px);
 		}
-		.topbar-right .icon-button:nth-child(3),
-		.topbar-right .icon-button:nth-child(4) {
-			display: none;
-		}
 	}
 	@media (max-width: 620px) {
 		.score-title {
@@ -3318,15 +3774,11 @@
 		.bottombar {
 			padding: 7px;
 		}
-		.footer-section .text-button {
-			display: none;
-		}
 	}
 	@media print {
 		.topbar,
 		.bottombar,
 		.palette,
-		.annotation-toggle,
 		.symbol-drawer,
 		.search-panel,
 		.loading,

@@ -1,5 +1,7 @@
 export interface ScoreItem {
 	id: string;
+	contentHash?: string;
+	annotationLayers?: AnnotationLayer[];
 	workId?: string;
 	workTitle?: string;
 	edition?: string;
@@ -63,6 +65,7 @@ export interface Point {
 	pressure?: number;
 }
 export interface Stroke {
+	layerId?: string;
 	id?: string;
 	tool: 'pen' | 'highlighter';
 	kind?: 'freehand' | 'line' | 'arrow';
@@ -71,6 +74,7 @@ export interface Stroke {
 	points: Point[];
 }
 export interface SymbolStamp {
+	layerId?: string;
 	id: string;
 	scoreId?: string;
 	pageNum?: number;
@@ -82,6 +86,7 @@ export interface SymbolStamp {
 	color: string;
 }
 export interface TextNote {
+	layerId?: string;
 	id: string;
 	scoreId?: string;
 	pageNum?: number;
@@ -137,4 +142,10 @@ export interface ScoreList {
 	entries: ListEntry[];
 	createdAt: number;
 	updatedAt: number;
+}
+
+export interface AnnotationLayer {
+	id: string;
+	name: string;
+	visible: boolean;
 }

@@ -2053,6 +2053,41 @@ fn list_score_files(path: String) -> Result<Vec<NativeScoreFile>, String> {
     Ok(files)
 }
 
+/// Recognize a rendered score page locally. No PDF bytes or images leave the device.
+#[tauri::command]
+async fn ocr_score_page(image: Vec<u8>) -> Result<String, String> {
+    if image.len() > 16 * 1024 * 1024 || !image.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("OCR requires a PNG page smaller than 16 MB.".into());
+    }
+    tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let languages = Command::new("tesseract").arg("--list-langs").output()
+            .map_err(|_| "Local OCR requires Tesseract installed on this computer.".to_string())?;
+        if !String::from_utf8_lossy(&languages.stdout).lines().any(|line|line.trim()=="eng") {
+            return Err("Local OCR requires Tesseract English language data (eng.traineddata). Filename suggestions are still available.".into());
+        }
+        let mut child = Command::new("tesseract")
+            .args(["stdin", "stdout", "--psm", "11"])
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+            .spawn().map_err(|_| "Local OCR requires Tesseract installed on this computer.".to_string())?;
+        let mut stdin = child.stdin.take().ok_or("Could not open OCR input")?;
+        let writer = std::thread::spawn(move || stdin.write_all(&image));
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if start.elapsed().as_secs() < 30 => std::thread::sleep(std::time::Duration::from_millis(50)),
+                _ => { let _ = child.kill(); let _ = child.wait(); let _ = writer.join(); return Err("Local OCR timed out.".into()); }
+            }
+        }
+        let _ = writer.join();
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        if !output.status.success() { return Err("Local OCR could not read this page.".into()); }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }).await.map_err(|e|e.to_string())?
+}
+
 #[tauri::command]
 fn read_score_file(path: String) -> Result<Vec<u8>, String> {
     fs::read(&path).map_err(|error| error.to_string())
@@ -2085,6 +2120,7 @@ pub fn run() {
             pick_score_folder,
             list_score_files,
             read_score_file,
+            ocr_score_page,
             read_score_file_base64,
             read_text_file,
             move_score_into_composer_folder,
@@ -2423,5 +2459,20 @@ mod movement_metadata_tests {
         let mut files = vec![arranged, original];
         sort_score_files(&mut files);
         assert_eq!(files[0].filename, "Original.pdf");
+    }
+}
+
+#[cfg(test)]
+mod score_ocr_tests {
+    use super::*;
+    #[tokio::test]
+    async fn rejects_non_image_ocr_input() {
+        assert!(ocr_score_page(b"not a PNG".to_vec()).await.unwrap_err().contains("PNG"));
+    }
+    #[tokio::test]
+    #[ignore = "Requires local Tesseract with English language data"]
+    async fn local_ocr_reads_title_page() {
+        let text = ocr_score_page(include_bytes!("../../tests/ui/score-preview.png").to_vec()).await.unwrap();
+        assert!(text.chars().filter(|c|c.is_alphabetic()).count()>8, "No readable title-page text: {text}");
     }
 }

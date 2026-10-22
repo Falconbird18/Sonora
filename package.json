@@ -14,7 +14,8 @@
     "pretauri:build": "tauri icon ./src-tauri/icons/app-icon.svg",
     "tauri:build": "node ./scripts/tauri-build.mjs",
     "postinstall": "node ./scripts/copy-pdfium.mjs",
-    "test:library": "node scripts/test-library.mjs"
+    "test:library": "node scripts/test-library.mjs",
+    "test:practice": "node scripts/test-practice.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.2.0",

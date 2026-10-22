@@ -26,6 +26,8 @@
 	import ScoreCard from './ui/ScoreCard.svelte';
 	import ScoreListItem from './ui/ScoreListItem.svelte';
 	import MetadataDialog from './ui/MetadataDialog.svelte';
+	import ScoreImportDialog from './ui/ScoreImportDialog.svelte';
+	let importOpen = $state(false);
 	import ComposerPortrait from './ui/ComposerPortrait.svelte';
 	import IconButton from './ui/IconButton.svelte';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
@@ -194,7 +196,7 @@
 			...score,
 			pdfUrl: source.url || score.pdfUrl,
 			nativePath: source.nativePath || score.nativePath,
-			pdfBlob: isTauri() ? undefined : source.blob || score.pdfBlob
+			pdfBlob: source.blob || score.pdfBlob
 		};
 	}
 	async function openScore(
@@ -531,9 +533,9 @@
 			placeholder="Search your scores"
 			ariaLabel="Search scores" />
 		<div class="header-actions">
-			<button class="folder-button" onclick={chooseFolder}>
+			<button class="folder-button" onclick={() => (importOpen = true)}>
 				<FolderPlus size={17} strokeWidth={2} />
-				<span>{folder ? 'Change folder' : 'Choose folder'}</span>
+				<span>Import scores</span>
 			</button>
 			<IconButton
 				title="Refresh library"
@@ -735,16 +737,16 @@
 					onDeleted={() => (selectedListId = null)}
 					onOpen={(score, entryId) =>
 						void openScore(score, { listId: selectedList.id, entryId })} />
-			{:else if !folder}
+			{:else if !scores.length}
 				<div class="empty">
 					<div class="empty-orb" aria-hidden="true"></div>
-					<h2>Choose a score folder</h2>
+					<h2>Bring your scores together</h2>
 					<p>
-						Point Sonora at the folder where you keep your PDF scores to get
-						started.
+						Import individual PDFs, a batch of scores, or connect a synced
+						folder.
 					</p>
-					<button class="folder-button" onclick={chooseFolder}>
-						<FolderPlus size={17} /><span>Choose folder</span>
+					<button class="folder-button" onclick={() => (importOpen = true)}>
+						<FolderPlus size={17} /><span>Import scores</span>
 					</button>
 				</div>
 			{:else if !filtered.length}
@@ -838,6 +840,11 @@
 			setTimeout(() => (notice = ''), 3000);
 		}} />
 </div>
+
+{#if importOpen}<ScoreImportDialog
+		onClose={() => (importOpen = false)}
+		onImported={refresh}
+		onChooseFolder={chooseFolder} />{/if}
 
 <style>
 	.list-heading {

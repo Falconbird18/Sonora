@@ -286,6 +286,21 @@
 				class:focus-ring={focusSection === 'viewer'}
 				bind:this={viewerSectionEl}>
 				<h3>Score viewer</h3>
+				<label class="row"
+					><div class="row-copy">
+						<strong>Default appearance</strong><span
+							>Practice tools or distraction-free reading</span>
+					</div>
+					<select
+						value={$settings.viewerMode}
+						onchange={(e) =>
+							settings.patch({
+								viewerMode: e.currentTarget.value as 'practice' | 'reading'
+							})}
+						><option value="practice">Practice</option><option value="reading"
+							>Reading</option
+						></select
+					></label>
 				<div class="rows">
 					<label class="row">
 						<div class="row-copy">
@@ -521,7 +536,7 @@
 		color: var(--sonora-text);
 	}
 	.section {
-		scroll-margin-top:110px;
+		scroll-margin-top: 110px;
 		padding: 18px 22px;
 		border-bottom: 1px solid var(--sonora-border);
 	}

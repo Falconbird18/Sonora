@@ -22,6 +22,7 @@ export type AppSettings = {
 	dualPages: boolean;
 	keepAwake: boolean;
 	defaultFit: ViewerFit;
+	viewerMode: 'practice' | 'reading';
 	annotationsVisible: boolean;
 	textSize: number;
 };
@@ -42,6 +43,7 @@ const defaults: AppSettings = {
 	dualPages: false,
 	keepAwake: true,
 	defaultFit: 'page',
+	viewerMode: 'practice',
 	annotationsVisible: true,
 	textSize: 18
 };
@@ -92,6 +94,7 @@ function load(): AppSettings {
 			dualPages: !!parsed.dualPages,
 			keepAwake: parsed.keepAwake !== false,
 			defaultFit: parsed.defaultFit === 'width' ? 'width' : 'page',
+			viewerMode: parsed.viewerMode === 'reading' ? 'reading' : 'practice',
 			annotationsVisible: parsed.annotationsVisible !== false,
 			textSize:
 				typeof parsed.textSize === 'number'

@@ -149,7 +149,9 @@ function adoptMetadata(target: ScoreItem, source: ScoreItem): ScoreItem {
 		thumbnailVersion: source.thumbnailVersion,
 		totalPages: source.totalPages || target.totalPages,
 		addedAt: source.addedAt,
-		collection: source.collection
+		collection: source.collection,
+		annotationLayers: source.annotationLayers,
+		contentHash: source.contentHash
 	});
 }
 
@@ -420,8 +422,9 @@ async function syncBrowserFolder(folder: FolderSource) {
 					: undefined;
 
 			let next = plainScore({
+				...old,
 				id,
-				title: file.name.replace(/\.pdf$/i, ''),
+				title: old?.title ?? file.name.replace(/\.pdf$/i, ''),
 				composer:
 					old?.composer && old.composer !== 'Unknown Composer'
 						? old.composer
