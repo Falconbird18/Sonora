@@ -1,0 +1,76 @@
+{
+  "timestamp": "2026-10-22T13:09:21.636Z",
+  "node": "v26.12.0",
+  "cpu": "Intel(R) Core(TM) Ultra 7 268V",
+  "samples": 7,
+  "rows": [
+    {
+      "name": "groupWorks",
+      "size": 1000,
+      "medianMs": 0.221,
+      "p95Ms": 0.287
+    },
+    {
+      "name": "metadataRepair",
+      "size": 1000,
+      "medianMs": 5.264,
+      "p95Ms": 8.016
+    },
+    {
+      "name": "renameMatching",
+      "size": 1000,
+      "medianMs": 2.704,
+      "p95Ms": 4.44
+    },
+    {
+      "name": "groupWorks",
+      "size": 10000,
+      "medianMs": 1.926,
+      "p95Ms": 5.162
+    },
+    {
+      "name": "metadataRepair",
+      "size": 10000,
+      "medianMs": 177.887,
+      "p95Ms": 446.783
+    },
+    {
+      "name": "renameMatching",
+      "size": 10000,
+      "medianMs": 468.333,
+      "p95Ms": 473.339
+    },
+    {
+      "name": "groupWorks",
+      "size": 50000,
+      "medianMs": 15.338,
+      "p95Ms": 33.112
+    },
+    {
+      "name": "metadataRepair",
+      "size": 50000,
+      "medianMs": 8609.706,
+      "p95Ms": 8965.828
+    },
+    {
+      "name": "renameMatching",
+      "size": 50000,
+      "medianMs": 16912.336,
+      "p95Ms": 27764.754
+    },
+    {
+      "name": "filenameSuggestions",
+      "size": 100,
+      "medianMs": 50.778,
+      "p95Ms": 53.946
+    },
+    {
+      "name": "filenameSuggestions",
+      "size": 1000,
+      "medianMs": 472.353,
+      "p95Ms": 487.489
+    }
+  ],
+  "sourceCommit": "b75397e78d79eb9bc460b1877c4ab59f081e9495",
+  "note": "Captured before implementation changes. Rename matcher extracted verbatim from original removed.find/claimedRemovals path. Reproduce with --ref sourceCommit."
+}

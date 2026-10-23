@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "environment": "Development Chromium 155; 1280x820 fixture container; warm viewer worker; 24-page synthetic scanned PDF",
+  "firstPaintMs": 169.6,
+  "nextMs": 14.9,
+  "previousMs": 23.1,
+  "notes": "Single run. Cached turns include frame completion and a polling interval; 600 ms prefetch settling time is excluded. Not a cold engine startup or native webview measurement.",
+  "checks": ["cached turns", "rapid navigation", "zoom resolution", "dual spread", "resized bitmap", "nonblank page"]
+}

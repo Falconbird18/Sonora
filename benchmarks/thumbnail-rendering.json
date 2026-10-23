@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "environment": "Development Chromium 155; 80 synthetic scanned-PDF fixture rows; cold library mount and background worker",
+  "firstThumbnailMs": 477.8,
+  "newPageThumbnailMs": 201.2,
+  "maxUiGapMs": 93.7,
+  "notes": "Single unpaired cold UI run. Includes real library mounting, initial worker startup, IndexedDB updates, and image decoding. This is broader than the warm PDF-only timer-gap measurements; initial UI stalls are still present.",
+  "checks": ["decoded preview before full batch completes", "new page prioritized", "scanned PDFs"]
+}

@@ -1,4 +1,14 @@
+export interface LibraryFolder {
+	/** Path relative to the connected library directory. */
+	sourcePath?: string;
+	id: string;
+	name: string;
+	parentId: string;
+	createdAt: number;
+}
+
 export interface ScoreItem {
+	folderId?: string;
 	id: string;
 	contentHash?: string;
 	annotationLayers?: AnnotationLayer[];

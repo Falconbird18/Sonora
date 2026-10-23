@@ -18,6 +18,7 @@ export function plainScore(input: ScoreItem): ScoreItem {
 	};
 	for (const key of [
 		'contentHash',
+		'folderId',
 		'workId',
 		'workTitle',
 		'edition',

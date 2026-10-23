@@ -2,13 +2,24 @@
 // This harness uses fixture data; native integration is covered by Rust tests.
 import { mount } from 'svelte';
 import { db } from '../../src/lib/db';
+import {
+	foldersFromPaths,
+	diskFolderId,
+	parentPath
+} from '../../src/lib/libraryFolderPaths';
 import LibraryView from '../../src/lib/LibraryView.svelte';
 import '../../src/app.css';
 if (
 	!import.meta.env.DEV ||
-	(await db.scores.toArray()).some((score) => !score.id.startsWith('review-'))
+	(await db.scores.toArray()).some(
+		(score) =>
+			!score.id.startsWith('review-') &&
+			!score.nativePath?.startsWith('/review/')
+	)
 )
 	throw new Error('Use an empty, isolated review origin.');
+await db.scores.clear();
+await db.libraryFolders.clear();
 const image = await fetch('/tests/ui/score-preview.png').then((r) => r.blob());
 const data = await new Promise<string>((resolve) => {
 	const reader = new FileReader();
@@ -148,9 +159,94 @@ if (
 )
 	throw new Error('Annotation migration failed');
 await db.annotations.delete('review-after:1');
+
+// In-memory disk fixture exercises native path changes through the real UI and catalogue.
+const paths: Record<string, string> = {
+	'review-0': 'Beethoven/Sonatas/First edition.pdf',
+	'review-1': 'Beethoven/Sonatas/Hallberger.pdf',
+	'review-2': 'Beethoven/Sonatas/Violin I.pdf',
+	'review-symphony': 'Beethoven/Symphony No.9.pdf',
+	'review-bach': 'Bach/Cello Suites.pdf',
+	'review-debussy': 'Debussy/Suite bergamasque.pdf'
+};
+const directories = new Set([
+	'Bach',
+	'Beethoven',
+	'Beethoven/Sonatas',
+	'Debussy',
+	'Rehearsal',
+	'Rehearsal/Parts'
+]);
+for (const score of await db.scores.toArray()) {
+	const path = paths[score.id];
+	await db.scores.update(score.id, {
+		sourcePath: path,
+		sourceFolderId: 'library-root',
+		nativePath: `/review/${path}`,
+		folderId: diskFolderId(parentPath(path)),
+		fileSize: 16,
+		fileModifiedAt: 100
+	});
+}
+await db.libraryFolders.bulkPut(foldersFromPaths(directories));
+const diskFiles = new Map(
+	(await db.scores.toArray()).map((score) => [score.sourcePath!, score])
+);
 Object.assign(window, {
 	__TAURI_INTERNALS__: {
-		invoke: async (command: string) => {
+		convertFileSrc: (path: string) => `asset://localhost/${path}`,
+		invoke: async (command: string, args: Record<string, string> = {}) => {
+			if (command === 'list_score_tree')
+				return {
+					directories: [...directories],
+					files: [...diskFiles].map(([path, metadata]) => ({
+						path: `/review/${path}`,
+						relative_path: path,
+						name: path.split('/').at(-1),
+						size: 16,
+						modified_at: 100,
+						metadata
+					}))
+				};
+			if (command === 'create_score_directory') {
+				if (directories.has(args.relativePath))
+					throw Error('A folder with that name already exists.');
+				directories.add(args.relativePath);
+				return;
+			}
+			if (command === 'delete_score_directory') {
+				if (!args.relativePath || !directories.has(args.relativePath))
+					throw Error('Invalid folder deletion');
+				for (const path of [...directories])
+					if (
+						path === args.relativePath ||
+						path.startsWith(`${args.relativePath}/`)
+					)
+						directories.delete(path);
+				for (const path of [...diskFiles.keys()])
+					if (path.startsWith(`${args.relativePath}/`)) diskFiles.delete(path);
+				return;
+			}
+			if (command === 'move_score_entry') {
+				const source = args.sourceRelative,
+					target = args.destinationRelative;
+				if (source === target) return;
+				if (target.startsWith(`${source}/`))
+					throw Error('A folder cannot be moved inside itself.');
+				if (directories.has(target) || diskFiles.has(target))
+					throw Error('An item with that name already exists.');
+				for (const path of [...directories])
+					if (path === source || path.startsWith(`${source}/`)) {
+						directories.delete(path);
+						directories.add(target + path.slice(source.length));
+					}
+				for (const [path, score] of [...diskFiles])
+					if (path === source || path.startsWith(`${source}/`)) {
+						diskFiles.delete(path);
+						diskFiles.set(target + path.slice(source.length), score);
+					}
+				return;
+			}
 			if (command === 'list_score_files') return [];
 			if (command === 'imslp_thumbnail') return data;
 			if (command === 'imslp_search')

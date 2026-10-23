@@ -1,6 +1,13 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import {
+		Trash2,
+		Check,
+		X,
+		Files,
+		House,
+		Pencil,
+		ChevronRight,
 		Clock3,
 		Plus,
 		ListMusic,
@@ -15,13 +22,28 @@
 		Settings,
 		Star
 	} from '@lucide/svelte';
+	import LibrarySelection from './ui/LibrarySelection.svelte';
+	import LibraryFolderItem from './ui/LibraryFolderItem.svelte';
+	import FolderOrganizeDialog from './ui/FolderOrganizeDialog.svelte';
+	import {
+		createDiskFolder,
+		moveDiskEntry,
+		deleteDiskFolder
+	} from './libraryFolders';
+	import {
+		foldersFromPaths,
+		parentPath,
+		diskFolderId,
+		validateFolderName
+	} from './libraryFolderPaths';
 	import SearchField from './ui/SearchField.svelte';
 	import Notice from './ui/Notice.svelte';
 	import ListEditor from './ui/ListEditor.svelte';
 	import AppSelect from './ui/AppSelect.svelte';
 	import { createList } from './lists';
-	import WorkCard from './ui/WorkCard.svelte';
-	import { groupWorks, repairMetadata } from './works';
+
+	import { createLibraryQuery } from './libraryQuery';
+	import { repairMetadata, createRepairContext } from './works';
 	import { formatComposer } from './composerDisplay';
 	import ScoreCard from './ui/ScoreCard.svelte';
 	import ScoreListItem from './ui/ScoreListItem.svelte';
@@ -38,6 +60,7 @@
 	import {
 		chooseAndAddFolder,
 		resolveScoreSource,
+		syncFolder,
 		syncAllFolders
 	} from './folderSync';
 	import {
@@ -54,6 +77,7 @@
 	import { getPdfInfoFromSource } from './pdfUtils';
 	import { isTauri } from './paths';
 	import type {
+		LibraryFolder,
 		FolderSource,
 		ScoreItem,
 		ScoreMetadataUpdate,
@@ -71,7 +95,7 @@
 		) => void;
 		paused?: boolean;
 	} = $props();
-	let scores = $state<ScoreItem[]>([]),
+	let scores = $state.raw<ScoreItem[]>([]),
 		folder = $state<FolderSource | undefined>(),
 		search = $state('');
 	let filter = $state<'all' | 'favorites' | 'recent'>('all'),
@@ -90,7 +114,410 @@
 	let settingsOpen = $state(false);
 	let settingsSection = $state<'sharing' | null>(null);
 	let imslpOpen = $state(false);
-	let selectedWorkId = $state<string | null>(null);
+	let libraryMode = $state<'all' | 'folders'>('folders');
+	let selectedFolderId = $state<string | null>(null);
+	let draggedEntries = $state<{ path: string; directory: boolean }[]>([]);
+	let dropTarget = $state<string | null>(null);
+	let pointerDrag = $state<{
+		id: string;
+		directory: boolean;
+		x: number;
+		y: number;
+		active: boolean;
+	} | null>(null);
+	let pointerPosition = $state({ x: 0, y: 0 });
+	let pointerSource: HTMLElement | null = null;
+	let libraryFolders = $state<LibraryFolder[]>([]);
+	let selectedScores = $state<string[]>([]);
+	let selectedFolders = $state<string[]>([]);
+	let organizeDialog = $state<'create' | 'rename' | 'delete' | null>(null);
+	let folderBusy = $state(false);
+	let folderError = $state('');
+	const selectionCount = $derived(
+		selectedScores.length + selectedFolders.length
+	);
+	const folderById = $derived(new Map(libraryFolders.map((f) => [f.id, f])));
+	const childFolders = $derived(
+		libraryFolders
+			.filter((f) => f.parentId === (selectedFolderId ?? ''))
+			.sort((a, b) => a.name.localeCompare(b.name))
+	);
+	const folderCounts = $derived.by(() => {
+		const counts = new Map<string, { scores: number; folders: number }>();
+		const entry = (id: string) => {
+			let value = counts.get(id);
+			if (!value) {
+				value = { scores: 0, folders: 0 };
+				counts.set(id, value);
+			}
+			return value;
+		};
+		for (const score of scores)
+			entry(diskFolderId(parentPath(score.sourcePath ?? ''))).scores++;
+		for (const f of libraryFolders) entry(f.parentId).folders++;
+		return counts;
+	});
+	const breadcrumbs = $derived.by(() => {
+		const path = folderById.get(selectedFolderId ?? '')?.sourcePath ?? '';
+		let current = '';
+		return path
+			.split('/')
+			.filter(Boolean)
+			.map((name) => {
+				current = current ? `${current}/${name}` : name;
+				return { name, id: diskFolderId(current) };
+			});
+	});
+	const destinationFolders = $derived(
+		libraryFolders
+			.filter(
+				(f) =>
+					!selectedFolders.some(
+						(id) =>
+							f.id === id ||
+							f.sourcePath?.startsWith(`${folderById.get(id)?.sourcePath}/`)
+					)
+			)
+			.map((f) => ({ id: f.id, path: f.sourcePath ?? f.name }))
+	);
+
+	function clearSelection() {
+		selectedScores = [];
+		selectedFolders = [];
+	}
+	function toggleScore(id: string) {
+		selectedScores = selectedScores.includes(id)
+			? selectedScores.filter((value) => value !== id)
+			: [...selectedScores, id];
+	}
+	function toggleFolder(id: string) {
+		selectedFolders = selectedFolders.includes(id)
+			? selectedFolders.filter((value) => value !== id)
+			: [...selectedFolders, id];
+	}
+	function navigateFolder(id: string | null) {
+		libraryMode = 'folders';
+		selectedFolderId = id;
+		selectedListId = null;
+		search = '';
+		composer = null;
+		filter = 'all';
+		clearSelection();
+	}
+	function showOrganize(mode: 'create' | 'rename' | 'delete') {
+		folderError = '';
+		organizeDialog = mode;
+	}
+	$effect(() => {
+		selectedFolderId;
+		libraryMode;
+		filter;
+		composer;
+		selectedListId;
+		untrack(clearSelection);
+	});
+	function showLibrary(mode: 'all' | 'folders') {
+		navigateFolder(null);
+		libraryMode = mode;
+	}
+	function prepareDrag(id: string, directory: boolean) {
+		if (folderBusy || organizing || !folder?.nativePath || !isTauri()) {
+			return false;
+		}
+		const folderIds = directory
+			? selectedFolders.includes(id)
+				? selectedFolders
+				: [id]
+			: selectedScores.includes(id)
+				? selectedFolders
+				: [];
+		const scoreIds = directory
+			? selectedFolders.includes(id)
+				? selectedScores
+				: []
+			: selectedScores.includes(id)
+				? selectedScores
+				: [id];
+		const paths = folderIds
+			.map((value) => folderById.get(value)?.sourcePath)
+			.filter((value): value is string => !!value);
+		draggedEntries = [
+			...paths
+				.filter(
+					(path) =>
+						!paths.some(
+							(other) => other !== path && path.startsWith(`${other}/`)
+						)
+				)
+				.map((path) => ({ path, directory: true })),
+			...scores
+				.filter(
+					(score) =>
+						scoreIds.includes(score.id) &&
+						score.sourcePath &&
+						score.sourceFolderId === folder?.id &&
+						!paths.some((path) => score.sourcePath!.startsWith(`${path}/`))
+				)
+				.map((score) => ({ path: score.sourcePath!, directory: false }))
+		];
+		if (!draggedEntries.length) {
+			return false;
+		}
+		return true;
+	}
+	function startDrag(event: DragEvent, id: string, directory: boolean) {
+		if (!prepareDrag(id, directory)) {
+			event.preventDefault();
+			return;
+		}
+		event.dataTransfer?.setData('application/x-sonora-library-items', 'move');
+		if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+	}
+	function pointerDown(event: PointerEvent, id: string, directory: boolean) {
+		if (
+			event.button !== 0 ||
+			event.pointerType === 'touch' ||
+			folderBusy ||
+			!folder?.nativePath ||
+			!isTauri()
+		)
+			return;
+		if (
+			(event.target as HTMLElement).closest(
+				'.selection, .card-actions, .list-actions'
+			)
+		)
+			return;
+		pointerDrag = {
+			id,
+			directory,
+			x: event.clientX,
+			y: event.clientY,
+			active: false
+		};
+		pointerSource = event.currentTarget as HTMLElement;
+	}
+	function pointerMove(event: PointerEvent) {
+		if (!pointerDrag) return;
+		if (!pointerDrag.active) {
+			if (
+				Math.hypot(
+					event.clientX - pointerDrag.x,
+					event.clientY - pointerDrag.y
+				) < 6
+			)
+				return;
+			if (!prepareDrag(pointerDrag.id, pointerDrag.directory)) {
+				pointerDrag = null;
+				return;
+			}
+			pointerDrag.active = true;
+			pointerSource?.setPointerCapture(event.pointerId);
+		}
+		event.preventDefault();
+		pointerPosition = { x: event.clientX + 16, y: event.clientY + 14 };
+		const hit = document
+			.elementFromPoint(event.clientX, event.clientY)
+			?.closest<HTMLElement>('[data-folder-drop]');
+		const id = hit?.getAttribute('data-folder-drop');
+		dropTarget = id !== null && id !== undefined && acceptsDrop(id) ? id : null;
+	}
+	function pointerUp(event: PointerEvent) {
+		const active = pointerDrag?.active;
+		pointerDrag = null;
+		if (pointerSource?.hasPointerCapture(event.pointerId))
+			pointerSource.releasePointerCapture(event.pointerId);
+		pointerSource = null;
+		if (!active) return;
+		// Suppress the click generated by releasing a dragged folder on its destination.
+		const blockClick = (click: MouseEvent) => {
+			click.preventDefault();
+			click.stopImmediatePropagation();
+		};
+		document.addEventListener('click', blockClick, {
+			capture: true,
+			once: true
+		});
+		setTimeout(
+			() => document.removeEventListener('click', blockClick, true),
+			250
+		);
+		const target = dropTarget;
+		if (target !== null) void dropEntries(event, target);
+		else endDrag();
+	}
+	function cancelPointerDrag() {
+		pointerDrag = null;
+		pointerSource = null;
+		endDrag();
+	}
+
+	function endDrag() {
+		draggedEntries = [];
+		dropTarget = null;
+	}
+	function acceptsDrop(id: string) {
+		if (!draggedEntries.length || folderBusy || organizing) return false;
+		const target = folderById.get(id)?.sourcePath ?? '';
+		return (
+			!draggedEntries.some(
+				(entry) =>
+					entry.directory &&
+					(target === entry.path || target.startsWith(`${entry.path}/`))
+			) && draggedEntries.some((entry) => parentPath(entry.path) !== target)
+		);
+	}
+	function dragOver(event: DragEvent, id: string) {
+		if (!acceptsDrop(id)) return;
+		event.preventDefault();
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+		dropTarget = id;
+	}
+	async function dropEntries(event: DragEvent | PointerEvent, id: string) {
+		if (!acceptsDrop(id) || !folder) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const entries = [...draggedEntries];
+		const target = folderById.get(id)?.sourcePath ?? '';
+		endDrag();
+		folderBusy = true;
+		error = '';
+		try {
+			// A focus-triggered scan may still be finishing when the user starts dragging.
+			const waitStarted = Date.now();
+			while (syncing) {
+				if (Date.now() - waitStarted > 30_000)
+					throw Error(
+						'The library is still refreshing. Try the move again in a moment.'
+					);
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			for (const entry of entries)
+				await moveDiskEntry(
+					folder,
+					entry.path,
+					[target, entry.path.split('/').at(-1)!].filter(Boolean).join('/'),
+					entry.directory
+				);
+			await syncFolder(folder);
+			await refresh();
+			clearSelection();
+			notice = `Moved ${entries.length} ${entries.length === 1 ? 'item' : 'items'}`;
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+			try {
+				await syncFolder(folder);
+				await refresh();
+			} catch {
+				/* keep original error */
+			}
+		} finally {
+			folderBusy = false;
+		}
+	}
+
+	async function submitOrganization(
+		parentId: string,
+		name: string,
+		moveSelected: boolean
+	) {
+		if (!folder) {
+			folderError = 'Connect a score folder before organizing files.';
+			return;
+		}
+		folderBusy = true;
+		folderError = '';
+		try {
+			const parent = folderById.get(parentId)?.sourcePath ?? '';
+			const folders = selectedFolders
+				.map((id) => folderById.get(id)!)
+				.filter(Boolean);
+			const selectedPaths = folders.map((f) => f.sourcePath!);
+			const entries = [
+				...folders
+					.filter(
+						(f) =>
+							!selectedPaths.some(
+								(path) =>
+									path !== f.sourcePath && f.sourcePath!.startsWith(`${path}/`)
+							)
+					)
+					.map((f) => ({ path: f.sourcePath!, directory: true })),
+				...scores
+					.filter(
+						(score) =>
+							organizeDialog !== 'delete' &&
+							selectedScores.includes(score.id) &&
+							!selectedPaths.some((path) =>
+								score.sourcePath?.startsWith(`${path}/`)
+							)
+					)
+					.map((score) => {
+						if (!score.sourcePath || score.sourceFolderId !== folder!.id)
+							throw Error(
+								'This score must be imported into the connected folder before moving it.'
+							);
+						return { path: score.sourcePath, directory: false };
+					})
+			];
+			if (organizeDialog === 'delete') {
+				for (const entry of entries.filter((entry) => entry.directory))
+					await deleteDiskFolder(folder, entry.path);
+			} else if (organizeDialog === 'rename') {
+				const source = folders[0]?.sourcePath;
+				if (!source) throw Error('Select one folder to rename.');
+				const target = [parentPath(source), validateFolderName(name)]
+					.filter(Boolean)
+					.join('/');
+				await moveDiskEntry(folder, source, target, true);
+			} else {
+				let targetParent = parent;
+				if (organizeDialog === 'create') {
+					const proposed = [parent, validateFolderName(name)]
+						.filter(Boolean)
+						.join('/');
+					if (
+						moveSelected &&
+						entries.some(
+							(entry) =>
+								entry.directory && proposed.startsWith(`${entry.path}/`)
+						)
+					)
+						throw Error('Choose a location outside the selected folder.');
+					targetParent = await createDiskFolder(folder, parent, name);
+				}
+				if (moveSelected)
+					for (const entry of entries) {
+						const destination = [targetParent, entry.path.split('/').at(-1)!]
+							.filter(Boolean)
+							.join('/');
+						await moveDiskEntry(
+							folder,
+							entry.path,
+							destination,
+							entry.directory
+						);
+					}
+			}
+			await syncFolder(folder);
+			await refresh();
+			clearSelection();
+			if (organizeDialog === 'create') navigateFolder(parentId || null);
+			organizeDialog = null;
+			notice = 'Folder updated';
+		} catch (e) {
+			folderError = e instanceof Error ? e.message : String(e);
+			// A batch can stop after an earlier item moved; always show the actual disk state.
+			try {
+				await syncFolder(folder);
+				await refresh();
+			} catch {
+				/* retain the actionable original error */
+			}
+		} finally {
+			folderBusy = false;
+		}
+	}
 	let lists = $state<ScoreList[]>([]);
 	let selectedListId = $state<string | null>(null);
 	const selectedList = $derived(
@@ -101,7 +528,7 @@
 			const list = await createList('Untitled program');
 			await refresh();
 			selectedListId = list.id;
-			selectedWorkId = null;
+			selectedFolderId = null;
 		} catch (e) {
 			error = String(e);
 		}
@@ -136,19 +563,27 @@
 			db.scores.orderBy('addedAt').reverse().toArray(),
 			db.folders.get('library-root')
 		]);
+		const repairContext = createRepairContext(nextScores);
+		const repaired: Array<{ key: string; changes: Partial<ScoreItem> }> = [];
 		for (const score of nextScores) {
-			const patch = repairMetadata(score, nextScores);
+			const patch = repairMetadata(score, nextScores, repairContext);
 			if (Object.keys(patch).length) {
-				await db.scores.update(score.id, patch);
 				Object.assign(score, patch);
+				repaired.push({ key: score.id, changes: patch });
 			}
 		}
+		if (repaired.length) await db.scores.bulkUpdate(repaired);
 		lists = await db.lists.orderBy('updatedAt').reverse().toArray();
+		const cachedFolders = await db.libraryFolders.toArray();
+		libraryFolders = foldersFromPaths([
+			...cachedFolders.map((f) => f.sourcePath ?? ''),
+			...nextScores.map((score) => parentPath(score.sourcePath ?? ''))
+		]);
 		scores = nextScores;
 		folder = nextFolder;
 	}
 	async function sync() {
-		if (paused || organizing) return;
+		if (paused || organizing || folderBusy || draggedEntries.length) return;
 		if (syncing) {
 			syncPending = true;
 			return;
@@ -194,6 +629,7 @@
 		const source = resolveScoreSource(score, folder);
 		return {
 			...score,
+			thumbnailUrl: thumbnailPreviews[score.id] || score.thumbnailUrl,
 			pdfUrl: source.url || score.pdfUrl,
 			nativePath: source.nativePath || score.nativePath,
 			pdfBlob: source.blob || score.pdfBlob
@@ -330,49 +766,78 @@
 			error = e instanceof Error ? e.message : 'Could not remove this score';
 		}
 	}
+	let thumbnailPreviews = $state<Record<string, string>>({});
+	const failedThumbnails = new Set<string>();
+	let backfillTimer: ReturnType<typeof setTimeout> | undefined;
+	let libraryDisposed = false;
 	async function backfillThumbnails() {
-		if (backfillRunning || paused) return;
+		if (backfillRunning || paused || libraryDisposed) return;
 		backfillRunning = true;
 		try {
-			const missing = scores.filter(
-				(score) =>
-					!score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
-			);
-			for (const score of missing.slice(0, 4)) {
-				if (paused) break;
+			const needsThumbnail = (score: ScoreItem) =>
+				!failedThumbnails.has(score.id) &&
+				(!score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION);
+			const visible = visibleEditions;
+			const visibleIds = new Set(visible.map((score) => score.id));
+			const pageAtStart = currentPage,
+				folderAtStart = selectedFolderId;
+			const missing = [
+				...visible.filter(needsThumbnail),
+				...scores.filter(
+					(score) => !visibleIds.has(score.id) && needsThumbnail(score)
+				)
+			];
+			const patches = new Map<string, Partial<ScoreItem>>();
+			for (const score of missing.slice(0, 8)) {
+				if (
+					paused ||
+					libraryDisposed ||
+					pageAtStart !== currentPage ||
+					folderAtStart !== selectedFolderId
+				)
+					break;
 				try {
 					const source = resolveScoreSource(score, folder);
-					if (!source.url && !source.blob && !source.nativePath) continue;
+					if (!source.url && !source.blob && !source.nativePath) {
+						failedThumbnails.add(score.id);
+						continue;
+					}
 					const info = await getPdfInfoFromSource(source);
-					if (!info.thumbnailUrl) continue;
-					await db.scores.update(score.id, {
+					if (!info.thumbnailUrl) {
+						failedThumbnails.add(score.id);
+						continue;
+					}
+					const patch = {
 						thumbnailUrl: info.thumbnailUrl,
 						thumbnailVersion: THUMBNAIL_VERSION,
 						totalPages: info.totalPages || score.totalPages || 1
-					});
-					scores = scores.map((item) =>
-						item.id === score.id
-							? {
-									...item,
-									thumbnailUrl: info.thumbnailUrl,
-									thumbnailVersion: THUMBNAIL_VERSION,
-									totalPages: info.totalPages || item.totalPages || 1
-								}
-							: item
-					);
+					};
+					await db.scores.update(score.id, patch);
+					patches.set(score.id, patch);
+					if (visibleIds.has(score.id))
+						thumbnailPreviews[score.id] = info.thumbnailUrl;
 				} catch (err) {
+					failedThumbnails.add(score.id);
 					console.warn('Thumbnail backfill failed', score.title, err);
 				}
-				await new Promise<void>((resolve) => setTimeout(resolve, 24));
+				await new Promise<void>((resolve) => setTimeout(resolve, 0));
 			}
+			if (patches.size && !libraryDisposed)
+				scores = scores.map((score) =>
+					patches.has(score.id) ? { ...score, ...patches.get(score.id) } : score
+				);
+			for (const id of patches.keys()) delete thumbnailPreviews[id];
 			if (
 				!paused &&
+				!libraryDisposed &&
 				scores.some(
 					(score) =>
-						!score.thumbnailUrl || score.thumbnailVersion !== THUMBNAIL_VERSION
+						!failedThumbnails.has(score.id) &&
+						(!score.thumbnailUrl ||
+							score.thumbnailVersion !== THUMBNAIL_VERSION)
 				)
 			)
-				setTimeout(() => void backfillThumbnails(), 700);
+				backfillTimer = setTimeout(() => void backfillThumbnails(), 50);
 		} finally {
 			backfillRunning = false;
 		}
@@ -426,6 +891,8 @@
 		window.addEventListener('focus', wake);
 		return () => {
 			disposed = true;
+			libraryDisposed = true;
+			clearTimeout(backfillTimer);
 			clearInterval(timer);
 			window.removeEventListener('focus', wake);
 		};
@@ -437,87 +904,112 @@
 		);
 	});
 	$effect(() => {
-		if (!paused) void backfillThumbnails();
+		visibleEditions;
+		if (!paused) untrack(() => void backfillThumbnails());
 	});
 	const composers = $derived.by(() => {
 		const counts: Record<string, number> = {};
-		for (const work of groupWorks(scores)) {
-			const name = work.composer || 'Unknown Composer';
+		for (const score of scores) {
+			const name = score.composer || 'Unknown Composer';
 			counts[name] = (counts[name] ?? 0) + 1;
 		}
 		return counts;
 	});
-	const filtered = $derived(
-		scores
-			.filter((score) => !composer || score.composer === composer)
-			.filter(
-				(score) =>
-					filter === 'all' ||
-					(filter === 'favorites' ? !!score.favorite : !!score.lastOpenedAt)
-			)
-			.filter((score) => {
-				const query = search.trim().toLowerCase();
-				return (
-					!query ||
-					score.title.toLowerCase().includes(query) ||
-					score.composer.toLowerCase().includes(query) ||
-					[
-						score.workTitle,
-						score.edition,
-						score.catalogue,
-						score.key,
-						score.instruments,
-						score.publisher,
-						score.editor
-					].some((value) => value?.toLowerCase().includes(query)) ||
-					(score.tags ?? []).some((tag) => tag.toLowerCase().includes(query))
-				);
-			})
-			.sort((a, b) =>
-				sort === 'title'
-					? a.title.localeCompare(b.title)
-					: sort === 'composer'
-						? a.composer.localeCompare(b.composer) ||
-							a.title.localeCompare(b.title)
-						: (b.lastOpenedAt || b.addedAt) - (a.lastOpenedAt || a.addedAt)
-			)
-	);
-	const works = $derived.by(() => {
-		const all = new Map(groupWorks(scores).map((work) => [work.id, work]));
-		return groupWorks(filtered).map((work) => all.get(work.id) ?? work);
-	});
+	const queryLibrary = $derived(createLibraryQuery(scores));
+	const filtered = $derived(queryLibrary({ search, composer, filter, sort }));
 	$effect(() => {
 		search;
 		selectedListId = null;
-		selectedWorkId = null;
 	});
-	const selectedWork = $derived(
-		groupWorks(scores).find((work) => work.id === selectedWorkId)
+	const selectedFolder = $derived(
+		selectedFolderId ? folderById.get(selectedFolderId) : undefined
 	);
-	const editions = $derived(selectedWork?.scores ?? []);
+	const editions = $derived(
+		filtered.filter((score) =>
+			libraryMode === 'all' || search || composer || filter !== 'all'
+				? true
+				: diskFolderId(parentPath(score.sourcePath ?? '')) ===
+					(selectedFolderId ?? '')
+		)
+	);
+	const displayedFolders = $derived(
+		libraryMode === 'all' || search || composer || filter !== 'all'
+			? []
+			: childFolders
+	);
+	const PAGE_SIZE = 60;
+	let libraryPage = $state(0);
+	const pageCount = $derived(
+		Math.max(
+			1,
+			Math.ceil((editions.length + displayedFolders.length) / PAGE_SIZE)
+		)
+	);
+	const currentPage = $derived(Math.min(libraryPage, pageCount - 1));
+	const visibleFolders = $derived(
+		displayedFolders.slice(
+			currentPage * PAGE_SIZE,
+			(currentPage + 1) * PAGE_SIZE
+		)
+	);
+	const visibleEditions = $derived(
+		editions.slice(
+			Math.max(0, currentPage * PAGE_SIZE - displayedFolders.length),
+			Math.max(0, (currentPage + 1) * PAGE_SIZE - displayedFolders.length)
+		)
+	);
+	$effect(() => {
+		search;
+		composer;
+		filter;
+		sort;
+		selectedFolderId;
+		libraryMode;
+		libraryPage = 0;
+	});
 	const currentTitle = $derived(
-		selectedList
-			? selectedList.name
-			: selectedWork
-				? selectedWork.title
-				: composer
-					? formatComposer(composer, $settings.composerDisplay)
-					: filter === 'favorites'
-						? 'Favorites'
-						: filter === 'recent'
-							? 'Recently opened'
-							: 'All works'
+		search
+			? 'Search results'
+			: selectedList
+				? selectedList.name
+				: selectedFolder
+					? selectedFolder.name
+					: composer
+						? formatComposer(composer, $settings.composerDisplay)
+						: filter === 'favorites'
+							? 'Favorites'
+							: filter === 'recent'
+								? 'Recently opened'
+								: libraryMode === 'all'
+									? 'All Scores'
+									: 'Folders'
 	);
 </script>
 
 <svelte:window
+	onpointermove={pointerMove}
+	onpointerup={pointerUp}
+	onpointercancel={cancelPointerDrag}
+	onblur={cancelPointerDrag}
 	onclick={() => closeMenu()}
 	onkeydown={(event) => {
 		if (event.key === 'Escape') {
+			if (pointerDrag?.active) {
+				cancelPointerDrag();
+				return;
+			}
 			closeMenu();
+			if (organizeDialog) {
+				if (!folderBusy) organizeDialog = null;
+				return;
+			}
+			if (selectionCount) {
+				clearSelection();
+				return;
+			}
 			if (metadata) metadata = null;
 			if (imslpOpen) imslpOpen = false;
-			else if (selectedWorkId) selectedWorkId = null;
+			else if (selectedFolderId) selectedFolderId = null;
 			else if (settingsOpen) settingsOpen = false;
 		}
 	}} />
@@ -602,20 +1094,31 @@
 		<aside class="sidebar">
 			<nav aria-label="Library filters">
 				<button
-					class:active={!selectedList && filter === 'all' && !composer}
-					onclick={() => {
-						selectedWorkId = null;
-						selectedListId = null;
-						filter = 'all';
-						composer = null;
-					}}>
-					<Grid2X2 size={16} /><span>All works</span><b
-						>{groupWorks(scores).length}</b>
-				</button>
+					class:active={!selectedList &&
+						filter === 'all' &&
+						!composer &&
+						libraryMode === 'all'}
+					onclick={() => showLibrary('all')}
+					><Files size={16} /><span>All Scores</span><b>{scores.length}</b
+					></button>
+				<button
+					class:active={!selectedList &&
+						filter === 'all' &&
+						!composer &&
+						libraryMode === 'folders'}
+					class:drop-target={dropTarget === ''}
+					data-folder-drop=""
+					ondragover={(event) => dragOver(event, '')}
+					ondragleave={() => (dropTarget = null)}
+					ondrop={(event) => void dropEntries(event, '')}
+					onclick={() => showLibrary('folders')}
+					><FolderOpen size={16} /><span>Folders</span><b
+						>{libraryFolders.length}</b
+					></button>
 				<button
 					class:active={!selectedList && filter === 'recent'}
 					onclick={() => {
-						selectedWorkId = null;
+						selectedFolderId = null;
 						selectedListId = null;
 						filter = 'recent';
 						composer = null;
@@ -623,7 +1126,7 @@
 				<button
 					class:active={!selectedList && filter === 'favorites'}
 					onclick={() => {
-						selectedWorkId = null;
+						selectedFolderId = null;
 						selectedListId = null;
 						filter = 'favorites';
 						composer = null;
@@ -642,7 +1145,7 @@
 						class:active={selectedListId === list.id}
 						onclick={() => {
 							selectedListId = list.id;
-							selectedWorkId = null;
+							selectedFolderId = null;
 						}}
 						><ListMusic size={16} /><span>{list.name}</span><b
 							>{list.entries.length}</b
@@ -673,7 +1176,7 @@
 						<button
 							class:active={!selectedList && composer === name}
 							onclick={() => {
-								selectedWorkId = null;
+								selectedFolderId = null;
 								selectedListId = null;
 								composer = name;
 								filter = 'all';
@@ -689,26 +1192,44 @@
 		<main class="main">
 			<div class="toolbar">
 				<div>
-					{#if selectedWork}<button
-							class="work-back"
-							onclick={() => (selectedWorkId = null)}>← All works</button
-						>{/if}
+					{#if selectedFolder}
+						<nav class="breadcrumbs" aria-label="Folder path">
+							<button
+								class:drop-target={dropTarget === ''}
+								data-folder-drop=""
+								ondragover={(event) => dragOver(event, '')}
+								ondragleave={() => (dropTarget = null)}
+								ondrop={(event) => void dropEntries(event, '')}
+								onclick={() => navigateFolder(null)}
+								><House size={15} /><span>Folders</span></button>
+							{#each breadcrumbs as crumb (crumb.id)}<ChevronRight
+									size={13} /><button
+									aria-current={crumb.id === selectedFolderId
+										? 'page'
+										: undefined}
+									class:drop-target={dropTarget === crumb.id}
+									data-folder-drop={crumb.id}
+									ondragover={(event) => dragOver(event, crumb.id)}
+									ondragleave={() => (dropTarget = null)}
+									ondrop={(event) => void dropEntries(event, crumb.id)}
+									onclick={() => navigateFolder(crumb.id)}>{crumb.name}</button
+								>{/each}
+						</nav>
+					{/if}
 					<h1>{currentTitle}</h1>
 					<span
-						>{selectedList
-							? selectedList.entries.length
-							: selectedWork
-								? editions.length
-								: works.length}
-						{selectedList
-							? 'scores in performance order'
-							: selectedWork
-								? 'editions & parts'
-								: works.length === 1
-									? 'work'
-									: 'works'}</span>
+						>{selectedList ? selectedList.entries.length : editions.length} scores{!selectedList &&
+						displayedFolders.length
+							? ` · ${displayedFolders.length} folders`
+							: ''}</span>
 				</div>
 				<div class="toolbar-actions">
+					{#if !selectedList}<button
+							class="new-folder-button"
+							disabled={!folder || folderBusy || syncing || organizing}
+							onclick={() => showOrganize('create')}
+							><FolderPlus size={16} /><span>New folder</span></button
+						>{/if}
 					{#if !selectedList}<AppSelect
 							bind:value={sort}
 							label="Sort scores"
@@ -729,6 +1250,40 @@
 					</div>
 				</div>
 			</div>
+			{#if !selectedList && selectionCount}
+				<div
+					class="selection-toolbar"
+					role="toolbar"
+					aria-label="Selection actions">
+					<span class="selection-count"
+						><span class="selection-dot"><Check size={13} /></span
+						>{selectionCount} selected</span>
+
+					{#if selectedFolders.length === 1 && !selectedScores.length}<button
+							onclick={() => showOrganize('rename')}
+							><Pencil size={15} />Rename</button
+						>{/if}
+					{#if selectedFolders.length}<button
+							class="delete-folders"
+							disabled={folderBusy || syncing}
+							onclick={() => showOrganize('delete')}
+							><Trash2 size={15} />Delete {selectedFolders.length === 1
+								? 'folder'
+								: 'folders'}</button
+						>{/if}
+					<button
+						class="select-all"
+						onclick={() => {
+							selectedScores = editions.map((s) => s.id);
+							selectedFolders = displayedFolders.map((f) => f.id);
+						}}>Select all</button>
+					<button
+						class="clear-selection"
+						aria-label="Clear selection"
+						onclick={clearSelection}><X size={17} /></button>
+				</div>
+			{/if}
+
 			{#if selectedList}
 				<ListEditor
 					list={selectedList}
@@ -737,7 +1292,7 @@
 					onDeleted={() => (selectedListId = null)}
 					onOpen={(score, entryId) =>
 						void openScore(score, { listId: selectedList.id, entryId })} />
-			{:else if !scores.length}
+			{:else if !scores.length && !displayedFolders.length}
 				<div class="empty">
 					<div class="empty-orb" aria-hidden="true"></div>
 					<h2>Bring your scores together</h2>
@@ -749,55 +1304,137 @@
 						<FolderPlus size={17} /><span>Import scores</span>
 					</button>
 				</div>
-			{:else if !filtered.length}
+			{:else if !editions.length && !displayedFolders.length}
 				<div class="empty">
-					<h2>No scores match</h2>
-					<p>Try another search or filter, or refresh the library.</p>
+					<h2>
+						{search || composer || filter !== 'all'
+							? 'No scores match'
+							: 'No scores in this folder'}
+					</h2>
+					<p>Move scores here, open a subfolder, or try another search.</p>
 				</div>
-			{:else if !selectedWork}
+			{:else}
 				<div
 					class:score-grid={view === 'grid'}
 					class:score-list={view === 'list'}>
-					{#each works as work (work.id)}<WorkCard
-							{work}
+					{#each visibleFolders as f (f.id)}
+						<LibrarySelection
+							label={`Select folder ${f.name}`}
+							dropId={f.id}
+							onPointerDown={(event) => pointerDown(event, f.id, true)}
 							list={view === 'list'}
-							onOpen={() => (selectedWorkId = work.id)} />{/each}
-				</div>
-			{:else if view === 'list'}
-				<div class="score-list">
-					{#each editions as score (score.id)}
-						<ScoreListItem
-							{score}
-							opening={openingId === score.id}
-							menuOpen={menuScoreId === score.id}
-							onOpen={(s) => void openScore(s)}
-							onToggleFavorite={toggleFavorite}
-							onToggleMenu={toggleMenu}
-							onEditTags={editMetadata}
-							onDownload={downloadScoreFile}
-							onPrint={printScoreFile}
-							onDelete={deleteScore} />
+							selected={selectedFolders.includes(f.id)}
+							selecting={!!selectionCount}
+							onToggle={() => toggleFolder(f.id)}
+							draggable={false}
+							onDragStart={(event) => startDrag(event, f.id, true)}
+							onDragEnd={endDrag}
+							dropActive={dropTarget === f.id}
+							onDragOver={(event) => dragOver(event, f.id)}
+							onDragLeave={() => (dropTarget = null)}
+							onDrop={(event) => void dropEntries(event, f.id)}>
+							<LibraryFolderItem
+								folder={f}
+								draggable={false}
+								list={view === 'list'}
+								scoreCount={folderCounts.get(f.id)?.scores ?? 0}
+								folderCount={folderCounts.get(f.id)?.folders ?? 0}
+								onOpen={() =>
+									selectionCount ? toggleFolder(f.id) : navigateFolder(f.id)} />
+						</LibrarySelection>
 					{/each}
-				</div>
-			{:else}
-				<div class="score-grid">
-					{#each editions as score (score.id)}
-						<ScoreCard
-							{score}
-							opening={openingId === score.id}
-							menuOpen={menuScoreId === score.id}
-							onOpen={(s) => void openScore(s)}
-							onToggleFavorite={toggleFavorite}
-							onToggleMenu={toggleMenu}
-							onEditTags={editMetadata}
-							onDownload={downloadScoreFile}
-							onPrint={printScoreFile}
-							onDelete={deleteScore} />
+					{#each visibleEditions as score (score.id)}
+						<LibrarySelection
+							label={`Select ${score.title}`}
+							onPointerDown={(event) => pointerDown(event, score.id, false)}
+							list={view === 'list'}
+							selected={selectedScores.includes(score.id)}
+							selecting={!!selectionCount}
+							onToggle={() => toggleScore(score.id)}
+							draggable={!!folder?.nativePath &&
+								!!score.sourcePath &&
+								!folderBusy}
+							onDragStart={(event) => startDrag(event, score.id, false)}
+							onDragEnd={endDrag}>
+							{#if view === 'list'}<ScoreListItem
+									{score}
+									previewUrl={thumbnailPreviews[score.id]}
+									opening={openingId === score.id}
+									menuOpen={menuScoreId === score.id}
+									onOpen={(s) =>
+										selectionCount ? toggleScore(s.id) : void openScore(s)}
+									onToggleFavorite={toggleFavorite}
+									onToggleMenu={toggleMenu}
+									onEditTags={editMetadata}
+									onDownload={downloadScoreFile}
+									onPrint={printScoreFile}
+									onDelete={deleteScore} />
+							{:else}<ScoreCard
+									{score}
+									previewUrl={thumbnailPreviews[score.id]}
+									opening={openingId === score.id}
+									menuOpen={menuScoreId === score.id}
+									onOpen={(s) =>
+										selectionCount ? toggleScore(s.id) : void openScore(s)}
+									onToggleFavorite={toggleFavorite}
+									onToggleMenu={toggleMenu}
+									onEditTags={editMetadata}
+									onDownload={downloadScoreFile}
+									onPrint={printScoreFile}
+									onDelete={deleteScore} />{/if}
+						</LibrarySelection>
 					{/each}
 				</div>
 			{/if}
+			{#if !selectedList && pageCount > 1}
+				<nav class="pagination" aria-label="Library pages">
+					<button
+						disabled={currentPage === 0}
+						onclick={() => (libraryPage = currentPage - 1)}>Previous</button>
+					<span aria-live="polite">Page {currentPage + 1} of {pageCount}</span>
+					<button
+						disabled={currentPage + 1 >= pageCount}
+						onclick={() => (libraryPage = currentPage + 1)}>Next</button>
+				</nav>
+			{/if}
 		</main>
 	</div>
+
+	{#if pointerDrag?.active}
+		<div
+			class="drag-preview"
+			style:left={`${pointerPosition.x}px`}
+			style:top={`${pointerPosition.y}px`}>
+			<FolderOpen size={18} />{draggedEntries.length === 1
+				? draggedEntries[0].path.split('/').at(-1)
+				: `${draggedEntries.length} items`}
+		</div>
+	{/if}
+
+	{#if organizeDialog}
+		<FolderOrganizeDialog
+			mode={organizeDialog}
+			folders={destinationFolders}
+			initialParent={selectedFolderId ?? ''}
+			initialName={organizeDialog === 'rename'
+				? (folderById.get(selectedFolders[0])?.name ?? '')
+				: ''}
+			busy={folderBusy}
+			error={folderError}
+			count={selectionCount}
+			deletePaths={selectedFolders
+				.map((id) => folderById.get(id)?.sourcePath ?? '')
+				.filter(Boolean)}
+			deleteScoreCount={scores.filter((score) =>
+				selectedFolders.some((id) =>
+					score.sourcePath?.startsWith(`${folderById.get(id)?.sourcePath}/`)
+				)
+			).length}
+			onSubmit={submitOrganization}
+			onClose={() => {
+				if (!folderBusy) organizeDialog = null;
+			}} />
+	{/if}
 
 	{#if metadata}
 		<MetadataDialog
@@ -847,6 +1484,145 @@
 		onChooseFolder={chooseFolder} />{/if}
 
 <style>
+	.breadcrumbs {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 5px;
+		margin-bottom: 10px;
+		color: var(--sonora-text-muted);
+	}
+	.breadcrumbs button {
+		border: 0;
+		background: transparent;
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		min-height: 36px;
+		padding: 6px 10px;
+		border-radius: 7px;
+		font: inherit;
+		font-size: 12px;
+		color: inherit;
+		cursor: pointer;
+	}
+	.breadcrumbs button:hover,
+	.breadcrumbs button[aria-current='page'] {
+		color: var(--sonora-text);
+	}
+	.selection-toolbar {
+		position: fixed;
+		left: calc(50% + 120px);
+		transform: translateX(-50%);
+		bottom: 24px;
+		z-index: 40;
+		max-width: calc(100vw - 48px);
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 9px 12px;
+		margin-bottom: 0;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: 12px;
+		background: var(--sonora-bg-elevated);
+		box-shadow: var(--sonora-shadow-sm);
+		flex-wrap: wrap;
+	}
+	.selection-count {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		font-size: 13px;
+		font-weight: 550;
+		margin-right: 16px;
+	}
+	.selection-dot {
+		display: grid;
+		place-items: center;
+		width: 21px;
+		height: 21px;
+		border-radius: 50%;
+		background: var(--sonora-accent);
+		color: var(--sonora-accent-contrast);
+	}
+	.selection-toolbar button {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 7px;
+		padding: 8px 10px;
+		border: 0;
+		border-radius: 7px;
+		background: transparent;
+		color: var(--sonora-text-secondary);
+		font: inherit;
+		font-size: 12px;
+		cursor: pointer;
+	}
+	.selection-toolbar button:hover {
+		color: var(--sonora-text);
+		background: var(--sonora-bg-hover);
+	}
+	.selection-toolbar .delete-folders {
+		color: var(--sonora-danger);
+	}
+
+	.selection-toolbar .select-all {
+		margin-left: auto;
+		color: var(--sonora-text-muted);
+	}
+	.selection-toolbar .clear-selection {
+		padding: 8px;
+	}
+
+	.drop-target {
+		outline: 2px solid var(--sonora-accent);
+		outline-offset: -2px;
+		background: var(--sonora-accent-soft) !important;
+	}
+	.new-folder-button {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 10px 12px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: 8px;
+		background: var(--sonora-bg-elevated);
+		color: var(--sonora-text-secondary);
+		font: inherit;
+		font-size: 12px;
+		cursor: pointer;
+	}
+	.new-folder-button:hover {
+		color: var(--sonora-text);
+		background: var(--sonora-bg-hover);
+	}
+	.new-folder-button:disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+	@media (max-width: 900px) {
+		.selection-toolbar {
+			left: 50%;
+		}
+	}
+
+	.drag-preview {
+		position: fixed;
+		z-index: 300;
+		pointer-events: none;
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		padding: 11px 15px;
+		border: 1px solid var(--sonora-accent);
+		border-radius: 10px;
+		color: var(--sonora-text);
+		background: var(--sonora-bg-elevated);
+		box-shadow: var(--sonora-shadow-lg);
+		font-size: 13px;
+	}
+
 	.list-heading {
 		display: flex;
 		justify-content: space-between;
@@ -867,14 +1643,6 @@
 		color: var(--sonora-accent);
 		border: 1px solid var(--sonora-border-focus);
 		border-radius: var(--sonora-radius-md);
-	}
-	.work-back {
-		background: transparent;
-		border: 0;
-		color: var(--sonora-accent);
-		padding: 4px 0;
-		margin-bottom: 8px;
-		cursor: pointer;
 	}
 	.library {
 		height: 100%;
@@ -1038,7 +1806,7 @@
 	.main {
 		min-width: 0;
 		overflow-y: auto;
-		padding: 24px 28px 40px;
+		padding: 24px 28px 104px;
 	}
 	.toolbar {
 		display: flex;
@@ -1092,6 +1860,17 @@
 		background: var(--sonora-bg-active);
 		color: var(--sonora-text);
 		box-shadow: var(--sonora-shadow-xs);
+	}
+	.pagination {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 16px;
+		margin-top: 24px;
+	}
+	.pagination button {
+		padding: 8px 16px;
+		cursor: pointer;
 	}
 	.score-grid {
 		display: grid;
@@ -1152,7 +1931,7 @@
 			grid-template-columns: 190px minmax(0, 1fr);
 		}
 		.main {
-			padding: 20px 18px 32px;
+			padding: 20px 18px 104px;
 		}
 		.folder-button span {
 			display: none;
@@ -1174,7 +1953,7 @@
 			display: none;
 		}
 		.main {
-			padding: 16px 12px 28px;
+			padding: 16px 12px 104px;
 		}
 		.toolbar {
 			align-items: center;

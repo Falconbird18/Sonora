@@ -23,10 +23,22 @@ export function groupWorks(scores: ScoreItem[]): LibraryWork[] {
 	return [...groups.values()];
 }
 
+export function createRepairContext(scores: ScoreItem[]) {
+	const titles = new Map<string, Set<string>>();
+	for (const score of scores) {
+		let composerTitles = titles.get(score.composer);
+		if (!composerTitles)
+			titles.set(score.composer, (composerTitles = new Set()));
+		composerTitles.add(score.title);
+	}
+	return titles;
+}
+
 /** Only repair information supported by a known composer or a complete IMSLP-style title. */
 export function repairMetadata(
 	score: ScoreItem,
-	all: ScoreItem[]
+	all: ScoreItem[],
+	context?: ReturnType<typeof createRepairContext>
 ): Partial<ScoreItem> {
 	if (score.metadataEdited) return {};
 	const patch: Partial<ScoreItem> = {};
@@ -48,9 +60,11 @@ export function repairMetadata(
 	if (
 		!score.workTitle &&
 		base !== score.title &&
-		all.some(
-			(other) => other.title === base && other.composer === score.composer
-		)
+		(context
+			? context.get(score.composer)?.has(base)
+			: all.some(
+					(other) => other.title === base && other.composer === score.composer
+				))
 	)
 		patch.workTitle = base;
 	return patch;

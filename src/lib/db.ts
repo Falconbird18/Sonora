@@ -1,9 +1,15 @@
 import Dexie, { type Table } from 'dexie';
+import {
+	diskFolderId,
+	foldersFromPaths,
+	parentPath
+} from './libraryFolderPaths';
 import type {
 	ScoreItem,
 	AnnotationRecord,
 	FolderSource,
-	ScoreList
+	ScoreList,
+	LibraryFolder
 } from './types';
 
 /**
@@ -25,6 +31,7 @@ export type ComposerPortraitCache = {
 
 export class MusicDatabase extends Dexie {
 	scores!: Table<ScoreItem, string>;
+	libraryFolders!: Table<LibraryFolder, string>;
 	lists!: Table<ScoreList, string>;
 	annotations!: Table<AnnotationRecord, string>;
 	folders!: Table<FolderSource, string>;
@@ -34,8 +41,8 @@ export class MusicDatabase extends Dexie {
 		{ url: string; data: string; fetchedAt: number },
 		string
 	>;
-	constructor() {
-		super('Sonora_MusicViewer_DB');
+	constructor(name = 'Sonora_MusicViewer_DB') {
+		super(name);
 
 		this.version(1).stores({
 			scores: 'id, title, composer, addedAt',
@@ -102,6 +109,47 @@ export class MusicDatabase extends Dexie {
 		this.version(10)
 			.stores({ lists: 'id, name, updatedAt' })
 			.upgrade((tx) => tx.table('imslpThumbnails').clear());
+		this.version(11)
+			.stores({
+				scores: SCORES_INDEX + ', folderId',
+				libraryFolders: 'id, parentId, name'
+			})
+			.upgrade(async (tx) => {
+				const folders = new Map<string, LibraryFolder>();
+				await tx
+					.table('scores')
+					.toCollection()
+					.modify((score: ScoreItem) => {
+						const name = score.workTitle || score.title;
+						const key = `${score.composer.toLocaleLowerCase()}::${name.toLocaleLowerCase()}`;
+						const id = `legacy:${key}`;
+						if (!folders.has(id))
+							folders.set(id, {
+								id,
+								name,
+								parentId: '',
+								createdAt: Date.now()
+							});
+						score.folderId = id;
+					});
+				await tx.table('libraryFolders').bulkPut([...folders.values()]);
+			});
+		// The filesystem is authoritative; retire the v11 virtual work folders.
+		this.version(12)
+			.stores({ libraryFolders: 'id, parentId, name, sourcePath' })
+			.upgrade(async (tx) => {
+				const paths = new Set<string>();
+				await tx
+					.table('scores')
+					.toCollection()
+					.modify((score: ScoreItem) => {
+						const parent = parentPath(score.sourcePath ?? '');
+						if (parent) paths.add(parent);
+						score.folderId = diskFolderId(parent);
+					});
+				await tx.table('libraryFolders').clear();
+				await tx.table('libraryFolders').bulkPut(foldersFromPaths(paths));
+			});
 	}
 }
 

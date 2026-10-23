@@ -1,4 +1,5 @@
 mod library_archive;
+mod score_folders;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -52,6 +53,10 @@ fn collect_pdfs(
     current: &Path,
     files: &mut Vec<NativeScoreFile>,
 ) -> Result<(), String> {
+    collect_score_tree(root, current, files, &mut Vec::new())
+}
+
+fn collect_score_tree(root: &Path, current: &Path, files: &mut Vec<NativeScoreFile>, directories: &mut Vec<String>) -> Result<(), String> {
     let entries = fs::read_dir(current).map_err(|error| error.to_string())?;
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -60,9 +65,11 @@ fn collect_pdfs(
         if name.starts_with('.') || name == "node_modules" {
             continue;
         }
+        if entry.file_type().map_err(|e| e.to_string())?.is_symlink() { continue; }
         let metadata = entry.metadata().map_err(|error| error.to_string())?;
         if metadata.is_dir() {
-            collect_pdfs(root, &path, files)?;
+            directories.push(path.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/"));
+            collect_score_tree(root, &path, files, directories)?;
         } else if metadata.is_file() && name.to_lowercase().ends_with(".pdf") {
             let relative = path.strip_prefix(root).map_err(|error| error.to_string())?;
             let modified_at = metadata
@@ -2042,7 +2049,16 @@ async fn pick_score_folder() -> Option<String> {
 }
 
 #[tauri::command]
-fn list_score_files(path: String) -> Result<Vec<NativeScoreFile>, String> {
+async fn list_score_files(path: String) -> Result<Vec<NativeScoreFile>, String> {
+    tokio::task::spawn_blocking(move || scan_score_files(path)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn score_folder_exists(path: String) -> bool {
+    Path::new(&path).is_dir()
+}
+
+fn scan_score_files(path: String) -> Result<Vec<NativeScoreFile>, String> {
     let root = PathBuf::from(&path);
     if !root.is_dir() {
         return Err("The saved score folder no longer exists.".into());
@@ -2094,6 +2110,12 @@ fn read_score_file(path: String) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
+async fn read_score_file_binary(path: String) -> Result<tauri::ipc::Response, String> {
+    tokio::task::spawn_blocking(move || fs::read(path).map(tauri::ipc::Response::new).map_err(|error| error.to_string()))
+        .await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 fn read_score_file_base64(path: String) -> Result<String, String> {
     let buf = fs::read(&path).map_err(|e| e.to_string())?;
     Ok(data_encoding_base64(&buf))
@@ -2119,7 +2141,13 @@ pub fn run() {
             library_archive::import_library_archive,
             pick_score_folder,
             list_score_files,
+            score_folders::list_score_tree,
+            score_folders::create_score_directory,
+            score_folders::move_score_entry,
+            score_folders::delete_score_directory,
+            score_folder_exists,
             read_score_file,
+            read_score_file_binary,
             ocr_score_page,
             read_score_file_base64,
             read_text_file,
@@ -2474,5 +2502,82 @@ mod score_ocr_tests {
     async fn local_ocr_reads_title_page() {
         let text = ocr_score_page(include_bytes!("../../tests/ui/score-preview.png").to_vec()).await.unwrap();
         assert!(text.chars().filter(|c|c.is_alphabetic()).count()>8, "No readable title-page text: {text}");
+    }
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+    use std::time::Instant;
+
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[tokio::test]
+    async fn binary_score_response_preserves_bytes() {
+        use tauri::ipc::{IpcResponse, InvokeResponseBody};
+        let fixture = Fixture(std::env::temp_dir().join(format!("sonora-binary-test-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())));
+        fs::create_dir_all(&fixture.0).unwrap();
+        let path = fixture.0.join("score.pdf");
+        let bytes: Vec<u8> = (0..=255).cycle().take(65537).collect();
+        fs::write(&path, &bytes).unwrap();
+        let response = read_score_file_binary(path.to_string_lossy().into_owned()).await.unwrap().body().unwrap();
+        match response {
+            InvokeResponseBody::Raw(actual) => assert_eq!(actual, bytes),
+            _ => panic!("PDF response must be binary"),
+        }
+        assert!(read_score_file_binary(fixture.0.join("missing.pdf").to_string_lossy().into_owned()).await.is_err());
+    }
+
+    /// Run explicitly: cargo test native_library_benchmark -- --ignored --nocapture
+    /// Synthetic filesystem + serialization costs, not end-to-end webview latency.
+    #[test]
+    #[ignore]
+    fn native_library_benchmark() {
+        let fixture = Fixture(std::env::temp_dir().join(format!("sonora-benchmark-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos())));
+        fs::create_dir_all(&fixture.0).unwrap();
+        let mut rows = Vec::new();
+        let mut previous = 0;
+        for count in [1000, 10000, 50000] {
+            for i in previous..count {
+                let dir = fixture.0.join(format!("composer-{}", i % 100));
+                fs::create_dir_all(&dir).unwrap();
+                fs::write(dir.join(format!("score-{i}.pdf")), b"%PDF-1.4\nbenchmark\n").unwrap();
+            }
+            previous = count;
+            let mut samples = Vec::new();
+            for _ in 0..7 {
+                let start = Instant::now();
+                let files = scan_score_files(fixture.0.to_string_lossy().into_owned()).unwrap();
+                assert_eq!(files.len(), count);
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            samples.sort_by(f64::total_cmp);
+            rows.push(serde_json::json!({"name":"nativeScan", "size":count, "medianMs":samples[3], "p95Ms":samples[6]}));
+        }
+        for mb in [1, 10, 50] {
+            let bytes = vec![173u8; mb * 1024 * 1024];
+            let path = fixture.0.join("transfer.pdf");
+            fs::write(&path, &bytes).unwrap();
+            for json in [true, false] {
+                let mut samples = Vec::new();
+                let mut length = 0;
+                for _ in 0..7 {
+                    let start = Instant::now();
+                    let data = fs::read(&path).unwrap();
+                    length = if json { serde_json::to_vec(&data).unwrap().len() } else { tauri::ipc::Response::new(data); bytes.len() };
+                    samples.push(start.elapsed().as_secs_f64() * 1000.0);
+                }
+                samples.sort_by(f64::total_cmp);
+                rows.push(serde_json::json!({"name": if json {"readAndJsonEncode"} else {"readAndBinaryResponse"}, "sizeMiB":mb, "responseBytes":length, "medianMs":samples[3], "p95Ms":samples[6]}));
+            }
+        }
+        let output = serde_json::to_string_pretty(&serde_json::json!({"profile": if cfg!(debug_assertions) {"debug"} else {"release"}, "samples":7, "rows":rows})).unwrap();
+        if let Ok(path) = std::env::var("SONORA_BENCH_OUTPUT") { fs::write(path, &output).unwrap(); }
+        println!("{output}");
     }
 }

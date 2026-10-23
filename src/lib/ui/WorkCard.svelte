@@ -5,11 +5,17 @@
 	import type { LibraryWork } from '../works';
 	let {
 		work,
+		previewUrl,
 		list = false,
 		onOpen
-	}: { work: LibraryWork; list?: boolean; onOpen: () => void } = $props();
+	}: {
+		work: LibraryWork;
+		previewUrl?: string;
+		list?: boolean;
+		onOpen: () => void;
+	} = $props();
 	const preview = $derived(
-		work.scores.find((score) => score.thumbnailUrl)?.thumbnailUrl
+		previewUrl || work.scores.find((score) => score.thumbnailUrl)?.thumbnailUrl
 	);
 </script>
 
@@ -19,7 +25,7 @@
 	onclick={onOpen}
 	aria-label={`Open ${work.title}, ${work.scores.length} editions and parts`}>
 	<div class="cover">
-		{#if preview}<img src={preview} alt="" />{:else}<Music2
+		{#if preview}<img src={preview} alt="" decoding="async" />{:else}<Music2
 				size={36} />{/if}<span class="seal"><FolderOpen size={16} /></span>
 	</div>
 	<div class="info">
@@ -41,7 +47,7 @@
 		color: var(--sonora-text);
 		border: 1px solid var(--sonora-border-strong);
 		border-radius: var(--sonora-radius-md);
-		box-shadow:var(--sonora-inset),var(--sonora-shadow-xs);
+		box-shadow: var(--sonora-inset), var(--sonora-shadow-xs);
 		text-align: left;
 		cursor: pointer;
 		min-width: 0;

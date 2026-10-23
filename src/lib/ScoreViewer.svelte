@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { scoreRasterScale, scoreRasterKey } from './scoreRaster';
 	import { formatComposer } from './composerDisplay';
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import {
 		loadAnnotations,
 		saveAnnotation,
@@ -123,7 +124,7 @@
 		heightPx: number;
 		canvasW: number;
 		canvasH: number;
-		offscreen: HTMLCanvasElement;
+		offscreen: HTMLCanvasElement | ImageBitmap;
 	};
 
 	let pdf = $state<PdfDocumentProxy | null>(null);
@@ -281,33 +282,46 @@
 	let leftInk = $state<HTMLCanvasElement | null>(null);
 	let rightInk = $state<HTMLCanvasElement | null>(null);
 	let generation = 0;
-	let tasks: PdfRenderTask[] = [];
+	let tasks: Array<{ task: PdfRenderTask; number: number }> = [];
+	const pendingPages = new Map<
+		string,
+		{ task: PdfRenderTask; promise: Promise<PageBitmap | null> }
+	>();
 	/** LRU cache of fully rendered page bitmaps keyed by `page@renderScale`. */
 	const pageCache = new Map<string, PageBitmap>();
 	const MAX_PAGE_CACHE = 20;
-	function cacheKey(number: number, renderScale: number) {
-		return `${number}@${Math.round(renderScale * 1000)}`;
+	// RGBA canvases: bound backing storage as well as the number of pages.
+	const MAX_CACHE_PIXELS = 48_000_000;
+	function releaseBitmap(image: HTMLCanvasElement | ImageBitmap) {
+		if ('close' in image) image.close();
+		else {
+			image.width = 0;
+			image.height = 0;
+		}
 	}
 	function touchCache(key: string, bmp: PageBitmap) {
 		if (pageCache.has(key)) pageCache.delete(key);
 		pageCache.set(key, bmp);
-		while (pageCache.size > MAX_PAGE_CACHE) {
+		let pixels = [...pageCache.values()].reduce(
+			(sum, page) => sum + page.canvasW * page.canvasH,
+			0
+		);
+		while (pageCache.size > MAX_PAGE_CACHE || pixels > MAX_CACHE_PIXELS) {
 			const oldest = pageCache.keys().next().value as string | undefined;
 			if (oldest === undefined) break;
 			const old = pageCache.get(oldest);
+			if (old) pixels -= old.canvasW * old.canvasH;
 			pageCache.delete(oldest);
 			// Help GC release large canvases
 			if (old?.offscreen) {
-				old.offscreen.width = 0;
-				old.offscreen.height = 0;
+				releaseBitmap(old.offscreen);
 			}
 		}
 	}
 	function clearPageCache() {
 		for (const bmp of pageCache.values()) {
 			if (bmp.offscreen) {
-				bmp.offscreen.width = 0;
-				bmp.offscreen.height = 0;
+				releaseBitmap(bmp.offscreen);
 			}
 		}
 		pageCache.clear();
@@ -426,28 +440,30 @@
 	let settingsHydrated = false;
 	$effect(() => {
 		const s = $settings;
-		const prevDual = dual;
-		const prevAuto = autoLayout;
-		autoLayout = s.autoLayout;
-		keepAwake = s.keepAwake;
-		annotationsVisible = s.annotationsVisible;
-		textSize = s.textSize;
-		if (!autoLayout) dual = s.dualPages;
-		else if (typeof window !== 'undefined') {
-			dual =
-				window.matchMedia('(orientation: landscape)').matches &&
-				window.innerWidth >= 720;
-		}
-		if (keepAwake) void requestWakeLock();
-		else void releaseWakeLock();
-		if (
-			settingsHydrated &&
-			(prevDual !== dual || prevAuto !== autoLayout) &&
-			hasPainted
-		) {
-			void render({ quiet: true });
-		}
-		settingsHydrated = true;
+		untrack(() => {
+			const prevDual = dual;
+			const prevAuto = autoLayout;
+			autoLayout = s.autoLayout;
+			keepAwake = s.keepAwake;
+			annotationsVisible = s.annotationsVisible;
+			textSize = s.textSize;
+			if (!autoLayout) dual = s.dualPages;
+			else if (typeof window !== 'undefined') {
+				dual =
+					window.matchMedia('(orientation: landscape)').matches &&
+					window.innerWidth >= 720;
+			}
+			if (keepAwake) void requestWakeLock();
+			else void releaseWakeLock();
+			if (
+				settingsHydrated &&
+				(prevDual !== dual || prevAuto !== autoLayout) &&
+				hasPainted
+			) {
+				void render({ quiet: true });
+			}
+			settingsHydrated = true;
+		});
 	});
 
 	onMount(() => {
@@ -645,10 +661,18 @@
 					'PDF data is missing. Try refreshing the library and open again.'
 				);
 			}
-			const opened = await openPdfSource({
+			const opening = openPdfSource({
 				url: score.pdfUrl,
 				blob: score.pdfBlob,
 				nativePath: score.nativePath
+			});
+			const [opened, storedScore, records] = await Promise.all([
+				opening,
+				db.scores.get(score.id),
+				loadAnnotations(score.id)
+			]).catch((error) => {
+				void opening.then(closePdf).catch(() => {});
+				throw error;
 			});
 			if (closed) {
 				await closePdf(opened);
@@ -660,12 +684,10 @@
 				page = 1;
 				pageInput = '1';
 			}
-			const storedScore = await db.scores.get(score.id);
 			layers = storedScore?.annotationLayers?.length
 				? storedScore.annotationLayers
 				: [{ id: 'default', name: 'Annotations', visible: true }];
 			activeLayer = layers.find((l) => l.visible)?.id || layers[0].id;
-			const records = await loadAnnotations(score.id);
 			layers = recoverLayers(
 				storedScore?.annotationLayers,
 				records.flatMap((r) => [...r.strokes, ...r.stamps, ...r.notes])
@@ -722,18 +744,23 @@
 		onClose();
 	}
 
-	function cancelRender() {
-		for (const task of tasks) {
-			try {
-				task.cancel();
-			} catch {}
+	function cancelRender(keepPages: number[] = []) {
+		const kept: typeof tasks = [];
+		for (const entry of tasks) {
+			if (keepPages.includes(entry.number)) {
+				kept.push(entry);
+				continue;
+			}
+			entry.task.cancel();
+			for (const [key, pending] of pendingPages)
+				if (pending.task === entry.task) pendingPages.delete(key);
 		}
-		tasks = [];
+		tasks = kept;
 	}
 
 	async function render(opts?: { quiet?: boolean }) {
 		if (!pdf || !host || closed) return;
-		cancelRender();
+		cancelRender(visiblePages);
 		const current = ++generation;
 		if (!opts?.quiet || !hasPainted) {
 			loading = true;
@@ -782,7 +809,8 @@
 	async function renderPage(
 		number: number,
 		index: number,
-		current: number
+		current: number,
+		priority: 'interactive' | 'prefetch' = 'interactive'
 	): Promise<PageBitmap | null> {
 		if (!pdf || !host) return null;
 		const pdfPage = await pdf.getPage(number);
@@ -807,10 +835,7 @@
 		const area = Math.max(1, base.width * base.height);
 		const safeScale = Math.sqrt(MAX_CANVAS_PIXELS / (area * dpr * dpr));
 		// Bitmap resolution tracks the logical zoom so it stays sharp after settle.
-		const renderScale = Math.max(
-			0.18,
-			Math.min(2.4, fitScale * zoom, safeScale)
-		);
+		const renderScale = scoreRasterScale(fitScale, zoom, safeScale);
 		const layoutScale = Math.max(0.18, Math.min(2.4, fitScale));
 		return paintPage(
 			pdfPage,
@@ -819,7 +844,7 @@
 			layoutScale,
 			renderScale,
 			dpr,
-			current
+			priority
 		);
 	}
 
@@ -830,14 +855,44 @@
 		layoutScale: number,
 		renderScale: number,
 		dpr: number,
-		current: number
+		priority: 'interactive' | 'prefetch'
 	): Promise<PageBitmap | null> {
-		const key = cacheKey(number, renderScale);
+		const key = scoreRasterKey(number, renderScale, dpr);
 		const cached = pageCache.get(key);
 		if (cached) {
 			// Reuse cached raster; only update the layout index for dual/single placement.
 			touchCache(key, cached);
-			return { ...cached, index, number };
+			const viewport = pdfPage.getViewport({ scale: layoutScale });
+			return {
+				...cached,
+				index,
+				number,
+				widthPx: Math.ceil(viewport.width),
+				heightPx: Math.ceil(viewport.height)
+			};
+		}
+
+		const pending = pendingPages.get(key);
+		if (pending) {
+			const bmp = await pending.promise;
+			const viewport = pdfPage.getViewport({ scale: layoutScale });
+			return bmp
+				? {
+						...bmp,
+						index,
+						number,
+						widthPx: Math.ceil(viewport.width),
+						heightPx: Math.ceil(viewport.height)
+					}
+				: null;
+		}
+
+		// A newer zoom/size for this page supersedes queued work at older resolutions.
+		for (const [otherKey, other] of pendingPages) {
+			if (otherKey.startsWith(`${number}@`) && otherKey !== key) {
+				other.task.cancel();
+				pendingPages.delete(otherKey);
+			}
 		}
 
 		// CSS size stays at fit (layoutScale) so zoom is purely a CSS transform — no layout jump on settle.
@@ -850,34 +905,70 @@
 		if (canvasW * canvasH > MAX_CANVAS_PIXELS)
 			throw new Error('Canvas exceeds safe pixel budget');
 
-		// Fully rasterize offscreen — never touch the live canvas until every page is ready.
-		const offscreen = document.createElement('canvas');
-		offscreen.width = canvasW;
-		offscreen.height = canvasH;
-		const context = offscreen.getContext('2d', { alpha: false });
-		if (!context) throw new Error('2D context unavailable');
-		context.setTransform(dpr, 0, 0, dpr, 0, 0);
-		context.fillStyle = '#fff';
-		context.fillRect(0, 0, renderViewport.width, renderViewport.height);
-		const task = pdfPage.render({
-			canvas: offscreen,
-			canvasContext: context,
-			viewport: renderViewport
-		});
-		tasks.push(task);
-		await task.promise;
-		if (current !== generation || closed) return null;
-		const bmp: PageBitmap = {
-			index,
-			number,
-			widthPx,
-			heightPx,
-			canvasW,
-			canvasH,
-			offscreen
-		};
-		touchCache(key, bmp);
-		return bmp;
+		// Keep the transferred bitmap itself in the LRU: draw once to the live canvas.
+		let offscreen: HTMLCanvasElement | ImageBitmap | undefined;
+		let task: PdfRenderTask;
+		if (pdf?.renderBitmap) {
+			const controller = new AbortController();
+			task = {
+				promise: pdf
+					.renderBitmap(number - 1, {
+						scale: renderScale * dpr,
+						priority,
+						signal: controller.signal
+					})
+					.then((image) => {
+						offscreen = image;
+					}),
+				cancel() {
+					controller.abort();
+				}
+			};
+		} else {
+			const canvas = document.createElement('canvas');
+			canvas.width = canvasW;
+			canvas.height = canvasH;
+			offscreen = canvas;
+			const context = canvas.getContext('2d', { alpha: false });
+			if (!context) throw Error('2D context unavailable');
+			context.setTransform(dpr, 0, 0, dpr, 0, 0);
+			task = pdfPage.render({
+				canvas,
+				canvasContext: context,
+				viewport: renderViewport,
+				priority
+			});
+		}
+		tasks.push({ task, number });
+		const promise = (async () => {
+			try {
+				await task.promise;
+				if (!offscreen) throw Error('PDF raster returned no bitmap');
+				if (closed) {
+					if (offscreen) releaseBitmap(offscreen);
+					return null;
+				}
+				const bmp: PageBitmap = {
+					index,
+					number,
+					widthPx,
+					heightPx,
+					canvasW: offscreen.width,
+					canvasH: offscreen.height,
+					offscreen
+				};
+				touchCache(key, bmp);
+				return bmp;
+			} catch (error) {
+				if (offscreen) releaseBitmap(offscreen);
+				throw error;
+			} finally {
+				tasks = tasks.filter((entry) => entry.task !== task);
+				if (pendingPages.get(key)?.task === task) pendingPages.delete(key);
+			}
+		})();
+		pendingPages.set(key, { task, promise });
+		return promise;
 	}
 
 	function commitPageBitmaps(bitmaps: PageBitmap[]) {
@@ -888,8 +979,8 @@
 			const inkCanvas = bmp.index === 0 ? leftInk : rightInk;
 			if (!pdfCanvas || !inkCanvas) continue;
 
-			pdfCanvas.width = bmp.canvasW;
-			pdfCanvas.height = bmp.canvasH;
+			if (pdfCanvas.width !== bmp.canvasW) pdfCanvas.width = bmp.canvasW;
+			if (pdfCanvas.height !== bmp.canvasH) pdfCanvas.height = bmp.canvasH;
 			pdfCanvas.style.width = `${bmp.widthPx}px`;
 			pdfCanvas.style.height = `${bmp.heightPx}px`;
 			const displayCtx = pdfCanvas.getContext('2d', { alpha: false });
@@ -897,8 +988,8 @@
 			displayCtx.setTransform(1, 0, 0, 1, 0, 0);
 			displayCtx.drawImage(bmp.offscreen, 0, 0);
 
-			inkCanvas.width = bmp.canvasW;
-			inkCanvas.height = bmp.canvasH;
+			if (inkCanvas.width !== bmp.canvasW) inkCanvas.width = bmp.canvasW;
+			if (inkCanvas.height !== bmp.canvasH) inkCanvas.height = bmp.canvasH;
 			inkCanvas.style.width = `${bmp.widthPx}px`;
 			inkCanvas.style.height = `${bmp.heightPx}px`;
 			redraw(bmp.number, inkCanvas);
@@ -940,17 +1031,30 @@
 		clearTimeout(prefetchTimer);
 		prefetchTimer = setTimeout(() => {
 			if (!pdf || !host || closed) return;
-			const upcoming = [
-				page + (dual ? 2 : 1),
-				page + (dual ? 4 : 2),
-				page + (dual ? 6 : 3),
-				Math.max(1, page - 1),
-				Math.max(1, page - (dual ? 2 : 1)),
-				Math.max(1, page - (dual ? 4 : 2))
-			];
-			const unique = [...new Set(upcoming)].filter(
-				(n) => n >= 1 && n <= (pdf?.numPages ?? 0)
+			const step = dual ? 2 : 1;
+			const upcoming = [step, -step, step * 2, -step * 2, step * 3].flatMap(
+				(offset) =>
+					dual ? [page + offset, page + offset + 1] : [page + offset]
 			);
+			const largestPage = Math.max(
+				1,
+				...[...pageCache.values()]
+					.filter((bmp) => visiblePages.includes(bmp.number))
+					.map((bmp) => bmp.canvasW * bmp.canvasH)
+			);
+			const capacity = Math.max(
+				0,
+				Math.min(
+					8,
+					Math.floor(MAX_CACHE_PIXELS / largestPage) - visiblePages.length
+				)
+			);
+			const unique = [...new Set(upcoming)]
+				.filter(
+					(n) =>
+						n >= 1 && n <= (pdf?.numPages ?? 0) && !visiblePages.includes(n)
+				)
+				.slice(0, capacity);
 			// Warm page objects + fully rasterize into cache at current scale so
 			// page turns and long jumps feel instantaneous.
 			void (async () => {
@@ -959,7 +1063,7 @@
 					if (closed || current !== generation) return;
 					try {
 						// renderPage already checks/uses cache and writes back into it
-						await renderPage(number, 0, current);
+						await renderPage(number, 0, current, 'prefetch');
 					} catch {
 						/* ignore prefetch failures */
 					}
@@ -2197,6 +2301,13 @@
 				</div>
 			{/if}
 		</div>
+		{#if !hasPainted && page === 1 && score.thumbnailUrl && !error}
+			<img
+				class="opening-preview"
+				src={score.thumbnailUrl}
+				alt=""
+				aria-hidden="true" />
+		{/if}
 		{#if loading && !hasPainted}
 			<div class="loading"><span></span><span>{loadingText}</span></div>
 		{/if}
@@ -3067,6 +3178,14 @@
 	}
 	.right-hit {
 		right: 0;
+	}
+	.opening-preview {
+		position: absolute;
+		inset: 5%;
+		width: 90%;
+		height: 90%;
+		object-fit: contain;
+		pointer-events: none;
 	}
 	.loading,
 	.error {

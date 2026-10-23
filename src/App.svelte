@@ -49,6 +49,13 @@
 	onMount(() => {
 		void settings;
 		void loadLibraryView();
+		const warmup = setTimeout(() => {
+			void loadScoreViewer();
+			void import('./lib/pdfUtils')
+				.then(({ warmPdfRenderer }) => warmPdfRenderer())
+				.catch((error) => console.warn('PDF warmup deferred', error));
+		}, 300);
+		return () => clearTimeout(warmup);
 	});
 
 	async function loadLibraryView() {

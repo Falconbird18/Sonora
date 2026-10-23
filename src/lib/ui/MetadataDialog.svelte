@@ -65,7 +65,7 @@
 
 	let extra = $state<Record<string, string>>({});
 	const extraLabels: Record<string, string> = {
-		workTitle: 'Work / folder title',
+		workTitle: 'Composition title',
 		edition: 'Edition or part',
 		publisher: 'Publisher',
 		editor: 'Editor',
@@ -356,9 +356,9 @@
 					</div>{/if}
 			</div>
 			<details class="work-metadata">
-				<summary>Work & edition</summary>
+				<summary>Edition details</summary>
 				<p class="subtitle">
-					Use the same work title to group editions and parts together.
+					Organize editions and parts using folders in the library.
 				</p>
 				{#each Object.entries(extraLabels) as [key, label]}
 					<div class="field-row">
@@ -385,7 +385,7 @@
 		display: grid;
 		place-items: center;
 		padding: 24px;
-		background:var(--sonora-scrim);
+		background: var(--sonora-scrim);
 		backdrop-filter: var(--sonora-blur);
 		-webkit-backdrop-filter: var(--sonora-blur);
 	}

@@ -15,7 +15,11 @@
     "tauri:build": "node ./scripts/tauri-build.mjs",
     "postinstall": "node ./scripts/copy-pdfium.mjs",
     "test:library": "node scripts/test-library.mjs",
-    "test:practice": "node scripts/test-practice.mjs"
+    "test:practice": "node scripts/test-practice.mjs",
+    "bench:library": "node scripts/bench-library.mjs",
+    "test:performance": "node scripts/test-performance.mjs",
+    "bench:compare": "node scripts/compare-benchmarks.mjs",
+    "test:pdf": "node scripts/test-pdf-scheduler.mjs && node scripts/test-folder-thumbnails.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.2.0",

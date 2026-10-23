@@ -1,0 +1,102 @@
+{
+  "environment": "Development Chromium 155 on Linux; deterministic 24-page vector and 1800x2400 JPEG scan fixtures",
+  "samples": 7,
+  "notes": "Single browser run with one warm-up per case. Page measurements include rasterization and drawing at 1.7x, with PNG encode/decode only in the legacy pipeline. UI gaps use an 8 ms interval. First engine open includes initialization; it is not a paired cold-cache comparison.",
+  "rows": [
+    {
+      "kind": "vector",
+      "renderer": "legacy",
+      "name": "open",
+      "ms": 93.1
+    },
+    {
+      "kind": "vector",
+      "renderer": "legacy",
+      "name": "pageRasterAndDraw",
+      "medianMs": 67.6,
+      "p95Ms": 113.5,
+      "maxUiGapMs": 53.3
+    },
+    {
+      "kind": "vector",
+      "renderer": "legacy",
+      "name": "thumbnailOpenRenderEncodeClose",
+      "medianMs": 15.2,
+      "p95Ms": 25.9,
+      "maxUiGapMs": 19.1
+    },
+    {
+      "kind": "vector",
+      "renderer": "worker",
+      "name": "open",
+      "ms": 138.8
+    },
+    {
+      "kind": "vector",
+      "renderer": "worker",
+      "name": "pageRasterAndDraw",
+      "medianMs": 31.8,
+      "p95Ms": 32.7,
+      "maxUiGapMs": 11.5
+    },
+    {
+      "kind": "vector",
+      "renderer": "worker",
+      "name": "thumbnailOpenRenderEncodeClose",
+      "medianMs": 14.8,
+      "p95Ms": 16.9,
+      "maxUiGapMs": 8.2
+    },
+    {
+      "kind": "scan",
+      "renderer": "legacy",
+      "name": "open",
+      "ms": 1.2
+    },
+    {
+      "kind": "scan",
+      "renderer": "legacy",
+      "name": "pageRasterAndDraw",
+      "medianMs": 135,
+      "p95Ms": 162.8,
+      "maxUiGapMs": 137.2
+    },
+    {
+      "kind": "scan",
+      "renderer": "legacy",
+      "name": "thumbnailOpenRenderEncodeClose",
+      "medianMs": 49.9,
+      "p95Ms": 82.9,
+      "maxUiGapMs": 84.4
+    },
+    {
+      "kind": "scan",
+      "renderer": "worker",
+      "name": "open",
+      "ms": 3.5
+    },
+    {
+      "kind": "scan",
+      "renderer": "worker",
+      "name": "pageRasterAndDraw",
+      "medianMs": 67.9,
+      "p95Ms": 105,
+      "maxUiGapMs": 13.6
+    },
+    {
+      "kind": "scan",
+      "renderer": "worker",
+      "name": "thumbnailOpenRenderEncodeClose",
+      "medianMs": 52.6,
+      "p95Ms": 84.3,
+      "maxUiGapMs": 8.2
+    }
+  ],
+  "checks": [
+    "exact matching vector pixels",
+    "exact matching scanned pixels",
+    "background documents independent",
+    "pre-cancelled rendering rejects",
+    "worker Blob reading"
+  ]
+}

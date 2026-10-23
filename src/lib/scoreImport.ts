@@ -15,6 +15,30 @@ const composerTerms = (c: (typeof COMPOSERS)[number]) => [
 	...c.aliases
 ];
 
+const normalizeImportText = (s: string) =>
+	s
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, ' ')
+		.trim();
+
+let indexedComposers: typeof COMPOSERS | undefined;
+let importTerms: Array<{
+	composer: (typeof COMPOSERS)[number];
+	terms: string[];
+}> = [];
+function getImportTerms() {
+	if (indexedComposers !== COMPOSERS) {
+		indexedComposers = COMPOSERS;
+		importTerms = COMPOSERS.map((composer) => ({
+			composer,
+			terms: composerTerms(composer).map(normalizeImportText)
+		}));
+	}
+	return importTerms;
+}
+
 export function suggestFilename(filename: string, text = '') {
 	let title = filename
 		.replace(/\.pdf$/i, '')
@@ -22,19 +46,14 @@ export function suggestFilename(filename: string, text = '') {
 		.replace(/[-_–—]+/g, ' ')
 		.replace(/\s+/g, ' ')
 		.trim();
-	const normalize = (s: string) =>
-		s
-			.normalize('NFD')
-			.replace(/[\u0300-\u036f]/g, '')
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, ' ')
-			.trim();
-	const candidates = COMPOSERS.filter((c) =>
-		composerTerms(c).some((alias) => {
-			const n = normalize(alias);
-			return n.length > 3 && ` ${normalize(title)} `.includes(` ${n} `);
-		})
-	);
+	const normalizedTitle = ` ${normalizeImportText(title)} `;
+	const candidates = getImportTerms()
+		.filter(({ terms }) =>
+			terms.some(
+				(term) => term.length > 3 && normalizedTitle.includes(` ${term} `)
+			)
+		)
+		.map(({ composer }) => composer);
 	const composer = candidates.length === 1 ? candidates[0] : undefined;
 	if (composer) {
 		for (const alias of composerTerms(composer).sort(
@@ -53,14 +72,17 @@ export function suggestFilename(filename: string, text = '') {
 			.replace(/^[\s,;:()\[\]-]+|[\s,;:()\[\]-]+$/g, '')
 			.trim();
 	}
+	const normalizedText = !composer
+		? ` ${normalizeImportText(text.slice(0, 6000))} `
+		: '';
 	const textMatches = !composer
-		? COMPOSERS.filter((c) =>
-				composerTerms(c).some(
-					(a) =>
-						normalize(a).length > 6 &&
-						` ${normalize(text.slice(0, 6000))} `.includes(` ${normalize(a)} `)
+		? getImportTerms()
+				.filter(({ terms }) =>
+					terms.some(
+						(term) => term.length > 6 && normalizedText.includes(` ${term} `)
+					)
 				)
-			)
+				.map(({ composer }) => composer)
 		: [];
 	const recognized =
 		composer || (textMatches.length === 1 ? textMatches[0] : undefined);
@@ -77,7 +99,7 @@ export function suggestFilename(filename: string, text = '') {
 						!/imslp|copyright|all rights|www\.|https?:/i.test(t) &&
 						(!recognized ||
 							!composerTerms(recognized).some(
-								(a) => normalize(a) === normalize(t)
+								(a) => normalizeImportText(a) === normalizeImportText(t)
 							))
 				) ||
 			'Untitled score',
@@ -117,7 +139,7 @@ export async function analyzeImport(
 		thumbnailUrl: string | undefined,
 		opened: Awaited<ReturnType<typeof openPdf>> | undefined;
 	try {
-		opened = await openPdf(file);
+		opened = await openPdf(file, { background: true });
 		totalPages = opened.document.numPages;
 		for (let p = 1; p <= Math.min(2, totalPages); p++) {
 			const page = await opened.document.getPage(p);

@@ -42,6 +42,8 @@
 			const hashes = new Set(
 				existing.map((s) => s.contentHash).filter(Boolean)
 			);
+			for (const row of rows)
+				if (row.score.contentHash) hashes.add(row.score.contentHash);
 			const selected = Array.from(files).filter((f) => /\.pdf$/i.test(f.name));
 			if (!selected.length) error = 'Choose PDF files to import.';
 			for (const [index, file] of selected.entries()) {
@@ -50,8 +52,7 @@
 				try {
 					const hash = await fileFingerprint(file);
 					if (cancelled || stopRequested) break;
-					const duplicate =
-						hashes.has(hash) || rows.some((r) => r.score.contentHash === hash);
+					const duplicate = hashes.has(hash);
 					const row: ImportCandidate = duplicate
 						? {
 								file,
@@ -67,7 +68,8 @@
 							}
 						: await analyzeImport(file, online, ocr);
 					row.score.contentHash = hash;
-					if (!cancelled) rows = [...rows, row];
+					hashes.add(hash);
+					if (!cancelled) rows.push(row);
 				} catch (e) {
 					if (!cancelled)
 						rows = [
@@ -117,12 +119,14 @@
 			if (chosen.some((r) => !r.score.title.trim()))
 				throw Error('Each selected score needs a title.');
 			await db.transaction('rw', db.scores, async () => {
-				for (const row of chosen)
-					await db.scores.add(
+				await db.scores.bulkAdd(
+					chosen.map((row) =>
 						plainScore({ ...row.score, metadataEdited: true })
-					);
+					)
+				);
 			});
-			rows = rows.filter((r) => !chosen.includes(r));
+			const savedIds = new Set(chosen.map((row) => row.score.id));
+			rows = rows.filter((row) => !savedIds.has(row.score.id));
 			await onImported();
 			onClose();
 		} catch (e) {

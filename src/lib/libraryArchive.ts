@@ -1,9 +1,19 @@
 import { invoke } from '@tauri-apps/api/core';
 import { db } from './db';
+import {
+	foldersFromPaths,
+	parentPath,
+	diskFolderId
+} from './libraryFolderPaths';
 import { flushAnnotationSaves } from './annotationStore';
 import { plainScore } from './scoreMeta';
 import { joinNativePath } from './paths';
-import type { ScoreItem, AnnotationRecord, ScoreList } from './types';
+import type {
+	ScoreItem,
+	AnnotationRecord,
+	ScoreList,
+	LibraryFolder
+} from './types';
 
 export type ArchiveScore = Omit<
 	ScoreItem,
@@ -21,6 +31,7 @@ export interface LibraryManifest {
 	scores: ArchiveScore[];
 	annotations: AnnotationRecord[];
 	lists: ScoreList[];
+	folders?: LibraryFolder[];
 }
 export type ImportedFile = {
 	source_id: string;
@@ -44,6 +55,32 @@ export function validateManifest(
 		!Array.isArray(input.lists)
 	)
 		throw new Error('Unsupported Sonora library archive.');
+	if (input.folders !== undefined) {
+		if (!Array.isArray(input.folders)) throw Error('Invalid folders.');
+		const parents = new Map<string, string>();
+		for (const folder of input.folders) {
+			if (
+				!record(folder) ||
+				typeof folder.id !== 'string' ||
+				!folder.id ||
+				typeof folder.name !== 'string' ||
+				typeof folder.parentId !== 'string' ||
+				parents.has(folder.id)
+			)
+				throw Error('Invalid folder.');
+			parents.set(folder.id, folder.parentId);
+		}
+		for (const id of parents.keys()) {
+			const seen = new Set<string>();
+			let current = id;
+			while (current) {
+				if (seen.has(current) || !parents.has(current))
+					throw Error('Invalid folder hierarchy.');
+				seen.add(current);
+				current = parents.get(current)!;
+			}
+		}
+	}
 	const ids = new Set<string>();
 	for (const score of input.scores) {
 		if (
@@ -140,10 +177,12 @@ export async function exportCompleteLibrary(): Promise<string | null> {
 		db.scores,
 		db.annotations,
 		db.lists,
+		db.libraryFolders,
 		async () => ({
 			scores: await db.scores.toArray(),
 			annotations: await db.annotations.toArray(),
-			lists: await db.lists.toArray()
+			lists: await db.lists.toArray(),
+			folders: await db.libraryFolders.toArray()
 		})
 	);
 	const folder = await db.folders.get('library-root');
@@ -156,7 +195,8 @@ export async function exportCompleteLibrary(): Promise<string | null> {
 		annotations: snapshot.annotations.filter((row) =>
 			validIds.has(row.scoreId)
 		),
-		lists: snapshot.lists
+		lists: snapshot.lists,
+		folders: snapshot.folders
 	};
 	validateManifest(manifest);
 	const sources = await Promise.all(
@@ -184,11 +224,15 @@ export function remapLibrary(manifest: LibraryManifest, files: ImportedFile[]) {
 	const ids = new Map(
 		files.map((file) => [file.source_id, `library-root:${file.relative_path}`])
 	);
+	const folders = foldersFromPaths(
+		files.map((file) => parentPath(file.relative_path))
+	);
 	const scores = manifest.scores.map((score) => {
 		const file = bySource.get(score.id);
 		if (!file) throw new Error(`Missing PDF for ${score.title}`);
 		return plainScore({
 			...score,
+			folderId: diskFolderId(parentPath(file.relative_path)),
 			id: ids.get(score.id)!,
 			sourceFolderId: 'library-root',
 			sourcePath: file.relative_path,
@@ -222,7 +266,7 @@ export function remapLibrary(manifest: LibraryManifest, files: ImportedFile[]) {
 			scoreId: ids.get(entry.scoreId) || `missing:${entry.scoreId}`
 		}))
 	}));
-	return { scores, annotations, lists };
+	return { scores, annotations, lists, folders };
 }
 export async function importLibrary(
 	libraryRoot: string
@@ -233,10 +277,18 @@ export async function importLibrary(
 	} | null>('import_library_archive', { libraryRoot });
 	if (!result) return null;
 	const restored = remapLibrary(result.manifest, result.files);
-	await db.transaction('rw', db.scores, db.annotations, db.lists, async () => {
-		await db.scores.bulkPut(restored.scores);
-		await db.annotations.bulkPut(restored.annotations);
-		await db.lists.bulkPut(restored.lists);
-	});
+	await db.transaction(
+		'rw',
+		db.scores,
+		db.annotations,
+		db.lists,
+		db.libraryFolders,
+		async () => {
+			await db.scores.bulkPut(restored.scores);
+			await db.annotations.bulkPut(restored.annotations);
+			await db.lists.bulkPut(restored.lists);
+			await db.libraryFolders.bulkPut(restored.folders);
+		}
+	);
 	return { scores: restored.scores.length, lists: restored.lists.length };
 }

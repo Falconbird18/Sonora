@@ -1,12 +1,13 @@
+import { diskFolderId, parentPath } from './libraryFolderPaths';
+import { reconcileDiskFolders } from './libraryFolders';
+import { createMoveMatcher } from './fileIdentity';
 import { invoke } from '@tauri-apps/api/core';
 import { plainScore, migrateAnnotations } from './scoreMeta';
 import { db } from './db';
 import type { FolderSource, ScoreItem } from './types';
-import { getPdfInfoFromSource } from './pdfUtils';
 import { isTauri, joinNativePath, nativeFileUrl } from './paths';
 
 const ROOT_FOLDER_ID = 'library-root';
-const METADATA_CONCURRENCY = 2;
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
 type NativeScoreFile = {
@@ -44,10 +45,9 @@ async function verifyBrowserPermission(handle: FileSystemDirectoryHandle) {
 export async function verifyFolderPermission(folder: FolderSource) {
 	if (folder.nativePath) {
 		try {
-			await invoke<NativeScoreFile[]>('list_score_files', {
+			return await invoke<boolean>('score_folder_exists', {
 				path: folder.nativePath
 			});
-			return true;
 		} catch {
 			return false;
 		}
@@ -57,7 +57,8 @@ export async function verifyFolderPermission(folder: FolderSource) {
 
 async function collectBrowserPdfs(
 	handle: FileSystemDirectoryHandle,
-	prefix = ''
+	prefix = '',
+	folderPaths: string[] = []
 ): Promise<Array<{ file: File; path: string }>> {
 	const result: Array<{ file: File; path: string }> = [];
 	const directories: Array<{
@@ -71,41 +72,23 @@ async function collectBrowserPdfs(
 			try {
 				result.push({ file: await entry.getFile(), path });
 			} catch (error) {
-				console.warn('Could not read PDF', path, error);
+				throw new Error(`Could not read PDF ${path}: ${String(error)}`);
 			}
 		} else if (entry.kind === 'directory') {
+			folderPaths.push(path);
 			directories.push({ handle: entry, path });
 		}
 	}
 	for (const directory of directories) {
 		result.push(
-			...(await collectBrowserPdfs(directory.handle, directory.path))
+			...(await collectBrowserPdfs(
+				directory.handle,
+				directory.path,
+				folderPaths
+			))
 		);
 	}
 	return result;
-}
-
-async function mapConcurrent<T, R>(
-	items: T[],
-	limit: number,
-	fn: (item: T) => Promise<R>
-): Promise<R[]> {
-	const results = new Array<R>(items.length);
-	let cursor = 0;
-	async function worker() {
-		while (cursor < items.length) {
-			const index = cursor++;
-			try {
-				results[index] = await fn(items[index]);
-			} catch (error) {
-				console.warn('Library item failed', error);
-			}
-		}
-	}
-	await Promise.all(
-		Array.from({ length: Math.min(limit, items.length) }, worker)
-	);
-	return results.filter((result): result is R => result !== undefined);
 }
 
 function stableId(path: string) {
@@ -220,13 +203,18 @@ export async function chooseAndAddFolder() {
 async function syncNativeFolder(folder: FolderSource) {
 	if (!folder.nativePath) return { added: 0, updated: 0, removed: 0 };
 	let files: NativeScoreFile[];
+	let directories: string[];
 	try {
-		files = await invoke<NativeScoreFile[]>('list_score_files', {
+		const tree = await invoke<{
+			files: NativeScoreFile[];
+			directories: string[];
+		}>('list_score_tree', {
 			path: folder.nativePath
 		});
+		files = tree.files;
+		directories = tree.directories;
 	} catch (error) {
-		console.warn('list_score_files failed', error);
-		return { added: 0, updated: 0, removed: 0 };
+		throw new Error(`Could not read the score folder: ${String(error)}`);
 	}
 
 	const existing = await db.scores
@@ -235,10 +223,11 @@ async function syncNativeFolder(folder: FolderSource) {
 		.toArray();
 	const existingById = new Map(existing.map((score) => [score.id, score]));
 	const present = new Set(files.map((file) => stableId(file.relative_path)));
-	const allowRemovals = files.length > 0 || existing.length === 0;
+	const allowRemovals = true;
 
 	const removed = existing.filter((score) => !present.has(score.id));
 	const claimedRemovals = new Set<string>();
+	const matchMove = createMoveMatcher(removed);
 
 	let added = 0;
 	let updated = 0;
@@ -252,7 +241,8 @@ async function syncNativeFolder(folder: FolderSource) {
 			!old ||
 			old.fileSize !== file.size ||
 			old.fileModifiedAt !== file.modified_at ||
-			!old.nativePath;
+			!old.nativePath ||
+			(old.folderId ?? '') !== diskFolderId(parentPath(file.relative_path));
 		if (!changed && old) continue;
 
 		let next = plainScore({
@@ -277,17 +267,13 @@ async function syncNativeFolder(folder: FolderSource) {
 			collection: old?.collection || 'Library',
 			sourceFolderId: folder.id,
 			sourcePath: file.relative_path,
+			folderId: diskFolderId(parentPath(file.relative_path)),
 			fileSize: file.size,
 			fileModifiedAt: file.modified_at
 		});
 
 		if (!old) {
-			const match = removed.find(
-				(r) =>
-					!claimedRemovals.has(r.id) &&
-					r.fileSize === file.size &&
-					r.fileModifiedAt === file.modified_at
-			);
+			const match = matchMove(file.size, file.modified_at);
 			if (match) {
 				claimedRemovals.add(match.id);
 				next = adoptMetadata(next, match);
@@ -346,7 +332,7 @@ async function syncNativeFolder(folder: FolderSource) {
 		db.lists,
 		db.folders,
 		async () => {
-			for (const next of toWrite) await db.scores.put(plainScore(next));
+			if (toWrite.length) await db.scores.bulkPut(toWrite.map(plainScore));
 
 			for (const move of annotationMoves) {
 				await migrateAnnotations(move.from, move.to);
@@ -368,6 +354,7 @@ async function syncNativeFolder(folder: FolderSource) {
 		}
 	);
 
+	await reconcileDiskFolders(directories);
 	const trulyRemoved = allowRemovals
 		? existing.filter(
 				(score) => !present.has(score.id) && !claimedRemovals.has(score.id)
@@ -380,17 +367,19 @@ async function syncBrowserFolder(folder: FolderSource) {
 	if (!folder.handle || !(await verifyBrowserPermission(folder.handle))) {
 		return { added: 0, updated: 0, removed: 0 };
 	}
-	const files = await collectBrowserPdfs(folder.handle);
+	const directories: string[] = [];
+	const files = await collectBrowserPdfs(folder.handle, '', directories);
 	const existing = await db.scores
 		.where('sourceFolderId')
 		.equals(folder.id)
 		.toArray();
 	const existingById = new Map(existing.map((score) => [score.id, score]));
 	const present = new Set(files.map(({ path }) => stableId(path)));
-	const allowRemovals = files.length > 0 || existing.length === 0;
+	const allowRemovals = true;
 
 	const removed = existing.filter((score) => !present.has(score.id));
 	const claimedRemovals = new Set<string>();
+	const matchMove = createMoveMatcher(removed);
 
 	const changed = files.filter(({ file, path }) => {
 		const old = existingById.get(stableId(path));
@@ -398,75 +387,66 @@ async function syncBrowserFolder(folder: FolderSource) {
 			!old ||
 			old.fileSize !== file.size ||
 			old.fileModifiedAt !== file.lastModified ||
-			!old.thumbnailUrl
+			!old.pdfBlob ||
+			(old.folderId ?? '') !== diskFolderId(parentPath(path))
 		);
 	});
 
-	const results = await mapConcurrent(
-		changed,
-		METADATA_CONCURRENCY,
-		async ({ file, path }) => {
-			const id = stableId(path);
-			const old = existingById.get(id);
-			let info: { totalPages: number; thumbnailUrl?: string } | undefined;
-			try {
-				info = await getPdfInfoFromSource({ blob: file });
-			} catch (error) {
-				console.warn('PDF metadata failed', path, error);
+	// Publish file rows immediately; the visible-first thumbnail worker fills previews later.
+	const results = changed.map(({ file, path }) => {
+		const id = stableId(path);
+		const old = existingById.get(id);
+		const contentChanged =
+			!!old &&
+			(old.fileSize !== file.size || old.fileModifiedAt !== file.lastModified);
+
+		// Prefer a plain Blob over the live File handle for IDB storage
+		const blob =
+			file instanceof Blob
+				? file.slice(0, file.size, file.type || 'application/pdf')
+				: undefined;
+
+		let next = plainScore({
+			...old,
+			id,
+			title: old?.title ?? file.name.replace(/\.pdf$/i, ''),
+			composer:
+				old?.composer && old.composer !== 'Unknown Composer'
+					? old.composer
+					: composerFromPath(path),
+			pdfBlob: blob,
+			thumbnailUrl: contentChanged ? undefined : old?.thumbnailUrl,
+			thumbnailVersion: old?.thumbnailVersion,
+			totalPages: contentChanged ? 1 : old?.totalPages || 1,
+			addedAt: old?.addedAt || Date.now(),
+			lastOpenedAt: old?.lastOpenedAt || 0,
+			favorite: old?.favorite || false,
+			tags: old?.tags || [],
+			year: old?.year ?? null,
+			ensemble: old?.ensemble,
+			instruments: old?.instruments,
+			collection: old?.collection || 'Library',
+			sourceFolderId: folder.id,
+			sourcePath: path,
+			folderId: diskFolderId(parentPath(path)),
+			fileSize: file.size,
+			fileModifiedAt: file.lastModified
+		});
+
+		let matchedFrom: string | undefined;
+		if (!old) {
+			const match = matchMove(file.size, file.lastModified);
+			if (match) {
+				claimedRemovals.add(match.id);
+				next = adoptMetadata(next, match);
+				// Keep the fresh blob after metadata adopt
+				if (blob) next.pdfBlob = blob;
+				matchedFrom = match.id;
 			}
-
-			// Prefer a plain Blob over the live File handle for IDB storage
-			const blob =
-				file instanceof Blob
-					? file.slice(0, file.size, file.type || 'application/pdf')
-					: undefined;
-
-			let next = plainScore({
-				...old,
-				id,
-				title: old?.title ?? file.name.replace(/\.pdf$/i, ''),
-				composer:
-					old?.composer && old.composer !== 'Unknown Composer'
-						? old.composer
-						: composerFromPath(path),
-				pdfBlob: blob,
-				thumbnailUrl: info?.thumbnailUrl || old?.thumbnailUrl,
-				thumbnailVersion: old?.thumbnailVersion,
-				totalPages: info?.totalPages || old?.totalPages || 1,
-				addedAt: old?.addedAt || Date.now(),
-				lastOpenedAt: old?.lastOpenedAt || 0,
-				favorite: old?.favorite || false,
-				tags: old?.tags || [],
-				year: old?.year ?? null,
-				ensemble: old?.ensemble,
-				instruments: old?.instruments,
-				collection: old?.collection || 'Library',
-				sourceFolderId: folder.id,
-				sourcePath: path,
-				fileSize: file.size,
-				fileModifiedAt: file.lastModified
-			});
-
-			let matchedFrom: string | undefined;
-			if (!old) {
-				const match = removed.find(
-					(r) =>
-						!claimedRemovals.has(r.id) &&
-						r.fileSize === file.size &&
-						r.fileModifiedAt === file.lastModified
-				);
-				if (match) {
-					claimedRemovals.add(match.id);
-					next = adoptMetadata(next, match);
-					// Keep the fresh blob after metadata adopt
-					if (blob) next.pdfBlob = blob;
-					matchedFrom = match.id;
-				}
-			}
-
-			return { next, existed: !!old, matchedFrom };
 		}
-	);
+
+		return { next, existed: !!old, matchedFrom };
+	});
 
 	await db.transaction(
 		'rw',
@@ -475,8 +455,9 @@ async function syncBrowserFolder(folder: FolderSource) {
 		db.lists,
 		db.folders,
 		async () => {
+			if (results.length)
+				await db.scores.bulkPut(results.map(({ next }) => plainScore(next)));
 			for (const { next, matchedFrom } of results) {
-				await db.scores.put(plainScore(next));
 				if (matchedFrom) {
 					await migrateAnnotations(matchedFrom, next.id);
 					await db.scores.delete(matchedFrom);
@@ -498,6 +479,7 @@ async function syncBrowserFolder(folder: FolderSource) {
 		}
 	);
 
+	await reconcileDiskFolders(directories);
 	return {
 		added: results.filter((r) => !r.existed && !r.matchedFrom).length,
 		updated: results.filter((r) => r.existed || r.matchedFrom).length,
@@ -509,7 +491,7 @@ async function syncBrowserFolder(folder: FolderSource) {
 }
 
 export async function syncFolder(folder: FolderSource) {
-	if (!(await verifyFolderPermission(folder)))
+	if (!folder.nativePath && !(await verifyFolderPermission(folder)))
 		return { added: 0, updated: 0, removed: 0 };
 	return folder.nativePath
 		? syncNativeFolder(folder)
