@@ -85,7 +85,12 @@ function button(label: string) {
 	if (!el) throw Error(`Missing ${label}`);
 	el.click();
 }
-function stroke(canvas: HTMLCanvasElement, x = 0.3, pointerType = 'mouse') {
+function stroke(
+	canvas: HTMLCanvasElement,
+	x = 0.3,
+	pointerType = 'mouse',
+	y = 0.3
+) {
 	const rect = canvas.getBoundingClientRect();
 	for (const [type, dx, dy, buttons] of [
 		['pointerdown', 0, 0, 1],
@@ -100,7 +105,7 @@ function stroke(canvas: HTMLCanvasElement, x = 0.3, pointerType = 'mouse') {
 				button: 0,
 				buttons,
 				clientX: rect.left + rect.width * x + dx,
-				clientY: rect.top + rect.height * 0.3 + dy
+				clientY: rect.top + rect.height * y + dy
 			})
 		);
 	}
@@ -110,7 +115,8 @@ try {
 		...s,
 		autoLayout: false,
 		dualPages: false,
-		keepAwake: false
+		keepAwake: false,
+		handwritingPauseMs: DEFAULT_HANDWRITING_PAUSE_MS
 	}));
 	const bytes = await makePdfFixture('scan');
 	component = mount(ScoreViewer, {
@@ -137,32 +143,16 @@ try {
 	button('Handwriting');
 	await tick();
 
-	[...app.querySelectorAll<HTMLButtonElement>('button')]
-		.find((b) => b.textContent === 'Model setup')!
-		.click();
-	await waitFor(() => !!app.querySelector('dialog[open]'));
-	if (preview) {
-		output.remove();
-		await new Promise(() => {});
-	}
-	await waitFor(
-		() => app.querySelector<HTMLProgressElement>('progress')?.value === 100
-	);
-	assert(
-		!app.textContent!.includes('Ollama'),
-		'Setup must not require a model server'
-	);
+	assert(!app.textContent!.includes('Model setup'), 'No model setup');
+	assert(!app.querySelector('.handwriting-status'), 'Conversion is silent');
 	assert(!app.querySelector('.rail-label'), 'Toolbar must be icon-only');
-	[...app.querySelectorAll<HTMLButtonElement>('dialog button')]
-		.find((b) => b.textContent!.includes('Start writing'))!
-		.click();
-	await tick();
+
 	const canvas = app.querySelector<HTMLCanvasElement>('.ink-canvas')!;
 	stroke(canvas, 0.3, 'touch');
 	await delay(1100);
 	assert(calls === 0, 'Touch must not write');
 	stroke(canvas);
-	await waitFor(() => app.textContent!.includes('Converted.'));
+	await delay(DEFAULT_HANDWRITING_PAUSE_MS + 350);
 	let record = await saved();
 	assert(
 		record?.stamps.length === 1 && record.strokes.length === 0,
@@ -181,15 +171,65 @@ try {
 	button('Redo');
 	record = await saved();
 	assert(record?.stamps.length === 1, 'Redo conversion');
+	const mark = record!.stamps[0];
+	function pointer(type: string, x: number, y: number) {
+		const r = canvas.getBoundingClientRect();
+		canvas.dispatchEvent(
+			new PointerEvent(type, {
+				bubbles: true,
+				pointerId: 7,
+				pointerType: 'mouse',
+				button: 0,
+				buttons: type === 'pointerup' ? 0 : 1,
+				clientX: r.left + x * r.width,
+				clientY: r.top + y * r.height
+			})
+		);
+	}
+	pointer('pointerdown', mark.x, mark.y);
+	pointer('pointerup', mark.x, mark.y);
+	pointer('pointerdown', mark.x, mark.y);
+	pointer('pointermove', mark.x + 0.08, mark.y + 0.07);
+	pointer('pointerup', mark.x + 0.08, mark.y + 0.07);
+	record = await saved();
+	assert(
+		Math.abs(record!.stamps[0].x - mark.x - 0.08) < 0.005,
+		'Drag selected object without anchor jump'
+	);
+	button('Undo');
+	await saved();
+	const ctx = canvas.getContext('2d')!;
+	ctx.font = `${mark.fontSize}px Leland`;
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'middle';
+	const metrics = ctx.measureText(mark.symbol);
+	const hx = mark.x + (metrics.actualBoundingBoxRight + 6) / canvas.clientWidth;
+	const hy =
+		mark.y + (metrics.actualBoundingBoxDescent + 6) / canvas.clientHeight;
+	pointer('pointerdown', hx, hy);
+	pointer('pointermove', hx + 0.04, hy + 0.04);
+	pointer('pointerup', hx + 0.04, hy + 0.04);
+	record = await saved();
+	assert(
+		record!.stamps[0].fontSize > mark.fontSize,
+		'Resize using corner handle'
+	);
+	button('Undo');
+	await saved();
+	if (preview) {
+		output.remove();
+		await new Promise(() => {});
+	}
+
 	response = { kind: 'text', value: 'dolce' };
 	stroke(canvas, 0.6);
-	await waitFor(() => app.textContent!.includes('Converted.'));
+	await delay(DEFAULT_HANDWRITING_PAUSE_MS + 350);
 	await delay(DEFAULT_HANDWRITING_PAUSE_MS + 250);
 	record = await saved();
 	assert(record?.notes[0]?.text === 'dolce', 'Handwriting text conversion');
 	response = { kind: 'text', value: 'T' };
 	const beforeT = calls;
-	stroke(canvas, 0.75);
+	stroke(canvas, 0.75, 'mouse', 0.5);
 	await delay(1200);
 	assert(calls === beforeT, 'Do not submit during a short break');
 	record = await saved();
@@ -197,7 +237,7 @@ try {
 		(record?.strokes[0]?.points.length ?? 0) >= 2,
 		'Capture stroke movement even without coalesced events'
 	);
-	stroke(canvas, 0.75);
+	stroke(canvas, 0.75, 'mouse', 0.5);
 	await delay(1200);
 	assert(calls === beforeT, 'Second stroke restarts the full pause');
 	await waitFor(() => calls === beforeT + 1);
@@ -216,7 +256,7 @@ try {
 	response = { kind: 'text', value: 'word' };
 	const beforeWord = calls;
 	for (let i = 0; i < 4; i++) {
-		stroke(canvas, 0.4 + i * 0.03);
+		stroke(canvas, 0.4 + i * 0.03, 'mouse', 0.65);
 		await delay(750);
 		assert(calls === beforeWord, 'Ignore every short pause throughout a word');
 	}
@@ -229,41 +269,27 @@ try {
 	);
 
 	response = { kind: 'unknown', value: '' };
-	stroke(canvas, 0.9);
-	await waitFor(() => app.textContent!.includes('Retry conversion'));
+	stroke(canvas, 0.9, 'mouse', 0.8);
+
+	await delay(DEFAULT_HANDWRITING_PAUSE_MS + 350);
 	record = await saved();
-	assert(
-		record?.strokes.length === 1,
-		'Unknown result preserves ink for retry'
-	);
-	response = { kind: 'text', value: 'retry' };
-	[...app.querySelectorAll<HTMLButtonElement>('button')]
-		.find((b) => b.textContent?.trim() === 'Retry conversion')!
-		.click();
-	await waitFor(
-		() =>
-			!app.textContent!.includes('Retry conversion') &&
-			app.textContent!.includes('Converted.')
-	);
-	record = await saved();
-	assert(
-		record?.notes.at(-1)?.text === 'retry' && record.strokes.length === 0,
-		'Retry converts preserved strokes without duplication'
-	);
+	assert(record?.strokes.length === 1, 'Unknown result preserves ink silently');
+	button('Undo');
+	await saved();
 
 	slow = true;
-	stroke(canvas, 0.8);
+	stroke(canvas, 0.8, 'mouse', 0.9);
 	const before = calls;
 	await waitFor(() => calls > before);
 	button('Undo');
 	await delay(1800);
 	record = await saved();
 	assert(
-		record?.notes.length === 4 && record.strokes.length === 0,
+		record?.notes.length === 3 && record.strokes.length === 0,
 		'Undo invalidates in-flight recognition'
 	);
 	output.textContent =
-		'PASS: built-in model preparation, icon-only rail, touch rejection, symbol/text conversion, multi-stroke pause grouping, two-step undo, redo, stale result protection';
+		'PASS: silent conversion, object dragging/resizing, icon-only rail, touch rejection, symbol/text conversion, multi-stroke pause grouping, two-step undo, redo, stale result protection';
 } catch (error) {
 	output.textContent = `FAIL: ${String(error)}`;
 	console.error(error);

@@ -25,6 +25,8 @@ export type AppSettings = {
 	viewerMode: 'practice' | 'reading';
 	annotationsVisible: boolean;
 	textSize: number;
+	handwritingPauseMs: number;
+	handwritingMode: 'auto' | 'music' | 'text';
 };
 
 const STORAGE_KEY = 'sonora-app-settings';
@@ -45,6 +47,8 @@ const defaults: AppSettings = {
 	defaultFit: 'page',
 	viewerMode: 'practice',
 	annotationsVisible: true,
+	handwritingPauseMs: 2000,
+	handwritingMode: 'auto',
 	textSize: 18
 };
 
@@ -52,9 +56,22 @@ function load(): AppSettings {
 	if (typeof localStorage === 'undefined') return { ...defaults };
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return { ...defaults };
-		const parsed = JSON.parse(raw) as Partial<AppSettings>;
+		const parsed = (raw ? JSON.parse(raw) : {}) as Partial<AppSettings>;
 		return {
+			handwritingPauseMs: Math.max(
+				1000,
+				Math.min(
+					5000,
+					Number(
+						parsed.handwritingPauseMs ??
+							localStorage.getItem('sonora-handwriting-pause-ms')
+					) || 2000
+				)
+			),
+			handwritingMode:
+				parsed.handwritingMode === 'music' || parsed.handwritingMode === 'text'
+					? parsed.handwritingMode
+					: 'auto',
 			accent: ['oxblood', 'forest', 'ocean', 'plum', 'ochre'].includes(
 				parsed.accent ?? ''
 			)

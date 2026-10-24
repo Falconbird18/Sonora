@@ -75,7 +75,14 @@ export const MUSIC_SYMBOLS: MusicSymbol[] = [
 	id,
 	name,
 	category: category as MusicSymbol['category'],
-	glyph: glyph(hex)
+	glyph:
+		hex === 'E045'
+			? 'D.S.'
+			: hex === 'E046'
+				? 'D.C.'
+				: hex === 'E63B'
+					? glyph('EAA9')
+					: glyph(hex)
 }));
 
 export const MUSIC_SYMBOL_CATEGORIES = [
@@ -91,3 +98,16 @@ export const MUSIC_SYMBOL_CATEGORIES = [
 	'Bowings',
 	'Fingering'
 ] as const;
+
+/** Resolve legacy unsupported codepoints saved by earlier versions. */
+export function renderMusicGlyph(value: string) {
+	return value
+		.replaceAll('\uE045', 'D.S.')
+		.replaceAll('\uE046', 'D.C.')
+		.replaceAll('\uE63B', '\uEAA9');
+}
+export function musicFont(value: string, size: number) {
+	return /^[\x20-\x7e]+$/.test(renderMusicGlyph(value))
+		? `italic ${size}px serif`
+		: `${size}px Leland`;
+}

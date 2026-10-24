@@ -102,7 +102,8 @@ The practice checks cover filename cleanup, composer recognition, layer compatib
 Open Annotation tools and select **Handwriting**. Write with the left mouse
 button or stylus. Every stroke restarts a two-second pause, so short breaks
 inside a word are ignored. Adjust the pause from one to five seconds in
-**Model setup**. Converted symbols and text are movable annotation objects.
+**Settings → Handwriting**. Conversion happens silently. Tap converted symbols or
+text to select them, drag to move, and drag a corner handle to resize.
 Undo once restores the original ink; undo again removes the last stroke.
 Use two fingers to pan or pinch to zoom.
 
@@ -114,7 +115,7 @@ processing. Models are kept warm. Browser previews use a slower WASM fallback.
 
 **Auto** recognizes common music marks and words. **Music symbols** and **Text**
 let you resolve ambiguous writing. Unsupported or low-confidence marks remain
-ink, with a retry action. Supported music stamps include clefs, noteheads,
+ink; adding strokes retries recognition. Supported music stamps include clefs, noteheads,
 accidentals and several rests; text recognition also maps familiar dynamics,
 fingering and several simple marks to the existing palette. This is annotation
 recognition, not full-score OMR or a change to playback. Handwriting accuracy

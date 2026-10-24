@@ -1,13 +1,7 @@
 <script lang="ts">
-	import {
-		handwritingImage,
-		recognizeHandwriting,
-		loadHandwritingPause
-	} from './handwriting';
-	import {
-		prepareRecognition,
-		type RecognitionMode
-	} from './recognition/client';
+	import { renderMusicGlyph, musicFont } from './musicSymbols';
+	import { handwritingImage, recognizeHandwriting } from './handwriting';
+	import { prepareRecognition } from './recognition/client';
 	import { scoreRasterScale, scoreRasterKey } from './scoreRaster';
 	import { formatComposer } from './composerDisplay';
 	import { onMount, tick, untrack } from 'svelte';
@@ -28,7 +22,6 @@
 	import { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';
 	import { acquireScreenWakeLock, releaseScreenWakeLock } from './wakeLock';
 	import { settings } from './settingsStore';
-	import HandwritingSetup from './ui/HandwritingSetup.svelte';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
 	import PracticeTools from './ui/PracticeTools.svelte';
 	import AnnotationLayersPanel from './ui/AnnotationLayersPanel.svelte';
@@ -276,12 +269,17 @@
 	let textSize = $state(18);
 	let textEditor = $state<TextEditor | null>(null);
 	let textDraft = $state('');
+	let selection: { kind: 'stamp' | 'note'; page: number; id: string } | null =
+		null;
 	let draggingAnnot: {
 		kind: 'stamp' | 'note';
 		page: number;
 		id: string;
 		canvas: HTMLCanvasElement;
 		pointerId: number;
+		start: Point;
+		original: SymbolStamp | TextNote;
+		resize: boolean;
 	} | null = null;
 	let strokes = $state<Record<number, Stroke[]>>({});
 	let stamps = $state<Record<number, SymbolStamp[]>>({});
@@ -481,6 +479,10 @@
 	});
 
 	onMount(() => {
+		void document.fonts.load('32px Leland').then(() => {
+			redraw(visiblePages[0], leftInk);
+			if (visiblePages[1]) redraw(visiblePages[1], rightInk);
+		});
 		try {
 			const global = get(settings);
 			autoLayout = global.autoLayout;
@@ -521,7 +523,7 @@
 		};
 		document.addEventListener('visibilitychange', onVisibility);
 		const key = (event: KeyboardEvent) => {
-			if (handwritingSetupOpen) return;
+			if (settingsOpen) return;
 			if (textEditor) {
 				if (event.key === 'Escape') {
 					event.preventDefault();
@@ -1101,11 +1103,9 @@
 		const h = Math.max(1, canvas.clientHeight);
 		return { x: point.x * w, y: point.y * h };
 	}
-	let handwritingStatus = $state('Write a symbol or text; pause to convert.');
-	let handwritingMode = $state<RecognitionMode>('auto');
-	let handwritingPauseMs = $state(loadHandwritingPause());
-	let handwritingRetryAvailable = $state(false);
-	let handwritingSetupOpen = $state(false);
+	let handwritingMode = $derived($settings.handwritingMode);
+	let handwritingPauseMs = $derived($settings.handwritingPauseMs);
+
 	let handwritingTimer: ReturnType<typeof setTimeout> | undefined;
 	let handwritingEpoch = 0;
 	let handwritingBatch: { page: number; layer: string; ids: string[] } | null =
@@ -1115,7 +1115,6 @@
 		clearTimeout(handwritingTimer);
 		handwritingEpoch++;
 		handwritingBatch = null;
-		handwritingRetryAvailable = false;
 	}
 	function queueHandwriting(
 		number: number,
@@ -1131,11 +1130,9 @@
 			handwritingBatch = { page: number, layer: activeLayer, ids: [] };
 		if (!handwritingBatch.ids.includes(stroke.id))
 			handwritingBatch.ids.push(stroke.id);
-		handwritingRetryAvailable = false;
 		const batch = { ...handwritingBatch, ids: [...handwritingBatch.ids] };
 		const epoch = ++handwritingEpoch;
 		clearTimeout(handwritingTimer);
-		handwritingStatus = 'Waiting for you to finish writing…';
 		handwritingTimer = setTimeout(() => {
 			const scoreId = score.id;
 			const baseline = JSON.stringify(snapshot(number));
@@ -1154,7 +1151,6 @@
 				.catch(() => undefined)
 				.then(async () => {
 					if (!valid()) return;
-					handwritingStatus = 'Recognizing on this device…';
 					try {
 						const ink = cloneData(
 							(strokes[number] || []).filter(
@@ -1174,9 +1170,6 @@
 						);
 						if (!valid()) return;
 						if (!result) {
-							handwritingStatus =
-								'Could not recognize that. Add more strokes or retry.';
-							handwritingRetryAvailable = true;
 							return;
 						}
 						handwritingBatch = null;
@@ -1220,34 +1213,18 @@
 						);
 						checkpoint(number);
 						redraw(number, canvas);
-						handwritingStatus =
-							'Converted. Drag to move; Undo restores your ink.';
-					} catch (error) {
-						if (valid()) {
-							handwritingRetryAvailable = true;
-							handwritingStatus = `${String(error)} Your ink is preserved.`;
-						}
+					} catch {
+						// Preserve ink; the next writing pause can try again.
 					}
 				});
 		}, handwritingPauseMs);
-	}
-	function retryHandwriting() {
-		const batch = handwritingBatch;
-		if (!batch) return;
-		const canvas = batch.page === visiblePages[0] ? leftInk : rightInk;
-		const stroke = (strokes[batch.page] || []).find(
-			(s) => s.id === batch.ids.at(-1)
-		);
-		if (canvas && stroke) queueHandwriting(batch.page, canvas, stroke);
 	}
 	function choose(nextTool: Tool) {
 		cancelHandwriting();
 		tool = nextTool;
 		if (nextTool === 'handwriting')
-			void prepareRecognition().catch((error) => {
-				if (closed || tool !== 'handwriting') return;
-				handwritingStatus = String(error);
-				handwritingSetupOpen = true;
+			void prepareRecognition().catch(() => {
+				/* Ink stays available if initialization fails. */
 			});
 		if (nextTool !== 'text') {
 			textEditor = null;
@@ -1259,24 +1236,86 @@
 		}
 	}
 
+	function objectBounds(
+		mark: SymbolStamp | TextNote,
+		canvas: HTMLCanvasElement
+	) {
+		const ctx = canvas.getContext('2d')!;
+		const stamp = 'symbol' in mark;
+		ctx.save();
+		ctx.font = stamp
+			? musicFont(mark.symbol, mark.fontSize)
+			: `600 ${mark.fontSize}px system-ui,sans-serif`;
+		ctx.textAlign = stamp ? 'center' : 'left';
+		ctx.textBaseline = stamp ? 'middle' : 'top';
+		const m = ctx.measureText(
+			stamp ? renderMusicGlyph(mark.symbol) : mark.text
+		);
+		ctx.restore();
+		const x = mark.x * canvas.clientWidth,
+			y = mark.y * canvas.clientHeight;
+		return {
+			x: x - m.actualBoundingBoxLeft - 6,
+			y: y - m.actualBoundingBoxAscent - 6,
+			w: Math.max(12, m.actualBoundingBoxLeft + m.actualBoundingBoxRight) + 12,
+			h:
+				Math.max(12, m.actualBoundingBoxAscent + m.actualBoundingBoxDescent) +
+				12
+		};
+	}
+	function selectedMark() {
+		if (!selection) return undefined;
+		return (
+			selection.kind === 'stamp'
+				? stamps[selection.page]
+				: notes[selection.page]
+		)?.find((m) => m.id === selection!.id && editable(m));
+	}
 	function hitAnnotation(
 		number: number,
 		point: Point,
-		radius = 0.04
-	): { kind: 'stamp' | 'note'; id: string } | null {
-		for (let i = (stamps[number] || []).length - 1; i >= 0; i--) {
-			const stamp = stamps[number][i];
-			if (!editable(stamp)) continue;
-			if (Math.hypot(stamp.x - point.x, stamp.y - point.y) <= radius)
-				return { kind: 'stamp', id: stamp.id };
+		canvas: HTMLCanvasElement
+	): { kind: 'stamp' | 'note'; id: string; resize?: boolean } | null {
+		const x = point.x * canvas.clientWidth,
+			y = point.y * canvas.clientHeight;
+		const selected = selectedMark();
+		if (selection?.page === number && selected) {
+			const b = objectBounds(selected, canvas);
+			if (
+				[
+					[b.x, b.y],
+					[b.x + b.w, b.y],
+					[b.x, b.y + b.h],
+					[b.x + b.w, b.y + b.h]
+				].some(([hx, hy]) => Math.hypot(x - hx, y - hy) < 14)
+			)
+				return { ...selection, resize: true };
 		}
-		for (let i = (notes[number] || []).length - 1; i >= 0; i--) {
-			const note = notes[number][i];
-			if (!editable(note)) continue;
-			if (Math.hypot(note.x - point.x, note.y - point.y) <= radius)
-				return { kind: 'note', id: note.id };
+		for (const kind of ['note', 'stamp'] as const) {
+			const marks = kind === 'stamp' ? stamps[number] : notes[number];
+			for (const mark of [...(marks || [])].reverse()) {
+				if (!editable(mark)) continue;
+				const b = objectBounds(mark, canvas);
+				if (
+					x >= b.x - 5 &&
+					x <= b.x + b.w + 5 &&
+					y >= b.y - 5 &&
+					y <= b.y + b.h + 5
+				)
+					return { kind, id: mark.id };
+			}
 		}
 		return null;
+	}
+	function restoreTransform(active: NonNullable<typeof draggingAnnot>) {
+		if (active.kind === 'stamp')
+			stamps[active.page] = (stamps[active.page] || []).map((m) =>
+				m.id === active.id ? (active.original as SymbolStamp) : m
+			);
+		else
+			notes[active.page] = (notes[active.page] || []).map((m) =>
+				m.id === active.id ? (active.original as TextNote) : m
+			);
 	}
 
 	function placeSymbolAt(
@@ -1317,22 +1356,11 @@
 		number: number,
 		canvas: HTMLCanvasElement
 	) {
-		if (
-			reading ||
-			!annotating ||
-			!layers.some((l) => l.id === activeLayer && l.visible)
-		)
+		if (reading || !layers.some((l) => l.id === activeLayer && l.visible))
 			return;
-		if (
-			event.pointerType === 'touch' ||
-			event.button !== 0 ||
-			drawing ||
-			draggingAnnot
-		)
-			return;
+		if (event.button !== 0 || drawing || draggingAnnot) return;
 		clearTimeout(handwritingTimer);
 		handwritingEpoch++;
-		handwritingRetryAvailable = false;
 		if (textEditor) {
 			commitText();
 			return;
@@ -1341,25 +1369,31 @@
 		ensureHistory(number);
 		const point = position(event, canvas);
 		if (tool !== 'eraser') {
-			const hit = hitAnnotation(
-				number,
-				point,
-				tool === 'symbol' || tool === 'text' ? 0.05 : 0.035
-			);
+			const hit = hitAnnotation(number, point, canvas);
 			if (hit) {
+				event.stopPropagation();
 				try {
 					canvas.setPointerCapture(event.pointerId);
 				} catch {}
+				selection = { kind: hit.kind, page: number, id: hit.id };
+				const original = { ...selectedMark()! };
 				draggingAnnot = {
 					kind: hit.kind,
 					page: number,
 					id: hit.id,
 					canvas,
-					pointerId: event.pointerId
+					pointerId: event.pointerId,
+					start: point,
+					original,
+					resize: !!hit.resize
 				};
+				redraw(number, canvas);
 				return;
 			}
 		}
+		selection = null;
+		redraw(number, canvas);
+		if (event.pointerType === 'touch' || !annotating) return;
 		try {
 			canvas.setPointerCapture(event.pointerId);
 		} catch {}
@@ -1482,7 +1516,7 @@
 	}
 
 	function move(event: PointerEvent) {
-		if (event.pointerType === 'touch') return;
+		if (event.pointerType === 'touch' && !draggingAnnot) return;
 		const activePointer = draggingAnnot?.pointerId ?? drawing?.pointerId;
 		if (activePointer !== undefined && activePointer !== event.pointerId)
 			return;
@@ -1496,18 +1530,39 @@
 
 		if (draggingAnnot) {
 			const point = position(event, draggingAnnot.canvas);
-			const x = Math.min(0.98, Math.max(0.02, point.x));
-			const y = Math.min(0.98, Math.max(0.02, point.y));
-			if (draggingAnnot.kind === 'stamp') {
-				stamps[draggingAnnot.page] = (stamps[draggingAnnot.page] || []).map(
-					(stamp) =>
-						stamp.id === draggingAnnot!.id ? { ...stamp, x, y } : stamp
+
+			const a = draggingAnnot,
+				original = a.original;
+			const x = Math.min(
+				0.98,
+				Math.max(0.02, original.x + point.x - a.start.x)
+			);
+			const y = Math.min(
+				0.98,
+				Math.max(0.02, original.y + point.y - a.start.y)
+			);
+			const dx = (point.x - original.x) * a.canvas.clientWidth,
+				dy = (point.y - original.y) * a.canvas.clientHeight;
+			const sx = (a.start.x - original.x) * a.canvas.clientWidth,
+				sy = (a.start.y - original.y) * a.canvas.clientHeight;
+			const fontSize = Math.max(
+				8,
+				Math.min(
+					240,
+					(original.fontSize * Math.hypot(dx, dy)) /
+						Math.max(8, Math.hypot(sx, sy))
+				)
+			);
+			const patch = a.resize ? { fontSize } : { x, y };
+			if (a.kind === 'stamp')
+				stamps[a.page] = (stamps[a.page] || []).map((m) =>
+					m.id === a.id ? { ...m, ...patch } : m
 				);
-			} else {
-				notes[draggingAnnot.page] = (notes[draggingAnnot.page] || []).map(
-					(note) => (note.id === draggingAnnot!.id ? { ...note, x, y } : note)
+			else
+				notes[a.page] = (notes[a.page] || []).map((m) =>
+					m.id === a.id ? { ...m, ...patch } : m
 				);
-			}
+
 			redraw(draggingAnnot.page, draggingAnnot.canvas);
 			return;
 		}
@@ -1550,7 +1605,17 @@
 			try {
 				active.canvas.releasePointerCapture(active.pointerId);
 			} catch {}
-			checkpoint(active.page);
+			if (event.type === 'pointercancel') restoreTransform(active);
+			else {
+				const current = selectedMark();
+				if (
+					current &&
+					(current.x !== active.original.x ||
+						current.y !== active.original.y ||
+						current.fontSize !== active.original.fontSize)
+				)
+					checkpoint(active.page);
+			}
 			redraw(active.page, active.canvas);
 			return;
 		}
@@ -1674,9 +1739,9 @@
 				(m) => (m.layerId || 'default') === layer.id
 			)) {
 				const p = pointToCanvas({ x: stamp.x, y: stamp.y }, canvas);
-				context.font = `${stamp.fontSize}px Leland, serif`;
+				context.font = musicFont(stamp.symbol, stamp.fontSize);
 				context.fillStyle = stamp.color;
-				context.fillText(stamp.symbol, p.x, p.y);
+				context.fillText(renderMusicGlyph(stamp.symbol), p.x, p.y);
 			}
 			context.restore();
 			for (const note of (notes[number] || []).filter(
@@ -1692,6 +1757,26 @@
 				context.fillText(note.text, p.x, p.y);
 				context.restore();
 			}
+		}
+		const mark = selectedMark();
+		if (!reading && selection?.page === number && mark) {
+			const b = objectBounds(mark, canvas);
+			context.save();
+			context.strokeStyle = '#2684ff';
+			context.lineWidth = 1.5;
+			context.setLineDash([]);
+			context.strokeRect(b.x, b.y, b.w, b.h);
+			for (const [x, y] of [
+				[b.x, b.y],
+				[b.x + b.w, b.y],
+				[b.x, b.y + b.h],
+				[b.x + b.w, b.y + b.h]
+			]) {
+				context.fillStyle = '#fff';
+				context.fillRect(x - 4, y - 4, 8, 8);
+				context.strokeRect(x - 4, y - 4, 8, 8);
+			}
+			context.restore();
 		}
 	}
 
@@ -2040,6 +2125,8 @@
 		}
 		if (draggingAnnot) {
 			const active = draggingAnnot;
+			restoreTransform(active);
+			redraw(active.page, active.canvas);
 			draggingAnnot = null;
 			try {
 				active.canvas.releasePointerCapture(active.pointerId);
@@ -2478,7 +2565,7 @@
 				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
 				<canvas
 					class="ink-canvas"
-					class:interactive={annotating}
+					class:interactive={!reading && controls}
 					class:eraser-mode={tool === 'eraser'}
 					class:symbol-mode={tool === 'symbol'}
 					bind:this={leftInk}
@@ -2493,7 +2580,7 @@
 					<canvas class="pdf-canvas" bind:this={rightPdf}></canvas>
 					<canvas
 						class="ink-canvas"
-						class:interactive={annotating}
+						class:interactive={!reading && controls}
 						class:eraser-mode={tool === 'eraser'}
 						class:symbol-mode={tool === 'symbol'}
 						bind:this={rightInk}
@@ -2572,22 +2659,6 @@
 		</div>
 	{/if}
 
-	{#if !reading && controls && tool === 'handwriting'}
-		<div class="handwriting-status">
-			<select
-				aria-label="Handwriting recognition mode"
-				value={handwritingMode}
-				onchange={(event) => { handwritingMode = event.currentTarget.value as RecognitionMode; clearTimeout(handwritingTimer); handwritingEpoch++; if (handwritingBatch) retryHandwriting(); }}
-				><option value="auto">Auto</option><option value="music"
-					>Music symbols</option
-				><option value="text">Text</option></select
-			><span role="status">{handwritingStatus}</span>
-			{#if handwritingRetryAvailable}<button onclick={retryHandwriting}
-					>Retry conversion</button
-				>{/if}<button onclick={() => (handwritingSetupOpen = true)}
-				>Model setup</button>
-		</div>
-	{/if}
 	{#if !reading && controls}
 		<div
 			class="palette"
@@ -2865,55 +2936,7 @@
 	{/if}
 </div>
 
-<HandwritingSetup
-	pauseMs={handwritingPauseMs}
-	onPauseChange={(value) => {
-		handwritingPauseMs = value;
-		try {
-			localStorage.setItem('sonora-handwriting-pause-ms', String(value));
-		} catch {}
-	}}
-	bind:open={handwritingSetupOpen}
-	onReady={() => {
-		handwritingStatus = 'Offline model ready. Write on the score.';
-	}} />
-
 <style>
-	.handwriting-status {
-		position: absolute;
-		left: 76px;
-		bottom: 18px;
-		max-width: min(420px, calc(100% - 100px));
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		padding: 10px 14px;
-		background: var(--sonora-bg-panel-solid);
-		border: 1px solid var(--sonora-border-strong);
-		border-radius: 12px;
-		font:
-			12px/1.4 system-ui,
-			sans-serif;
-		color: var(--sonora-text-muted);
-		z-index: 20;
-	}
-	.handwriting-status select {
-		max-width: 115px;
-		color: var(--sonora-text);
-		background: var(--sonora-bg-panel-solid);
-		border: 1px solid var(--sonora-border-strong);
-		border-radius: 6px;
-		padding: 4px;
-		font: inherit;
-	}
-	.handwriting-status button {
-		flex-shrink: 0;
-		background: transparent;
-		border: 0;
-		color: var(--sonora-accent);
-		font: inherit;
-		cursor: pointer;
-	}
 	.toolbar-divider {
 		height: 18px;
 		width: 1px;

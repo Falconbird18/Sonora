@@ -2,7 +2,7 @@
 	import { dialogFocus } from './dialogFocus';
 	import { Monitor, Moon, Sun, X } from '@lucide/svelte';
 	import { fade, fly } from 'svelte/transition';
-	import { tick } from 'svelte';
+
 	import {
 		settings,
 		type ThemePreference,
@@ -11,7 +11,6 @@
 		type FileOrganization
 	} from '../settingsStore';
 	import LibrarySharing from './LibrarySharing.svelte';
-	import DesignSystemPreview from './DesignSystemPreview.svelte';
 	import Toggle from './Toggle.svelte';
 	import {
 		checkForUpdate,
@@ -47,8 +46,16 @@
 		onImported,
 		onClose
 	}: Props = $props();
-	let viewerSectionEl = $state<HTMLElement | null>(null);
-	let sharingSectionEl = $state<HTMLElement | null>(null);
+	let activePage = $state('appearance');
+	const pages = [
+		['appearance', 'Appearance'],
+		['library', 'Library'],
+		['experience', 'Experience'],
+		['viewer', 'Score viewer'],
+		['handwriting', 'Handwriting'],
+		['sharing', 'Sharing'],
+		['about', 'About']
+	];
 
 	const themes: {
 		value: ThemePreference;
@@ -92,21 +99,9 @@
 	}
 
 	$effect(() => {
-		if (!open) return;
-		void tick().then(() => {
-			const target =
-				focusSection === 'sharing'
-					? sharingSectionEl
-					: focusSection === 'viewer'
-						? viewerSectionEl
-						: null;
-			if (target) {
-				target.scrollIntoView({
-					behavior: $settings.reduceMotion ? 'instant' : 'smooth',
-					block: 'start'
-				});
-			}
-		});
+		if (open)
+			activePage =
+				focusSection === 'theme' ? 'appearance' : focusSection || 'appearance';
 	});
 </script>
 
@@ -131,7 +126,7 @@
 			<header class="panel-header">
 				<div>
 					<h2 id="settings-title">Settings</h2>
-					<p>Appearance, library, and score viewer</p>
+					<p>Make Sonora feel like yours</p>
 				</div>
 				<button
 					type="button"
@@ -142,305 +137,364 @@
 				</button>
 			</header>
 
-			<section class="section">
-				<h3>Theme</h3>
-				<div class="theme-grid" role="radiogroup" aria-label="Color theme">
-					{#each themes as theme}
-						<button
-							type="button"
-							class="theme-card"
-							class:active={$settings.theme === theme.value}
-							role="radio"
-							aria-checked={$settings.theme === theme.value}
-							onclick={() => settings.setTheme(theme.value)}>
-							<span class="theme-icon" aria-hidden="true">
-								{#if theme.icon === 'system'}
-									<Monitor size={18} strokeWidth={2} />
-								{:else if theme.icon === 'dark'}
-									<Moon size={18} strokeWidth={2} />
-								{:else}
-									<Sun size={18} strokeWidth={2} />
-								{/if}
-							</span>
-							<span class="theme-label">{theme.label}</span>
-						</button>
-					{/each}
-				</div>
-			</section>
-
-			<section class="section">
-				<h3>Personalize your library</h3>
-				<label class="preference"
-					>Accent color
-					<select
-						value={$settings.accent}
-						onchange={(e) =>
+			<div class="settings-body">
+				<nav aria-label="Settings pages">
+					{#each pages as [id, label]}<button
+							class:current={activePage === id}
+							aria-current={activePage === id ? 'page' : undefined}
+							onclick={() => (activePage = id)}>{label}</button
+						>{/each}
+				</nav>
+				<main class="settings-content">
+					{#if activePage === 'appearance'}
+						<section class="section">
+							<h3>Theme</h3>
+							<div
+								class="theme-grid"
+								role="radiogroup"
+								aria-label="Color theme">
+								{#each themes as theme}
+									<button
+										type="button"
+										class="theme-card"
+										class:active={$settings.theme === theme.value}
+										role="radio"
+										aria-checked={$settings.theme === theme.value}
+										onclick={() => settings.setTheme(theme.value)}>
+										<span class="theme-icon" aria-hidden="true">
+											{#if theme.icon === 'system'}
+												<Monitor size={18} strokeWidth={2} />
+											{:else if theme.icon === 'dark'}
+												<Moon size={18} strokeWidth={2} />
+											{:else}
+												<Sun size={18} strokeWidth={2} />
+											{/if}
+										</span>
+										<span class="theme-label">{theme.label}</span>
+									</button>
+								{/each}
+							</div>
+						</section>
+					{:else if activePage === 'library'}
+						<section class="section">
+							<h3>Personalize your library</h3>
+							<label class="preference"
+								>Accent color
+								<select
+									value={$settings.accent}
+									onchange={(e) =>
 							settings.patch({ accent: e.currentTarget.value as Accent })}>
-						<option value="oxblood">Oxblood</option><option value="forest"
-							>Forest</option
-						><option value="ocean">Ocean</option><option value="plum"
-							>Plum</option
-						><option value="ochre">Ochre</option>
-					</select>
-				</label>
-				<label class="preference"
-					>Density
-					<select
-						value={$settings.density}
-						onchange={(e) =>
+									<option value="oxblood">Oxblood</option><option value="forest"
+										>Forest</option
+									><option value="ocean">Ocean</option><option value="plum"
+										>Plum</option
+									><option value="ochre">Ochre</option>
+								</select>
+							</label>
+							<label class="preference"
+								>Density
+								<select
+									value={$settings.density}
+									onchange={(e) =>
 							settings.patch({
 								density: e.currentTarget.value as
 									'comfortable' | 'compact' | 'spacious',
 								compactLibrary: e.currentTarget.value === 'compact'
 							})}>
-						<option value="compact">Compact</option><option value="comfortable"
-							>Comfortable</option
-						><option value="spacious">Spacious</option>
-					</select>
-				</label>
-				<label class="preference"
-					>Composer names
-					<select
-						value={$settings.composerDisplay}
-						onchange={(e) =>
+									<option value="compact">Compact</option><option
+										value="comfortable">Comfortable</option
+									><option value="spacious">Spacious</option>
+								</select>
+							</label>
+							<label class="preference"
+								>Composer names
+								<select
+									value={$settings.composerDisplay}
+									onchange={(e) =>
 							settings.patch({
 								composerDisplay: e.currentTarget.value as ComposerDisplay
 							})}>
-						<option value="full">Ludwig van Beethoven</option><option
-							value="surname-first">Beethoven, Ludwig van</option
-						><option value="surname">Beethoven</option><option value="initials"
-							>L. van Beethoven</option>
-					</select>
-				</label>
-				<label class="preference"
-					>File organization
-					<select
-						value={$settings.fileOrganization}
-						onchange={(e) =>
+									<option value="full">Ludwig van Beethoven</option><option
+										value="surname-first">Beethoven, Ludwig van</option
+									><option value="surname">Beethoven</option><option
+										value="initials">L. van Beethoven</option>
+								</select>
+							</label>
+							<label class="preference"
+								>File organization
+								<select
+									value={$settings.fileOrganization}
+									onchange={(e) =>
 							settings.patch({
 								fileOrganization: e.currentTarget.value as FileOrganization
 							})}>
-						<option value="composer-work">Composer / Work / Edition.pdf</option
-						><option value="composer">Composer / Work — Edition.pdf</option
-						><option value="flat">Work — Edition.pdf</option>
-					</select>
-				</label>
-				<p class="preference-hint">
-					New downloads use this layout. Apply it below to move existing PDFs
-					and their metadata together.
-				</p>
-				{#if onOrganize}<button
-						class="ghost"
-						disabled={organizing || !scoreCount}
-						onclick={onOrganize}
-						>{organizing
-							? 'Organizing…'
-							: `Apply layout to ${scoreCount} existing scores`}</button
-					>{/if}
-				{#if organizationStatus}<p role="status" class="preference-hint">
-						{organizationStatus}
-					</p>{/if}
-				<DesignSystemPreview />
-				<label class="row"
-					><span class="row-copy"
-						><strong>Paper texture</strong><span
-							>A subtle engraved-paper background</span
-						></span
-					><Toggle
-						checked={$settings.paperTexture}
-						ariaLabel="Paper texture"
-						onchange={(v) => settings.patch({ paperTexture: v })} /></label>
-			</section>
+									<option value="composer-work"
+										>Composer / Work / Edition.pdf</option
+									><option value="composer"
+										>Composer / Work — Edition.pdf</option
+									><option value="flat">Work — Edition.pdf</option>
+								</select>
+							</label>
+							<p class="preference-hint">
+								New downloads use this layout. Apply it below to move existing
+								PDFs and their metadata together.
+							</p>
+							{#if onOrganize}<button
+									class="ghost"
+									disabled={organizing || !scoreCount}
+									onclick={onOrganize}
+									>{organizing
+										? 'Organizing…'
+										: `Apply layout to ${scoreCount} existing scores`}</button
+								>{/if}
+							{#if organizationStatus}<p role="status" class="preference-hint">
+									{organizationStatus}
+								</p>{/if}
+							<label class="row"
+								><span class="row-copy"
+									><strong>Paper texture</strong><span
+										>A subtle engraved-paper background</span
+									></span
+								><Toggle
+									checked={$settings.paperTexture}
+									ariaLabel="Paper texture"
+									onchange={(v) =>
+										settings.patch({ paperTexture: v })} /></label>
+						</section>
+					{:else if activePage === 'experience'}
+						<section class="section">
+							<h3>Experience</h3>
+							<div class="rows">
+								<label class="row">
+									<div class="row-copy">
+										<strong>Reduce motion</strong>
+										<span>Minimize animations and transitions</span>
+									</div>
+									<Toggle
+										checked={$settings.reduceMotion}
+										ariaLabel="Reduce motion"
+										onchange={(v) => settings.setReduceMotion(v)} />
+								</label>
 
-			<section class="section">
-				<h3>Experience</h3>
-				<div class="rows">
-					<label class="row">
-						<div class="row-copy">
-							<strong>Reduce motion</strong>
-							<span>Minimize animations and transitions</span>
-						</div>
-						<Toggle
-							checked={$settings.reduceMotion}
-							ariaLabel="Reduce motion"
-							onchange={(v) => settings.setReduceMotion(v)} />
-					</label>
-
-					<label class="row">
-						<div class="row-copy">
-							<strong>Organize after metadata edits</strong>
-							<span
-								>Use your file organization layout when you change a composer or
-								work title</span>
-						</div>
-						<Toggle
-							checked={$settings.organizeByComposer}
-							ariaLabel="Organize after metadata edits"
-							onchange={(v) => settings.setOrganizeByComposer(v)} />
-					</label>
-				</div>
-			</section>
-
-			<section
-				class="section"
-				class:focus-ring={focusSection === 'viewer'}
-				bind:this={viewerSectionEl}>
-				<h3>Score viewer</h3>
-				<label class="row"
-					><div class="row-copy">
-						<strong>Default appearance</strong><span
-							>Practice tools or distraction-free reading</span>
-					</div>
-					<select
-						value={$settings.viewerMode}
-						onchange={(e) =>
+								<label class="row">
+									<div class="row-copy">
+										<strong>Organize after metadata edits</strong>
+										<span
+											>Use your file organization layout when you change a
+											composer or work title</span>
+									</div>
+									<Toggle
+										checked={$settings.organizeByComposer}
+										ariaLabel="Organize after metadata edits"
+										onchange={(v) => settings.setOrganizeByComposer(v)} />
+								</label>
+							</div>
+						</section>
+					{:else if activePage === 'viewer'}
+						<section class="section">
+							<h3>Score viewer</h3>
+							<label class="row"
+								><div class="row-copy">
+									<strong>Default appearance</strong><span
+										>Practice tools or distraction-free reading</span>
+								</div>
+								<select
+									value={$settings.viewerMode}
+									onchange={(e) =>
 							settings.patch({
 								viewerMode: e.currentTarget.value as 'practice' | 'reading'
 							})}
-						><option value="practice">Practice</option><option value="reading"
-							>Reading</option
-						></select
-					></label>
-				<div class="rows">
-					<label class="row">
-						<div class="row-copy">
-							<strong>Auto layout</strong>
-							<span>Two pages in landscape, one in portrait</span>
-						</div>
-						<Toggle
-							checked={$settings.autoLayout}
-							ariaLabel="Auto layout"
-							onchange={(v) => settings.setAutoLayout(v)} />
-					</label>
-					<label class="row" class:disabled={$settings.autoLayout}>
-						<div class="row-copy">
-							<strong>Two-page spread</strong>
-							<span>Show pages side by side when auto layout is off</span>
-						</div>
-						<Toggle
-							checked={$settings.dualPages}
-							disabled={$settings.autoLayout}
-							ariaLabel="Two-page spread"
-							onchange={(v) => settings.setDualPages(v)} />
-					</label>
-					<label class="row">
-						<div class="row-copy">
-							<strong>Keep screen on</strong>
-							<span>Prevent sleep while a score is open</span>
-						</div>
-						<Toggle
-							checked={$settings.keepAwake}
-							ariaLabel="Keep screen on"
-							onchange={(v) => settings.setKeepAwake(v)} />
-					</label>
-					<label class="row">
-						<div class="row-copy">
-							<strong>Show annotations</strong>
-							<span>Pens, highlights, symbols, and text</span>
-						</div>
-						<Toggle
-							checked={$settings.annotationsVisible}
-							ariaLabel="Show annotations"
-							onchange={(v) => settings.setAnnotationsVisible(v)} />
-					</label>
-				</div>
-				<div class="fit-block">
-					<span class="fit-label">Default fit</span>
-					<div class="fit-seg" role="radiogroup" aria-label="Default page fit">
-						<button
-							type="button"
-							class:active={$settings.defaultFit === 'page'}
-							role="radio"
-							aria-checked={$settings.defaultFit === 'page'}
-							onclick={() => settings.setDefaultFit('page')}>Fit page</button>
-						<button
-							type="button"
-							class:active={$settings.defaultFit === 'width'}
-							role="radio"
-							aria-checked={$settings.defaultFit === 'width'}
-							onclick={() => settings.setDefaultFit('width')}>Fit width</button>
-					</div>
-				</div>
-				<label class="text-size-row">
-					<span class="row-copy">
-						<strong>Annotation text size</strong>
-						<span>{$settings.textSize}px</span>
-					</span>
-					<input
-						type="range"
-						min="10"
-						max="36"
-						value={$settings.textSize}
-						oninput={(e) =>
+									><option value="practice">Practice</option><option
+										value="reading">Reading</option
+									></select
+								></label>
+							<div class="rows">
+								<label class="row">
+									<div class="row-copy">
+										<strong>Auto layout</strong>
+										<span>Two pages in landscape, one in portrait</span>
+									</div>
+									<Toggle
+										checked={$settings.autoLayout}
+										ariaLabel="Auto layout"
+										onchange={(v) => settings.setAutoLayout(v)} />
+								</label>
+								<label class="row" class:disabled={$settings.autoLayout}>
+									<div class="row-copy">
+										<strong>Two-page spread</strong>
+										<span>Show pages side by side when auto layout is off</span>
+									</div>
+									<Toggle
+										checked={$settings.dualPages}
+										disabled={$settings.autoLayout}
+										ariaLabel="Two-page spread"
+										onchange={(v) => settings.setDualPages(v)} />
+								</label>
+								<label class="row">
+									<div class="row-copy">
+										<strong>Keep screen on</strong>
+										<span>Prevent sleep while a score is open</span>
+									</div>
+									<Toggle
+										checked={$settings.keepAwake}
+										ariaLabel="Keep screen on"
+										onchange={(v) => settings.setKeepAwake(v)} />
+								</label>
+								<label class="row">
+									<div class="row-copy">
+										<strong>Show annotations</strong>
+										<span>Pens, highlights, symbols, and text</span>
+									</div>
+									<Toggle
+										checked={$settings.annotationsVisible}
+										ariaLabel="Show annotations"
+										onchange={(v) => settings.setAnnotationsVisible(v)} />
+								</label>
+							</div>
+							<div class="fit-block">
+								<span class="fit-label">Default fit</span>
+								<div
+									class="fit-seg"
+									role="radiogroup"
+									aria-label="Default page fit">
+									<button
+										type="button"
+										class:active={$settings.defaultFit === 'page'}
+										role="radio"
+										aria-checked={$settings.defaultFit === 'page'}
+										onclick={() => settings.setDefaultFit('page')}
+										>Fit page</button>
+									<button
+										type="button"
+										class:active={$settings.defaultFit === 'width'}
+										role="radio"
+										aria-checked={$settings.defaultFit === 'width'}
+										onclick={() => settings.setDefaultFit('width')}
+										>Fit width</button>
+								</div>
+							</div>
+							<label class="text-size-row">
+								<span class="row-copy">
+									<strong>Annotation text size</strong>
+									<span>{$settings.textSize}px</span>
+								</span>
+								<input
+									type="range"
+									min="10"
+									max="36"
+									value={$settings.textSize}
+									oninput={(e) =>
 							settings.setTextSize(
 								Number((e.currentTarget as HTMLInputElement).value)
 							)} />
-				</label>
-			</section>
-
-			<section class="section" bind:this={sharingSectionEl}>
-				<h3>Library sharing</h3>
-				<LibrarySharing {libraryRoot} {scoreCount} {onImported} />
-			</section>
-
-			<section class="section">
-				<h3>About</h3>
-				<div class="rows">
-					<div class="row" style="cursor: default;">
-						<div class="row-copy">
-							<strong>Version</strong>
-							<span>Sonora {CURRENT_VERSION}</span>
-						</div>
-					</div>
-					<div class="row" style="cursor: default; flex-wrap: wrap; gap: 8px;">
-						<div class="row-copy" style="flex: 1;">
-							<strong>Updates</strong>
-							<span>
-								{#if updateStatus === 'checking'}
-									Checking GitHub releases…
-								{:else if lastUpdate?.available}
-									{lastUpdate.latestVersion} available —
-									<a
-										href={lastUpdate.htmlUrl || '#'}
-										target="_blank"
-										rel="noopener noreferrer"
-										style="color: var(--sonora-accent);">download</a>
-								{:else if lastUpdate && !lastUpdate.error}
-									You’re up to date
-								{:else if lastUpdate?.error}
-									Could not check: {lastUpdate.error}
-								{:else}
-									Check GitHub for new releases
-								{/if}
-							</span>
-						</div>
-						<button
-							type="button"
-							class="ghost"
-							style="flex-shrink: 0;"
-							disabled={updateStatus === 'checking'}
-							onclick={() => void runUpdateCheck()}>
-							{updateStatus === 'checking' ? 'Checking…' : 'Check now'}
-						</button>
-					</div>
-					<div class="row" style="cursor: default; flex-wrap: wrap; gap: 8px;">
-						<div class="row-copy" style="flex: 1;">
-							<strong>Composer database</strong>
-							<span
-								>{composerStatus ||
-									'List and portraits sync from GitHub automatically — no app update needed'}</span>
-						</div>
-						<button
-							type="button"
-							class="ghost"
-							style="flex-shrink: 0;"
-							onclick={() => void runComposerRefresh()}>
-							Refresh
-						</button>
-					</div>
-				</div>
-			</section>
-
+							</label>
+						</section>
+					{:else if activePage === 'handwriting'}
+						<section class="section">
+							<h3>Handwriting</h3>
+							<p class="preference-hint">
+								Write directly on the score. Short breaks between strokes stay
+								together; a longer pause converts your writing automatically.
+							</p>
+							<label class="text-size-row"
+								><span class="row-copy"
+									><strong>Pause before conversion</strong><span
+										>{($settings.handwritingPauseMs / 1000).toFixed(2)} seconds</span
+									></span
+								><input
+									aria-label="Pause before conversion"
+									type="range"
+									min="1000"
+									max="5000"
+									step="250"
+									value={$settings.handwritingPauseMs}
+									oninput={(e) =>
+										settings.patch({
+											handwritingPauseMs: +e.currentTarget.value
+										})} /></label>
+							<label class="preference"
+								>Recognize<select
+									value={$settings.handwritingMode}
+									onchange={(e) => settings.patch({handwritingMode: e.currentTarget.value as 'auto' | 'music' | 'text'})}
+									><option value="auto">Music symbols and text</option><option
+										value="music">Music symbols</option
+									><option value="text">Text</option></select
+								></label
+							>
+							<p class="preference-hint">
+								Recognition runs entirely on your device. Undo restores the
+								original ink.
+							</p>
+						</section>
+					{:else if activePage === 'sharing'}<section class="section">
+							<h3>Library sharing</h3>
+							<LibrarySharing {libraryRoot} {scoreCount} {onImported} />
+						</section>
+					{:else if activePage === 'about'}
+						<section class="section">
+							<h3>About</h3>
+							<div class="rows">
+								<div class="row" style="cursor: default;">
+									<div class="row-copy">
+										<strong>Version</strong>
+										<span>Sonora {CURRENT_VERSION}</span>
+									</div>
+								</div>
+								<div
+									class="row"
+									style="cursor: default; flex-wrap: wrap; gap: 8px;">
+									<div class="row-copy" style="flex: 1;">
+										<strong>Updates</strong>
+										<span>
+											{#if updateStatus === 'checking'}
+												Checking GitHub releases…
+											{:else if lastUpdate?.available}
+												{lastUpdate.latestVersion} available —
+												<a
+													href={lastUpdate.htmlUrl || '#'}
+													target="_blank"
+													rel="noopener noreferrer"
+													style="color: var(--sonora-accent);">download</a>
+											{:else if lastUpdate && !lastUpdate.error}
+												You’re up to date
+											{:else if lastUpdate?.error}
+												Could not check: {lastUpdate.error}
+											{:else}
+												Check GitHub for new releases
+											{/if}
+										</span>
+									</div>
+									<button
+										type="button"
+										class="ghost"
+										style="flex-shrink: 0;"
+										disabled={updateStatus === 'checking'}
+										onclick={() => void runUpdateCheck()}>
+										{updateStatus === 'checking' ? 'Checking…' : 'Check now'}
+									</button>
+								</div>
+								<div
+									class="row"
+									style="cursor: default; flex-wrap: wrap; gap: 8px;">
+									<div class="row-copy" style="flex: 1;">
+										<strong>Composer database</strong>
+										<span
+											>{composerStatus ||
+												'List and portraits sync from GitHub automatically — no app update needed'}</span>
+									</div>
+									<button
+										type="button"
+										class="ghost"
+										style="flex-shrink: 0;"
+										onclick={() => void runComposerRefresh()}>
+										Refresh
+									</button>
+								</div>
+							</div>
+						</section>
+					{/if}
+				</main>
+			</div>
 			<footer class="panel-footer">
 				<button type="button" class="ghost" onclick={() => settings.reset()}
 					>Reset defaults</button>
@@ -451,6 +505,59 @@
 {/if}
 
 <style>
+	.settings-body {
+		display: grid;
+		grid-template-columns: 175px minmax(0, 1fr);
+		flex: 1;
+		min-height: 0;
+	}
+	nav {
+		padding: 18px 10px;
+		border-right: 1px solid var(--sonora-border);
+		background: var(--sonora-surface-raised);
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+	}
+	nav button {
+		text-align: left;
+		border: 0;
+		background: transparent;
+		color: var(--sonora-text-muted);
+		padding: 11px 14px;
+		border-radius: 9px;
+		cursor: pointer;
+		font: inherit;
+		font-size: 14px;
+	}
+	nav button:hover {
+		background: var(--sonora-bg-hover);
+	}
+	nav button.current {
+		background: var(--sonora-accent-soft);
+		color: var(--sonora-text);
+		font-weight: 650;
+	}
+	.settings-content {
+		overflow: auto;
+		min-width: 0;
+	}
+	@media (max-width: 600px) {
+		.settings-body {
+			grid-template-columns: 120px minmax(0, 1fr);
+		}
+		nav {
+			padding: 12px 5px;
+		}
+		nav button {
+			padding: 10px 8px;
+			font-size: 12px;
+		}
+		.backdrop {
+			padding: 10px;
+		}
+	}
+
 	.preference {
 		display: grid;
 		gap: 7px;
@@ -483,9 +590,10 @@
 		-webkit-backdrop-filter: var(--sonora-blur);
 	}
 	.panel {
-		width: min(440px, 100%);
+		width: min(840px, 100%);
+		height: min(85dvh, 720px);
 		max-height: min(90dvh, 720px);
-		overflow: auto;
+		overflow: hidden;
 		border: 1px solid var(--sonora-border-strong);
 		border-radius: var(--sonora-radius-2xl);
 		background: var(--sonora-surface-glass);
@@ -539,10 +647,6 @@
 		scroll-margin-top: 110px;
 		padding: 18px 22px;
 		border-bottom: 1px solid var(--sonora-border);
-	}
-	.section.focus-ring {
-		box-shadow: inset 3px 0 0 var(--sonora-accent);
-		background: color-mix(in srgb, var(--sonora-accent-soft) 40%, transparent);
 	}
 	.section h3 {
 		margin: 0 0 12px;
