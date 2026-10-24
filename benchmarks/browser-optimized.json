@@ -1,0 +1,33 @@
+{
+  "note": "Single development Chromium run, synthetic metadata and shared thumbnail, no PDF blobs. Timings include frame waits; not production Tauri measurements.",
+  "rows": [
+    {
+      "size": 1000,
+      "writeMs": 334,
+      "readMs": 44.9,
+      "mountMs": 126.4,
+      "pageMs": 24.2,
+      "searchMs": 20.2,
+      "mountedCards": 60
+    },
+    {
+      "size": 10000,
+      "writeMs": 512.2,
+      "readMs": 107.3,
+      "mountMs": 158.2,
+      "pageMs": 37.6,
+      "searchMs": 19.2,
+      "mountedCards": 60
+    },
+    {
+      "size": 50000,
+      "writeMs": 2016.2,
+      "readMs": 417.2,
+      "mountMs": 418.5,
+      "pageMs": 31.4,
+      "searchMs": 24.8,
+      "mountedCards": 60
+    }
+  ],
+  "validation": "Pagination, matching search, list mode, opening editions, favorite updates and IndexedDB persistence passed at all sizes"
+}

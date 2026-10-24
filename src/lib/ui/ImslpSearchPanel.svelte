@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { dialogFocus } from './dialogFocus';
 	import {
 		Download,
 		ExternalLink,
@@ -8,16 +9,19 @@
 		Search,
 		X
 	} from '@lucide/svelte';
+	import ImslpThumbnail from './ImslpThumbnail.svelte';
+	import { settings } from '../settingsStore';
+	import { formatComposer } from '../composerDisplay';
 	import IconButton from './IconButton.svelte';
 	import TextButton from './TextButton.svelte';
 	import {
-		displayFilename,
 		downloadScore,
 		getWorkScores,
 		imslpAvailable,
 		parseWorkTitle,
 		searchImslp,
 		workPageUrl,
+		type ImslpWorkDetails,
 		type ImslpScoreFile,
 		type ImslpSearchHit
 	} from '../imslp';
@@ -45,10 +49,21 @@
 	let downloading = $state<string | null>(null);
 	let added = $state<Set<string>>(new Set());
 	let notice = $state('');
+	let details = $state<ImslpWorkDetails | null>(null);
+	let request = 0;
+	let editionFilter = $state('');
+	const visibleScores = $derived(
+		scores.filter((s) =>
+			`${s.description} ${s.publisher} ${s.editor} ${s.arranger} ${s.section}`
+				.toLowerCase()
+				.includes(editionFilter.toLowerCase())
+		)
+	);
 
 	const available = imslpAvailable();
 
 	async function runSearch() {
+		const current = ++request;
 		error = '';
 		notice = '';
 		selected = null;
@@ -59,9 +74,12 @@
 		}
 		searching = true;
 		try {
-			hits = await searchImslp(query, 30);
+			const results = await searchImslp(query, 30);
+			if (current !== request) return;
+			hits = results;
 			if (!hits.length) notice = 'No works matched that search.';
 		} catch (e) {
+			if (current !== request) return;
 			error =
 				e instanceof Error
 					? e.message
@@ -70,7 +88,7 @@
 						: 'Search failed';
 			console.error('[IMSLP] search failed', e);
 		} finally {
-			searching = false;
+			if (current === request) searching = false;
 		}
 	}
 
@@ -82,18 +100,25 @@
 	}
 
 	async function selectWork(hit: ImslpSearchHit) {
+		const current = ++request;
 		selected = hit;
+		details = null;
+		editionFilter = '';
 		scores = [];
 		error = '';
 		notice = '';
 		loadingScores = true;
 		try {
-			scores = await getWorkScores(hit.title);
+			const result = await getWorkScores(hit.title);
+			if (current !== request) return;
+			details = result;
+			scores = result.files;
 			if (!scores.length) {
 				notice =
 					'No PDF scores were found on this work page. You can still open it on IMSLP.';
 			}
 		} catch (e) {
+			if (current !== request) return;
 			error =
 				e instanceof Error
 					? e.message
@@ -102,7 +127,7 @@
 						: 'Failed to load scores for this work';
 			console.error('[IMSLP] load scores failed', e);
 		} finally {
-			loadingScores = false;
+			if (current === request) loadingScores = false;
 		}
 	}
 
@@ -115,10 +140,25 @@
 			const result = await downloadScore(score.filename, {
 				libraryRoot,
 				composer: parsed?.composer ?? null,
-				workTitle: selected?.title ?? null
+				workTitle: parsed?.title ?? null,
+				metadata: {
+					...details?.metadata,
+					year: /^\d{4}$/.test(details?.metadata.compositionDate ?? '')
+						? Number(details?.metadata.compositionDate)
+						: undefined,
+					title: parsed?.title,
+					composer: parsed?.composer,
+					workId: selected ? `imslp:${selected.title}` : undefined,
+					workTitle: parsed?.title,
+					imslpPage: selected?.title,
+					edition: score.description,
+					editor: score.editor,
+					publisher: score.publisher,
+					arranger: score.arranger
+				}
 			});
 			const where = parsed?.composer
-				? `under “${parsed.composer}”`
+				? `under “${formatComposer(parsed.composer, $settings.composerDisplay)}”`
 				: 'into your library';
 			notice = result.saved_path
 				? `Saved “${result.filename}” ${where}.`
@@ -142,10 +182,15 @@
 	}
 
 	function close() {
+		++request;
+		searching = false;
+		loadingScores = false;
 		open = false;
 	}
 
 	function backToResults() {
+		++request;
+		loadingScores = false;
 		selected = null;
 		scores = [];
 		error = '';
@@ -155,30 +200,10 @@
 	function onPanelKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
 			event.preventDefault();
+			event.stopPropagation();
 			if (selected) backToResults();
 			else close();
 		}
-	}
-
-	function snippetFor(hit: ImslpSearchHit) {
-		let s = (hit.snippet || '')
-			.replace(/</gi, '<')
-			.replace(/>/gi, '>')
-			.replace(/"/gi, '"')
-			.replace(/&#39;/g, "'")
-			.replace(/&nbsp;/gi, ' ')
-			.replace(/&/gi, '&');
-		s = s.replace(/<[^>]+>/g, ' ');
-		s = s
-			.replace(/\{\{[^}]*\}\}/g, ' ')
-			.replace(/\[\[[^\]]*\]\]/g, ' ')
-			.replace(/\|[^|=\s]+=/g, ' ')
-			.replace(/'{2,}/g, '')
-			.replace(/[|{}]/g, ' ')
-			.replace(/\s+/g, ' ')
-			.replace(/^[\s.·]+/, '')
-			.trim();
-		return s;
 	}
 </script>
 
@@ -188,6 +213,7 @@
 
 	<div
 		class="panel"
+		use:dialogFocus
 		role="dialog"
 		aria-modal="true"
 		aria-label="Search IMSLP"
@@ -229,8 +255,8 @@
 			</div>
 		{/if}
 
-		{#if error}<div class="banner error">{error}</div>{/if}
-		{#if notice}<div class="banner ok">{notice}</div>{/if}
+		{#if error}<div class="banner error" role="alert">{error}</div>{/if}
+		{#if notice}<div class="banner ok" role="status">{notice}</div>{/if}
 
 		<div class="body" class:split={!!selected}>
 			{#if selected}
@@ -240,10 +266,28 @@
 					{#if true}
 						{@const parsed = parseWorkTitle(selected.title)}
 						<h2>{parsed.title}</h2>
-						<p class="composer">{parsed.composer}</p>
-						{#if snippetFor(selected)}<p class="snippet">
-								{snippetFor(selected)}
-							</p>{/if}
+						<p class="composer">
+							{formatComposer(parsed.composer, $settings.composerDisplay)}
+						</p>
+						{#if details}
+							<dl class="work-facts">
+								{#each Object.entries(details.metadata).filter(([key, value]) => key !== 'title' && value) as [key, value]}
+									<dt>
+										{(
+											{
+												catalogue: 'Catalogue',
+												key: 'Key',
+												instruments: 'Instruments',
+												compositionDate: 'Composed',
+												movements: 'Movements',
+												period: 'Style'
+											} as Record<string, string>
+										)[key] ?? key}
+									</dt>
+									<dd>{value}</dd>
+								{/each}
+							</dl>
+						{/if}
 						<a
 							class="external"
 							href={workPageUrl(selected.title)}
@@ -261,10 +305,17 @@
 				</aside>
 				<section class="scores">
 					<div class="scores-head">
-						<h3>Available PDFs</h3>
+						<h3>Compare editions & parts</h3>
 						<span
-							>{scores.length} {scores.length === 1 ? 'file' : 'files'}</span>
+							>{editionFilter
+								? `${visibleScores.length} of ${scores.length} files`
+								: `${scores.length} ${scores.length === 1 ? 'file' : 'files'}`}</span>
 					</div>
+					<input
+						class="edition-search"
+						aria-label="Filter editions and parts"
+						placeholder="Filter by publisher, editor, part…"
+						bind:value={editionFilter} />
 					{#if loadingScores}
 						<div class="empty-state">
 							<Loader2 size={22} class="spin" />
@@ -275,35 +326,34 @@
 							<Music2 size={22} />
 							<p>No PDF scores found on this page.</p>
 						</div>
+					{:else if !visibleScores.length}
+						<div class="empty-state">
+							<p>No editions match this filter.</p>
+							<TextButton onclick={() => (editionFilter = '')}
+								>Clear filter</TextButton>
+						</div>
 					{:else}
 						<div class="score-grid">
-							{#each scores as score (score.filename)}
+							{#each visibleScores as score (score.filename)}
 								<article class="score-card">
 									<div class="thumb">
-										{#if score.thumb_url}
-											<img
-												src={score.thumb_url}
-												alt=""
-												loading="lazy"
-												referrerpolicy="no-referrer"
-												onerror={(e) => {
-													const el = e.currentTarget as HTMLImageElement;
-													el.style.display = 'none';
-													const fb = el.parentElement?.querySelector('.thumb-fallback');
-													if (fb instanceof HTMLElement) fb.style.display = 'grid';
-												}} />
-											<div class="thumb-fallback" style="display:none">
-												<Music2 size={28} />
-											</div>
-										{:else}
-											<div class="thumb-fallback"><Music2 size={28} /></div>
-										{/if}
+										<ImslpThumbnail
+											url={score.thumb_url}
+											label={score.description || 'Score preview'} />
 									</div>
 									<div class="score-meta">
 										<strong title={score.filename}
-											>{displayFilename(score.filename)}</strong>
-										{#if score.description}<span class="desc"
-												>{score.description}</span
+											>{score.description || 'Score edition'}</strong>
+										{#if score.publisher}<span class="desc"
+												>{score.publisher}</span
+											>{/if}
+										{#if score.arranger}<span class="editor"
+												>Arranged by {score.arranger}</span
+											>{/if}
+										{#if score.section}<span class="desc">{score.section}</span
+											>{/if}
+										{#if score.copyright}<span class="editor"
+												>{score.copyright}</span
 											>{/if}
 										{#if score.editor}<span class="editor">{score.editor}</span
 											>{/if}
@@ -312,7 +362,7 @@
 										type="button"
 										class="add-btn"
 										class:added={added.has(score.filename)}
-										disabled={downloading === score.filename ||
+										disabled={downloading !== null ||
 											!libraryRoot ||
 											added.has(score.filename)}
 										onclick={() => void doDownload(score)}>
@@ -358,19 +408,15 @@
 									class="hit"
 									onclick={() => void selectWork(hit)}>
 									<div class="hit-icon">
-										{#if hit.thumb_url}
-											<img src={hit.thumb_url} alt="" loading="lazy" referrerpolicy="no-referrer"
-												onerror={(e) => { /* hide + show Music2 fallback */ }} />
-										{:else}
-											<Music2 size={18} />
-										{/if}
+										<ImslpThumbnail url={hit.thumb_url} label="Work preview" />
 									</div>
 									<div class="hit-body">
 										<strong>{parsed.title}</strong>
-										<span class="composer">{parsed.composer}</span>
-										{#if snippetFor(hit)}<span class="snippet"
-												>{snippetFor(hit)}</span
-											>{/if}
+										<span class="composer"
+											>{formatComposer(
+												parsed.composer,
+												$settings.composerDisplay
+											)}</span>
 									</div>
 								</button>
 							{/each}
@@ -383,12 +429,36 @@
 {/if}
 
 <style>
+	.work-facts {
+		font-size: var(--sonora-text-sm);
+		line-height: 1.6;
+	}
+	.work-facts dt {
+		color: var(--sonora-text-muted);
+		margin-top: 12px;
+	}
+	.work-facts dd {
+		margin: 0;
+		white-space: pre-line;
+	}
+	.edition-search {
+		width: 100%;
+		box-sizing: border-box;
+		padding: 10px;
+		margin: 0 0 16px;
+		background: var(--sonora-bg-deep);
+		color: var(--sonora-text);
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-sm);
+	}
+
 	.backdrop {
 		position: fixed;
 		inset: 0;
 		z-index: 80;
-		background: rgba(8, 10, 14, 0.62);
-		backdrop-filter: blur(6px);
+		background: var(--sonora-scrim);
+		backdrop-filter: var(--sonora-blur);
+		-webkit-backdrop-filter: var(--sonora-blur);
 	}
 	.panel {
 		position: fixed;
@@ -401,8 +471,8 @@
 		display: flex;
 		flex-direction: column;
 		border: 1px solid var(--sonora-border-strong);
-		border-radius: 18px;
-		background: var(--sonora-bg-elevated);
+		border-radius: var(--sonora-radius-lg);
+		background: var(--sonora-surface-raised);
 		box-shadow:
 			var(--sonora-shadow-lg),
 			0 24px 80px rgba(0, 0, 0, 0.35);
@@ -417,7 +487,7 @@
 		gap: 16px;
 		padding: 16px 20px;
 		border-bottom: 1px solid var(--sonora-border);
-		background: color-mix(in srgb, var(--sonora-bg-workspace) 70%, transparent);
+		background: var(--sonora-surface-raised);
 	}
 	.title-block {
 		display: flex;
@@ -430,7 +500,7 @@
 		height: 36px;
 		display: grid;
 		place-items: center;
-		border-radius: 11px;
+		border-radius: var(--sonora-radius-md);
 		background: var(--sonora-accent-soft);
 		color: var(--sonora-accent);
 		flex: 0 0 auto;
@@ -442,7 +512,7 @@
 	}
 	.title-block span {
 		display: block;
-		font-size: 12px;
+		font-size: var(--sonora-text-sm);
 		color: var(--sonora-text-muted);
 	}
 	.search-row {
@@ -469,10 +539,10 @@
 		height: 42px;
 		padding: 0 14px 0 38px;
 		border: 1px solid var(--sonora-border-strong);
-		border-radius: 12px;
+		border-radius: var(--sonora-radius-md);
 		background: var(--sonora-bg-workspace);
 		color: var(--sonora-text);
-		font-size: 14px;
+		font-size: var(--sonora-text-md);
 	}
 	.search-field input:focus {
 		outline: none;
@@ -486,23 +556,23 @@
 	.banner {
 		margin: 12px 20px 0;
 		padding: 10px 12px;
-		border-radius: 10px;
-		font-size: 13px;
+		border-radius: var(--sonora-radius-md);
+		font-size: var(--sonora-text-md);
 		line-height: 1.4;
 	}
 	.banner.error {
 		background: color-mix(in srgb, #ff5c5c 14%, transparent);
-		color: #ffb4b4;
+		color: var(--sonora-danger);
 		border: 1px solid color-mix(in srgb, #ff5c5c 35%, transparent);
 	}
 	.banner.ok {
 		background: color-mix(in srgb, #3ecf8e 12%, transparent);
-		color: #b6f0d2;
+		color: var(--sonora-success);
 		border: 1px solid color-mix(in srgb, #3ecf8e 30%, transparent);
 	}
 	.banner.warn {
 		background: color-mix(in srgb, #f0c14b 12%, transparent);
-		color: #f5e0a0;
+		color: var(--sonora-warning);
 		border: 1px solid color-mix(in srgb, #f0c14b 30%, transparent);
 	}
 	.body {
@@ -519,13 +589,13 @@
 		overflow-y: auto;
 		padding: 8px 18px 20px 20px;
 		border-right: 1px solid var(--sonora-border);
-		background: color-mix(in srgb, var(--sonora-bg-workspace) 55%, transparent);
+		background: var(--sonora-surface-raised);
 	}
 	.back {
 		border: 0;
 		background: transparent;
 		color: var(--sonora-accent);
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		font-weight: 600;
 		padding: 0;
 		margin-bottom: 12px;
@@ -539,20 +609,14 @@
 	}
 	.composer {
 		color: var(--sonora-text-muted);
-		font-size: 13px;
-	}
-	.snippet {
-		margin: 10px 0 0;
-		font-size: 12.5px;
-		line-height: 1.45;
-		color: var(--sonora-text-muted);
+		font-size: var(--sonora-text-md);
 	}
 	.external {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
 		margin-top: 14px;
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		color: var(--sonora-accent);
 		text-decoration: none;
 	}
@@ -561,7 +625,7 @@
 	}
 	.hint {
 		margin-top: 16px;
-		font-size: 12px;
+		font-size: var(--sonora-text-sm);
 		line-height: 1.4;
 		color: var(--sonora-text-faint);
 	}
@@ -582,7 +646,7 @@
 	.results-head h3,
 	.scores-head h3 {
 		margin: 0;
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		font-weight: 650;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
@@ -590,7 +654,7 @@
 	}
 	.results-head span,
 	.scores-head span {
-		font-size: 12px;
+		font-size: var(--sonora-text-sm);
 		color: var(--sonora-text-muted);
 	}
 	.hit-list {
@@ -605,7 +669,7 @@
 		width: 100%;
 		padding: 12px;
 		border: 1px solid transparent;
-		border-radius: 12px;
+		border-radius: var(--sonora-radius-md);
 		background: transparent;
 		color: inherit;
 		text-align: left;
@@ -616,11 +680,12 @@
 		border-color: var(--sonora-border);
 	}
 	.hit-icon {
-		width: 36px;
-		height: 36px;
+		width: 52px;
+		height: 68px;
 		display: grid;
 		place-items: center;
-		border-radius: 10px;
+		overflow: hidden;
+		border-radius: var(--sonora-radius-sm);
 		background: var(--sonora-bg-active);
 		color: var(--sonora-text-muted);
 		flex: 0 0 auto;
@@ -632,19 +697,11 @@
 		gap: 2px;
 	}
 	.hit-body strong {
-		font-size: 14px;
+		font-size: var(--sonora-text-md);
 		font-weight: 650;
 	}
 	.hit-body .composer {
-		font-size: 12.5px;
-	}
-	.hit-body .snippet {
-		margin: 4px 0 0;
-		display: -webkit-box;
-		-webkit-line-clamp: 2;
-		line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
+		font-size: var(--sonora-text-sm);
 	}
 	.score-grid {
 		display: grid;
@@ -657,29 +714,15 @@
 		gap: 10px;
 		padding: 12px;
 		border: 1px solid var(--sonora-border);
-		border-radius: 14px;
-		background: color-mix(in srgb, var(--sonora-bg-workspace) 65%, transparent);
+		border-radius: var(--sonora-radius-lg);
+		background: var(--sonora-surface-raised);
 	}
 	.thumb {
 		aspect-ratio: 3 / 4;
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 		overflow: hidden;
 		background: var(--sonora-bg-active);
 		border: 1px solid var(--sonora-border);
-	}
-	.thumb img {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		object-position: top center;
-		display: block;
-	}
-	.thumb-fallback {
-		width: 100%;
-		height: 100%;
-		display: grid;
-		place-items: center;
-		color: var(--sonora-text-faint);
 	}
 	.score-meta {
 		display: flex;
@@ -688,7 +731,7 @@
 		min-height: 56px;
 	}
 	.score-meta strong {
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		font-weight: 650;
 		line-height: 1.3;
 		display: -webkit-box;
@@ -699,7 +742,7 @@
 	}
 	.desc,
 	.editor {
-		font-size: 12px;
+		font-size: var(--sonora-text-sm);
 		color: var(--sonora-text-muted);
 		line-height: 1.35;
 		display: -webkit-box;
@@ -713,7 +756,7 @@
 	}
 	.add-btn.added {
 		background: color-mix(in srgb, #3ecf8e 18%, transparent);
-		color: #b6f0d2;
+		color: var(--sonora-success);
 		border-color: color-mix(in srgb, #3ecf8e 40%, transparent);
 		cursor: default;
 	}
@@ -725,10 +768,10 @@
 		gap: 6px;
 		width: 100%;
 		border: 1px solid var(--sonora-border-strong);
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 		background: var(--sonora-accent);
-		color: #fff;
-		font-size: 12.5px;
+		color: var(--sonora-accent-contrast);
+		font-size: var(--sonora-text-sm);
 		font-weight: 650;
 		cursor: pointer;
 	}
@@ -769,7 +812,7 @@
 	.empty-state p {
 		margin: 0;
 		max-width: 360px;
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		line-height: 1.45;
 	}
 	:global(.spin) {
@@ -778,6 +821,14 @@
 	@keyframes spin {
 		to {
 			transform: rotate(360deg);
+		}
+	}
+	@media (min-width: 721px) and (max-width: 900px) {
+		.body.split {
+			grid-template-columns: 220px minmax(0, 1fr);
+		}
+		.score-grid {
+			grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
 		}
 	}
 	@media (max-width: 720px) {

@@ -79,10 +79,10 @@
 	}
 	button:hover {
 		color: var(--sonora-text);
-		background: rgba(255, 255, 255, 0.06);
+		background: var(--sonora-bg-hover);
 	}
 	button.active {
-		background: rgba(255, 255, 255, 0.1);
+		background: var(--sonora-bg-hover);
 		color: var(--sonora-text);
 		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 	}

@@ -29,24 +29,37 @@ let normalizedRecords = COMPOSERS.map((composer) => ({
 	terms: [composer.name, ...composer.aliases].map(normalize)
 }));
 
+let composersById = new Map(
+	COMPOSERS.map((composer) => [composer.id, composer])
+);
+let composersByTerm = new Map<string, ComposerRecord>();
+function rebuildLookup() {
+	composersById = new Map(COMPOSERS.map((composer) => [composer.id, composer]));
+	composersByTerm = new Map();
+	for (const { composer, terms } of normalizedRecords) {
+		for (const term of [composer.id, ...terms]) {
+			if (!composersByTerm.has(term)) composersByTerm.set(term, composer);
+		}
+	}
+}
+rebuildLookup();
+
 function rebuildIndex() {
 	normalizedRecords = COMPOSERS.map((composer) => ({
 		composer,
 		terms: [composer.name, ...composer.aliases].map(normalize)
 	}));
+	rebuildLookup();
 }
 
 export function getComposer(id: string): ComposerRecord | null {
-	return COMPOSERS.find((composer) => composer.id === id) ?? null;
+	return composersById.get(id) ?? null;
 }
 
 export function findComposer(value: string): ComposerRecord | null {
 	const normalized = normalize(value);
 	if (!normalized) return null;
-	return (
-		normalizedRecords.find(({ composer, terms }) => composer.id === normalized || terms.includes(normalized))
-			?.composer ?? null
-	);
+	return composersByTerm.get(normalized) ?? null;
 }
 
 export function searchComposers(query: string, limit = 8): ComposerRecord[] {
@@ -59,11 +72,22 @@ export function searchComposers(query: string, limit = 8): ComposerRecord[] {
 			const starts = terms.some((term) => term.startsWith(normalized));
 			const contains = terms.some((term) => term.includes(normalized));
 			const name = normalize(composer.name);
-			const score = exact ? 0 : starts ? 1 : name.startsWith(normalized) ? 2 : contains ? 3 : 99;
+			const score = exact
+				? 0
+				: starts
+					? 1
+					: name.startsWith(normalized)
+						? 2
+						: contains
+							? 3
+							: 99;
 			return { composer, score };
 		})
 		.filter(({ score }) => score < 99)
-		.sort((a, b) => a.score - b.score || a.composer.name.localeCompare(b.composer.name))
+		.sort(
+			(a, b) =>
+				a.score - b.score || a.composer.name.localeCompare(b.composer.name)
+		)
 		.slice(0, limit)
 		.map(({ composer }) => composer);
 }
@@ -162,7 +186,10 @@ export type ComposerRefreshResult = {
 	portraitsSyncing?: boolean;
 };
 
-type PortraitSyncFn = (composers: ComposerRecord[], options?: { force?: boolean }) => Promise<void>;
+type PortraitSyncFn = (
+	composers: ComposerRecord[],
+	options?: { force?: boolean }
+) => Promise<void>;
 
 let portraitSyncHandler: PortraitSyncFn | null = null;
 
@@ -194,12 +221,20 @@ export async function refreshComposersFromRemote(options?: {
 
 	// Prefer a still-fresh cache over a network hit
 	if (!force && cached && meta && Date.now() - meta.fetchedAt < CACHE_TTL_MS) {
-		if (cached.length !== COMPOSERS.length || cached[0]?.id !== COMPOSERS[0]?.id) {
+		if (
+			cached.length !== COMPOSERS.length ||
+			cached[0]?.id !== COMPOSERS[0]?.id
+		) {
 			applyComposers(cached);
 		}
 		// Still ensure portraits for any newly cached composers are present
 		const portraitsSyncing = kickPortraitSync(COMPOSERS, false);
-		return { updated: false, source: 'cache', count: COMPOSERS.length, portraitsSyncing };
+		return {
+			updated: false,
+			source: 'cache',
+			count: COMPOSERS.length,
+			portraitsSyncing
+		};
 	}
 
 	try {
@@ -215,7 +250,12 @@ export async function refreshComposersFromRemote(options?: {
 			applyComposers(cached);
 			saveCache(cached, meta?.etag);
 			const portraitsSyncing = kickPortraitSync(COMPOSERS, force);
-			return { updated: false, source: 'cache', count: COMPOSERS.length, portraitsSyncing };
+			return {
+				updated: false,
+				source: 'cache',
+				count: COMPOSERS.length,
+				portraitsSyncing
+			};
 		}
 
 		if (!res.ok) {
@@ -229,7 +269,8 @@ export async function refreshComposersFromRemote(options?: {
 
 		const etag = res.headers.get('etag') ?? undefined;
 		const changed =
-			data.length !== COMPOSERS.length || JSON.stringify(data) !== JSON.stringify(COMPOSERS);
+			data.length !== COMPOSERS.length ||
+			JSON.stringify(data) !== JSON.stringify(COMPOSERS);
 		applyComposers(data);
 		saveCache(data, etag);
 
@@ -246,8 +287,18 @@ export async function refreshComposersFromRemote(options?: {
 		if (cached) {
 			applyComposers(cached);
 			kickPortraitSync(COMPOSERS, false);
-			return { updated: false, source: 'cache', count: COMPOSERS.length, error: message };
+			return {
+				updated: false,
+				source: 'cache',
+				count: COMPOSERS.length,
+				error: message
+			};
 		}
-		return { updated: false, source: 'bundled', count: COMPOSERS.length, error: message };
+		return {
+			updated: false,
+			source: 'bundled',
+			count: COMPOSERS.length,
+			error: message
+		};
 	}
 }

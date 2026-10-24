@@ -38,7 +38,7 @@
 	{#if open}
 		<div class="score-menu" role="menu">
 			<button type="button" role="menuitem" onclick={(event) => onEditTags(score, event)}>
-				<Tag size={15} strokeWidth={2} />Edit tags
+				<Tag size={15} strokeWidth={2} />Edit metadata
 			</button>
 			<button type="button" role="menuitem" onclick={(event) => onDownload(score, event)}>
 				<Download size={15} strokeWidth={2} />Download PDF
@@ -68,7 +68,7 @@
 		display: grid;
 		place-items: center;
 		border: 1px solid transparent;
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 		background: color-mix(in srgb, var(--sonora-bg-elevated) 78%, transparent);
 		color: var(--sonora-text-secondary);
 		cursor: pointer;
@@ -95,8 +95,9 @@
 		padding: 6px;
 		border: 1px solid var(--sonora-border-strong);
 		border-radius: var(--sonora-radius-md);
-		background: var(--sonora-bg-panel-solid);
+		background: var(--sonora-surface-glass);
 		backdrop-filter: var(--sonora-blur);
+		-webkit-backdrop-filter: var(--sonora-blur);
 		box-shadow: var(--sonora-shadow-md);
 		display: flex;
 		flex-direction: column;
@@ -124,10 +125,10 @@
 		color: var(--sonora-text);
 	}
 	.score-menu button.danger {
-		color: #fca5a5;
+		color:var(--sonora-danger);
 	}
 	.score-menu button.danger:hover {
 		background: color-mix(in srgb, var(--sonora-danger) 16%, transparent);
-		color: #fecaca;
+		color:var(--sonora-danger);
 	}
 </style>

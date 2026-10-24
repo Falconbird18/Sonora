@@ -1,10 +1,45 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { ScoreItem } from './lib/types';
+	import { db } from './lib/db';
+	import { resolveScoreSource } from './lib/folderSync';
+	import type { ScoreItem, ScoreList } from './lib/types';
 	import type { Component } from 'svelte';
 	import { settings } from './lib/settingsStore';
 
 	let activeScore = $state<ScoreItem | null>(null);
+	let program = $state<{ list: ScoreList; entryId: string } | null>(null);
+	const programIndex = $derived(
+		program?.list.entries.findIndex((entry) => entry.id === program?.entryId) ??
+			-1
+	);
+	const programLabel = $derived(
+		program
+			? `${program.list.name} · ${programIndex + 1} / ${program.list.entries.length}`
+			: ''
+	);
+	let programError = $state('');
+	async function navigateProgram(direction: number) {
+		if (!program) return;
+		const entry = program.list.entries[programIndex + direction];
+		if (!entry) return;
+		const score = await db.scores.get(entry.scoreId);
+		if (!score) {
+			programError =
+				'This program item is no longer in the library. Return to your list to choose another score.';
+			return;
+		}
+		const folder = await db.folders.get('library-root');
+		const source = resolveScoreSource(score, folder);
+		programError = '';
+		program = { ...program, entryId: entry.id };
+		activeScore = {
+			...score,
+			pdfUrl: source.url || score.pdfUrl,
+			nativePath: source.nativePath || score.nativePath,
+			pdfBlob: source.blob || score.pdfBlob
+		};
+		await db.scores.update(score.id, { lastOpenedAt: Date.now() });
+	}
 	let crash = $state('');
 	let libraryView = $state<Component<any> | null>(null);
 	let libraryViewError = $state('');
@@ -14,6 +49,13 @@
 	onMount(() => {
 		void settings;
 		void loadLibraryView();
+		const warmup = setTimeout(() => {
+			void loadScoreViewer();
+			void import('./lib/pdfUtils')
+				.then(({ warmPdfRenderer }) => warmPdfRenderer())
+				.catch((error) => console.warn('PDF warmup deferred', error));
+		}, 300);
+		return () => clearTimeout(warmup);
 	});
 
 	async function loadLibraryView() {
@@ -22,7 +64,8 @@
 			libraryView = module.default;
 		} catch (reason) {
 			console.error('Sonora library failed to load', reason);
-			libraryViewError = reason instanceof Error ? reason.message : String(reason);
+			libraryViewError =
+				reason instanceof Error ? reason.message : String(reason);
 		}
 	}
 
@@ -33,13 +76,16 @@
 			scoreViewer = module.default;
 		} catch (reason) {
 			console.error('Sonora score viewer failed to load', reason);
-			scoreViewerError = reason instanceof Error ? reason.message : String(reason);
+			scoreViewerError =
+				reason instanceof Error ? reason.message : String(reason);
 		}
 	}
 
 	function closeScore() {
 		const finish = () => {
 			activeScore = null;
+			program = null;
+			programError = '';
 			crash = '';
 		};
 		if (typeof document !== 'undefined' && document.fullscreenElement) {
@@ -57,14 +103,23 @@
 
 	function onUnhandled(event: PromiseRejectionEvent) {
 		console.error('Sonora unhandled rejection', event.reason);
-		const message = event.reason instanceof Error ? event.reason.message : String(event.reason || '');
+		const message =
+			event.reason instanceof Error
+				? event.reason.message
+				: String(event.reason || '');
 		if (activeScore && /pdf|canvas|worker/i.test(message)) {
 			crash = 'The score renderer hit a snag. Returning to your library.';
 			closeScore();
 		}
 	}
 
-	function openScore(score: ScoreItem) {
+	async function openScore(
+		score: ScoreItem,
+		context?: { listId: string; entryId: string }
+	) {
+		const list = context ? await db.lists.get(context.listId) : undefined;
+		program = list && context ? { list, entryId: context.entryId } : null;
+		programError = '';
 		activeScore = score;
 		crash = '';
 		scoreViewerError = '';
@@ -75,8 +130,7 @@
 <svelte:head>
 	<meta
 		name="viewport"
-		content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
-	/>
+		content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
 	<meta name="theme-color" content="#0c0c0e" />
 </svelte:head>
 
@@ -93,7 +147,9 @@
 				<p>{libraryViewError}</p>
 			</div>
 		{:else}
-			<div class="startup-loading"><span></span><strong>Starting Sonora…</strong></div>
+			<div class="startup-loading">
+				<span></span><strong>Starting Sonora…</strong>
+			</div>
 		{/if}
 	</div>
 
@@ -101,7 +157,22 @@
 		<div class="layer viewer-layer">
 			{#if scoreViewer}
 				{@const Viewer = scoreViewer}
-				<Viewer score={activeScore} onClose={closeScore} />
+				{#key `${activeScore.id}:${program?.entryId ?? ''}`}
+					<Viewer
+						score={activeScore}
+						onClose={closeScore}
+						sequenceLabel={programLabel}
+						onPreviousScore={programIndex > 0
+							? () => navigateProgram(-1)
+							: undefined}
+						onNextScore={program &&
+						programIndex < program.list.entries.length - 1
+							? () => navigateProgram(1)
+							: undefined} />
+				{/key}
+				{#if programError}<div class="program-error" role="alert">
+						{programError}
+					</div>{/if}
 			{:else if scoreViewerError}
 				<div class="viewer-error">
 					<strong>Sonora could not load the score viewer.</strong>
@@ -109,7 +180,9 @@
 					<button onclick={closeScore}>Return to library</button>
 				</div>
 			{:else}
-				<div class="viewer-loading"><span></span><strong>Preparing score viewer…</strong></div>
+				<div class="viewer-loading">
+					<span></span><strong>Preparing score viewer…</strong>
+				</div>
 			{/if}
 		</div>
 	{/if}
@@ -119,6 +192,18 @@
 </main>
 
 <style>
+	.program-error {
+		position: absolute;
+		top: 70px;
+		left: 20px;
+		right: 20px;
+		z-index: 100;
+		padding: 14px;
+		border: 1px solid var(--sonora-danger);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-bg-panel-solid);
+		color: var(--sonora-danger);
+	}
 	:global(html),
 	:global(body),
 	:global(#app) {
@@ -225,7 +310,7 @@
 		border: 1px solid var(--sonora-border-strong);
 		border-radius: var(--sonora-radius-md, 12px);
 		padding: 9px 14px;
-		background: var(--sonora-bg-elevated);
+		background: var(--sonora-surface-raised);
 		color: inherit;
 		cursor: pointer;
 	}

@@ -1,0 +1,121 @@
+// Frozen pre-worker renderer for repeatable before/after browser benchmarks.
+import { init } from '@embedpdf/pdfium';
+import { PdfiumNative, PdfEngine } from '@embedpdf/engines/pdfium';
+import { browserImageDataToBlobConverter } from '@embedpdf/engines/converters';
+import type {
+	PdfDocumentRenderer,
+	PdfPageInfo,
+	PdfRenderOptions,
+	PdfRenderer,
+	RenderedPdfPage
+} from '../../src/lib/pdfRenderer';
+
+// Served from public/pdfium/pdfium.wasm
+const PDFIUM_WASM_URL = '/pdfium/pdfium.wasm';
+
+let enginePromise: Promise<PdfEngine<Blob>> | null = null;
+
+async function getEngine(): Promise<PdfEngine<Blob>> {
+	if (!enginePromise) {
+		enginePromise = (async () => {
+			const response = await fetch(PDFIUM_WASM_URL);
+			if (!response.ok) {
+				throw new Error(
+					`Could not load PDFium WASM (${response.status}) from ${PDFIUM_WASM_URL}`
+				);
+			}
+
+			const wasmBinary = await response.arrayBuffer();
+
+			// Guard: SPA fallback returns HTML instead of WASM
+			const magic = new Uint8Array(wasmBinary, 0, 4);
+			if (
+				magic[0] !== 0x00 ||
+				magic[1] !== 0x61 ||
+				magic[2] !== 0x73 ||
+				magic[3] !== 0x6d
+			) {
+				throw new Error(
+					`PDFium URL returned non-WASM data (got HTML/404). Check that ${PDFIUM_WASM_URL} exists.`
+				);
+			}
+
+			const pdfiumModule = await init({ wasmBinary });
+			const native = new PdfiumNative(pdfiumModule);
+			return new PdfEngine<Blob>(native, {
+				imageConverter: browserImageDataToBlobConverter
+			});
+		})();
+	}
+	return enginePromise;
+}
+
+function renderOptions(options?: PdfRenderOptions) {
+	return {
+		scaleFactor: Math.max(0.01, options?.scale ?? 1),
+		dpr: 1,
+		imageType: 'image/png' as const
+	};
+}
+
+function toArrayBuffer(data: Uint8Array): ArrayBuffer {
+	if (
+		data.buffer instanceof ArrayBuffer &&
+		data.byteOffset === 0 &&
+		data.byteLength === data.buffer.byteLength
+	)
+		return data.buffer;
+	const buffer = new ArrayBuffer(data.byteLength);
+	new Uint8Array(buffer).set(data);
+	return buffer;
+}
+
+export const pdfiumRenderer: PdfRenderer = {
+	async open(
+		data: Uint8Array,
+		id = `score-${Date.now()}`
+	): Promise<PdfDocumentRenderer> {
+		if (!data.byteLength) throw new Error('PDF data is empty');
+
+		const engine = await getEngine();
+		const document = await engine
+			// A viewer and a thumbnail job can open the same file concurrently.
+			// Distinct handles prevent closing one job from invalidating the other.
+			.openDocumentBuffer({
+				id: `${id}:${crypto.randomUUID()}`,
+				content: toArrayBuffer(data)
+			})
+			.toPromise();
+
+		const pages: PdfPageInfo[] = document.pages.map((page, index) => ({
+			index,
+			width: page.size.width,
+			height: page.size.height
+		}));
+
+		return {
+			pageCount: pages.length,
+			pages,
+			async renderPage(pageIndex, options): Promise<RenderedPdfPage> {
+				const page = document.pages[pageIndex];
+				if (!page) throw new Error(`PDF page ${pageIndex + 1} does not exist`);
+				const blob = await engine
+					.renderPage(document, page, renderOptions(options))
+					.toPromise();
+				return { blob, width: page.size.width, height: page.size.height };
+			},
+			async getPageText(pageIndex) {
+				if (!document.pages[pageIndex])
+					throw new Error(`PDF page ${pageIndex + 1} does not exist`);
+				return engine.extractText(document, [pageIndex]).toPromise();
+			},
+			async close() {
+				await engine.closeDocument(document).toPromise();
+			}
+		};
+	}
+};
+
+export async function warmPdfium() {
+	await getEngine();
+}

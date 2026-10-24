@@ -1,5 +1,29 @@
-export interface ScoreItem {
+export interface LibraryFolder {
+	/** Path relative to the connected library directory. */
+	sourcePath?: string;
 	id: string;
+	name: string;
+	parentId: string;
+	createdAt: number;
+}
+
+export interface ScoreItem {
+	folderId?: string;
+	id: string;
+	contentHash?: string;
+	annotationLayers?: AnnotationLayer[];
+	workId?: string;
+	workTitle?: string;
+	edition?: string;
+	publisher?: string;
+	editor?: string;
+	arranger?: string;
+	catalogue?: string;
+	key?: string;
+	compositionDate?: string;
+	movements?: string;
+	imslpPage?: string;
+	metadataEdited?: boolean;
 	title: string;
 	composer: string;
 	/** Stable composer database record, when the composer is recognized. */
@@ -45,8 +69,13 @@ export interface FolderSource {
 	autoSync: boolean;
 }
 
-export interface Point { x: number; y: number; pressure?: number; }
+export interface Point {
+	x: number;
+	y: number;
+	pressure?: number;
+}
 export interface Stroke {
+	layerId?: string;
 	id?: string;
 	tool: 'pen' | 'highlighter';
 	kind?: 'freehand' | 'line' | 'arrow';
@@ -55,6 +84,7 @@ export interface Stroke {
 	points: Point[];
 }
 export interface SymbolStamp {
+	layerId?: string;
 	id: string;
 	scoreId?: string;
 	pageNum?: number;
@@ -66,6 +96,7 @@ export interface SymbolStamp {
 	color: string;
 }
 export interface TextNote {
+	layerId?: string;
 	id: string;
 	scoreId?: string;
 	pageNum?: number;
@@ -85,6 +116,16 @@ export interface AnnotationRecord {
 }
 
 export interface ScoreMetadataUpdate {
+	workTitle?: string;
+	edition?: string;
+	publisher?: string;
+	editor?: string;
+	arranger?: string;
+	catalogue?: string;
+	key?: string;
+	compositionDate?: string;
+	movements?: string;
+
 	title: string;
 	composer: string;
 	composerId?: string | null;
@@ -97,4 +138,24 @@ export interface ScoreMetadataUpdate {
 	ensemble?: string;
 	instruments?: string;
 	tags: string[];
+}
+
+/** Entry ids allow a concert program to repeat a score without losing its order. */
+export interface ListEntry {
+	id: string;
+	scoreId: string;
+}
+export interface ScoreList {
+	id: string;
+	name: string;
+	description: string;
+	entries: ListEntry[];
+	createdAt: number;
+	updatedAt: number;
+}
+
+export interface AnnotationLayer {
+	id: string;
+	name: string;
+	visible: boolean;
 }

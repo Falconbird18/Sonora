@@ -1,101 +1,136 @@
-import { init } from '@embedpdf/pdfium';
-import { PdfiumNative, PdfEngine } from '@embedpdf/engines/pdfium';
-import { browserImageDataToBlobConverter } from '@embedpdf/engines/converters';
 import type {
 	PdfDocumentRenderer,
-	PdfPageInfo,
+	PdfOpenOptions,
 	PdfRenderOptions,
-	PdfRenderer,
-	RenderedPdfPage
+	PdfRenderer
 } from './pdfRenderer';
+import { PdfWorkerClient } from './pdfWorkerClient';
+import type { PdfWorkerResult } from './pdfWorkerProtocol';
 
-// Served from public/pdfium/pdfium.wasm
-const PDFIUM_WASM_URL = '/pdfium/pdfium.wasm';
-
-let enginePromise: Promise<PdfEngine<Blob>> | null = null;
-
-type PdfTextEngine = PdfEngine<Blob> & {
-	getPageText(document: unknown, pageIndex: number): { toPromise(): Promise<string> };
-};
-
-async function getEngine(): Promise<PdfEngine<Blob>> {
-	if (!enginePromise) {
-		enginePromise = (async () => {
-			const response = await fetch(PDFIUM_WASM_URL);
-			if (!response.ok) {
-				throw new Error(`Could not load PDFium WASM (${response.status}) from ${PDFIUM_WASM_URL}`);
-			}
-
-			const wasmBinary = await response.arrayBuffer();
-
-			// Guard: SPA fallback returns HTML instead of WASM
-			const magic = new Uint8Array(wasmBinary, 0, 4);
-			if (magic[0] !== 0x00 || magic[1] !== 0x61 || magic[2] !== 0x73 || magic[3] !== 0x6d) {
-				throw new Error(
-					`PDFium URL returned non-WASM data (got HTML/404). Check that ${PDFIUM_WASM_URL} exists.`
-				);
-			}
-
-			const pdfiumModule = await init({ wasmBinary });
-			const native = new PdfiumNative(pdfiumModule);
-			return new PdfEngine<Blob>(native, {
-				imageConverter: browserImageDataToBlobConverter
-			});
-		})();
+let viewerClient: PdfWorkerClient | undefined;
+let thumbnailClient: PdfWorkerClient | undefined;
+function getClient(background = false) {
+	if (background) {
+		if (!thumbnailClient || thumbnailClient.unavailable)
+			thumbnailClient = new PdfWorkerClient();
+		return thumbnailClient;
 	}
-	return enginePromise;
+	if (!viewerClient || viewerClient.unavailable)
+		viewerClient = new PdfWorkerClient();
+	return viewerClient;
 }
-
-function renderOptions(options?: PdfRenderOptions) {
-    return {
-        scaleFactor: Math.max(0.01, options?.scale ?? 1),
-        dpr: 1,
-        imageType: 'image/png' as const
-    };
+async function toBitmap(result: PdfWorkerResult): Promise<ImageBitmap> {
+	if (result.bitmap) return result.bitmap;
+	if (result.pixels)
+		return createImageBitmap(
+			new ImageData(result.pixels, result.width!, result.height!)
+		);
+	throw Error('PDF worker returned no pixels');
 }
-
-function toArrayBuffer(data: Uint8Array): ArrayBuffer {
-    const buffer = new ArrayBuffer(data.byteLength);
-    new Uint8Array(buffer).set(data);
-    return buffer;
+async function toBlob(result: PdfWorkerResult): Promise<Blob> {
+	if (result.blob) return result.blob;
+	// Older webviews without worker OffscreenCanvas still rasterize off the UI thread.
+	const bitmap = await toBitmap(result);
+	try {
+		const canvas = document.createElement('canvas');
+		canvas.width = bitmap.width;
+		canvas.height = bitmap.height;
+		canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
+		return await new Promise<Blob>((resolve, reject) =>
+			canvas.toBlob(
+				(blob) =>
+					blob ? resolve(blob) : reject(Error('Thumbnail encoding failed')),
+				'image/png'
+			)
+		);
+	} finally {
+		bitmap.close();
+	}
 }
-
+async function openDocument(
+	source: { data?: ArrayBuffer; blob?: Blob },
+	id: string,
+	options?: PdfOpenOptions
+): Promise<PdfDocumentRenderer> {
+	const client = getClient(options?.background);
+	const documentId = `${id}:${crypto.randomUUID()}`;
+	// Blobs are immutable shared storage; byte buffers are transferred to the worker.
+	const result = await client.request({
+		method: 'open',
+		documentId,
+		...source
+	});
+	const pages = result.pages!;
+	let closed = false;
+	function render(
+		method: 'bitmap' | 'blob',
+		pageIndex: number,
+		options?: PdfRenderOptions
+	) {
+		if (closed) return Promise.reject(Error('PDF document is closed'));
+		if (!pages[pageIndex])
+			return Promise.reject(Error(`PDF page ${pageIndex + 1} does not exist`));
+		return client.request(
+			{
+				method,
+				documentId,
+				pageIndex,
+				scale: options?.scale ?? 1,
+				imageType: options?.imageType
+			},
+			options?.priority === 'prefetch' ? 1 : 0,
+			options?.signal
+		);
+	}
+	return {
+		pageCount: pages.length,
+		pages,
+		async renderPage(pageIndex, options) {
+			const result = await render('blob', pageIndex, options);
+			return {
+				blob: await toBlob(result),
+				width: pages[pageIndex].width,
+				height: pages[pageIndex].height
+			};
+		},
+		async renderBitmap(pageIndex, options) {
+			return toBitmap(await render('bitmap', pageIndex, options));
+		},
+		async getPageText(pageIndex) {
+			if (closed || !pages[pageIndex])
+				throw Error('PDF page does not exist or document is closed');
+			return (
+				(await client.request({ method: 'text', documentId, pageIndex }))
+					.text ?? ''
+			);
+		},
+		async close() {
+			if (closed) return;
+			closed = true;
+			client.cancelDocument(documentId);
+			await client.request({ method: 'close', documentId });
+		}
+	};
+}
 export const pdfiumRenderer: PdfRenderer = {
-    async open(data: Uint8Array, id = `score-${Date.now()}`): Promise<PdfDocumentRenderer> {
-        if (!data.byteLength) throw new Error('PDF data is empty');
-
-        const engine = await getEngine();
-        const document = await engine
-            .openDocumentBuffer({ id, content: toArrayBuffer(data) })
-            .toPromise();
-
-        const pages: PdfPageInfo[] = document.pages.map((page, index) => ({
-            index,
-            width: page.size.width,
-            height: page.size.height
-        }));
-
-        return {
-            pageCount: pages.length,
-            pages,
-            async renderPage(pageIndex, options): Promise<RenderedPdfPage> {
-                const page = document.pages[pageIndex];
-                if (!page) throw new Error(`PDF page ${pageIndex + 1} does not exist`);
-                const blob = await engine.renderPage(document, page, renderOptions(options)).toPromise();
-                return { blob, width: page.size.width, height: page.size.height };
-            },
-            async getPageText(pageIndex) {
-                if (!document.pages[pageIndex]) throw new Error(`PDF page ${pageIndex + 1} does not exist`);
-                const textEngine = engine as PdfTextEngine;
-                return textEngine.getPageText(document, pageIndex).toPromise();
-            },
-            async close() {
-                await engine.closeDocument(document).toPromise();
-            }
-        };
-    }
+	async open(data, id = 'score', options) {
+		if (!data.byteLength) throw Error('PDF data is empty');
+		const owned =
+			options?.transfer &&
+			data.buffer instanceof ArrayBuffer &&
+			data.byteOffset === 0 &&
+			data.byteLength === data.buffer.byteLength;
+		return openDocument(
+			{ data: owned ? (data.buffer as ArrayBuffer) : data.slice().buffer },
+			id,
+			options
+		);
+	},
+	async openBlob(blob, id = 'score', options) {
+		if (!blob.size) throw Error('PDF data is empty');
+		return openDocument({ blob }, id, options);
+	}
 };
-
 export async function warmPdfium() {
-    await getEngine();
+	await getClient().request({ method: 'warm' });
 }

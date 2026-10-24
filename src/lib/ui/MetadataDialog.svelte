@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { dialogFocus } from './dialogFocus';
 	import { Check, Pencil, Search, X } from '@lucide/svelte';
 	import type { ScoreMetadataUpdate } from '../types';
 	import {
@@ -9,6 +10,16 @@
 
 	type Props = {
 		title: string;
+		workTitle?: string;
+		edition?: string;
+		publisher?: string;
+		editor?: string;
+		arranger?: string;
+		catalogue?: string;
+		key?: string;
+		compositionDate?: string;
+		movements?: string;
+
 		composer?: string;
 		composerId?: string | null;
 		composerPeriod?: string;
@@ -26,6 +37,16 @@
 	};
 	let {
 		title,
+		workTitle = '',
+		edition = '',
+		publisher = '',
+		editor = '',
+		arranger = '',
+		catalogue = '',
+		key = '',
+		compositionDate = '',
+		movements = '',
+
 		composer = '',
 		composerId = null,
 		composerPeriod = '',
@@ -42,6 +63,18 @@
 		onClose
 	}: Props = $props();
 
+	let extra = $state<Record<string, string>>({});
+	const extraLabels: Record<string, string> = {
+		workTitle: 'Composition title',
+		edition: 'Edition or part',
+		publisher: 'Publisher',
+		editor: 'Editor',
+		arranger: 'Arranger',
+		catalogue: 'Catalogue number',
+		key: 'Key',
+		compositionDate: 'Date composed',
+		movements: 'Movements'
+	};
 	let editTitle = $state(''),
 		editComposer = $state(''),
 		editYear = $state(''),
@@ -54,6 +87,17 @@
 		composerSearch = $state('');
 
 	$effect(() => {
+		extra = {
+			workTitle,
+			edition,
+			publisher,
+			editor,
+			arranger,
+			catalogue,
+			key,
+			compositionDate,
+			movements
+		};
 		editTitle = title;
 		editComposer = composer;
 		editYear = year != null ? String(year) : '';
@@ -102,6 +146,7 @@
 	function handleComposerPickerKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
 			event.preventDefault();
+			event.stopPropagation();
 			closeComposerPicker();
 		} else if (event.key === 'Enter') {
 			event.preventDefault();
@@ -128,6 +173,7 @@
 			? Number.parseInt(editYear.trim(), 10)
 			: null;
 		onSave({
+			...extra,
 			title: editTitle.trim() || title,
 			composer: editComposer.trim() || composer || 'Unknown Composer',
 			composerId: selectedComposer?.id ?? null,
@@ -152,7 +198,16 @@
 	}}>
 	<div
 		class="meta-dialog"
+		use:dialogFocus
 		role="dialog"
+		tabindex="-1"
+		onkeydown={(event) => {
+			if (event.key === 'Escape') {
+				event.stopPropagation();
+				if (composerPickerOpen) closeComposerPicker();
+				else onClose();
+			}
+		}}
 		aria-modal="true"
 		aria-labelledby="meta-dialog-title">
 		<header>
@@ -202,7 +257,16 @@
 				{#if composerPickerOpen}
 					<div
 						class="composer-picker"
+						use:dialogFocus
 						role="dialog"
+						tabindex="-1"
+						onkeydown={(event) => {
+							if (event.key === 'Escape') {
+								event.stopPropagation();
+								if (composerPickerOpen) closeComposerPicker();
+								else onClose();
+							}
+						}}
 						aria-label="Choose composer">
 						<div class="picker-search">
 							<Search size={15} aria-hidden="true" /><input
@@ -291,6 +355,19 @@
 							>{/each}
 					</div>{/if}
 			</div>
+			<details class="work-metadata">
+				<summary>Edition details</summary>
+				<p class="subtitle">
+					Organize editions and parts using folders in the library.
+				</p>
+				{#each Object.entries(extraLabels) as [key, label]}
+					<div class="field-row">
+						<label for={`meta-${key}`}>{label}</label><input
+							id={`meta-${key}`}
+							bind:value={extra[key]} />
+					</div>
+				{/each}
+			</details>
 		</div>
 		<footer>
 			<button type="button" class="secondary" onclick={onClose}>Cancel</button
@@ -308,17 +385,18 @@
 		display: grid;
 		place-items: center;
 		padding: 24px;
-		background: rgba(0, 0, 0, 0.55);
-		backdrop-filter: blur(6px);
+		background: var(--sonora-scrim);
+		backdrop-filter: var(--sonora-blur);
+		-webkit-backdrop-filter: var(--sonora-blur);
 	}
 	.meta-dialog {
 		width: min(520px, 100%);
 		max-height: min(90vh, 760px);
 		display: flex;
 		flex-direction: column;
-		border: 1px solid #2d2d28;
-		border-radius: 16px;
-		background: #1c1c18;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-lg);
+		background: var(--sonora-surface-raised);
 		box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
 		overflow: hidden;
 	}
@@ -328,17 +406,17 @@
 		justify-content: space-between;
 		gap: 12px;
 		padding: 18px;
-		border-bottom: 1px solid #2d2d28;
+		border-bottom: 1px solid var(--sonora-border-strong);
 	}
 	header h2 {
 		margin: 0;
 		font-size: 16px;
-		color: #f0f0e8;
+		color: var(--sonora-text);
 	}
 	.subtitle {
 		margin: 4px 0 0;
-		font-size: 12px;
-		color: #8a8a82;
+		font-size: var(--sonora-text-sm);
+		color: var(--sonora-text-muted);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -352,12 +430,12 @@
 		border: 0;
 		border-radius: 8px;
 		background: transparent;
-		color: #8a8a82;
+		color: var(--sonora-text-muted);
 		cursor: pointer;
 	}
 	.close-button:hover {
-		background: rgba(255, 255, 255, 0.06);
-		color: #f0f0e8;
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
 	}
 	.body {
 		flex: 1;
@@ -378,29 +456,29 @@
 		gap: 12px;
 	}
 	label {
-		font-size: 11px;
+		font-size: var(--sonora-text-sm);
 		font-weight: 600;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		color: #7a7a72;
+		color: var(--sonora-text-muted);
 	}
 	.field-row > input {
 		width: 100%;
 		box-sizing: border-box;
 		padding: 9px 11px;
-		border: 1px solid #33332e;
-		border-radius: 10px;
-		background: #22221e;
-		color: #e8e8e0;
-		font-size: 13px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-surface-raised);
+		color: var(--sonora-text);
+		font-size: var(--sonora-text-md);
 		outline: 0;
 	}
 	.field-row > input:focus {
-		border-color: #55554c;
-		box-shadow: 0 0 0 3px rgba(230, 230, 222, 0.08);
+		border-color: var(--sonora-border-focus);
+		box-shadow: 0 0 0 3px var(--sonora-accent-soft);
 	}
 	.field-row > input::placeholder {
-		color: #5f5f58;
+		color: var(--sonora-text-muted);
 	}
 	.composer-card {
 		position: relative;
@@ -409,9 +487,9 @@
 		grid-template-columns: 1fr 1fr;
 		gap: 4px 12px;
 		padding: 12px;
-		border: 1px solid #33332e;
-		border-radius: 12px;
-		background: #22221e;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-surface-raised);
 		color: inherit;
 		text-align: left;
 		cursor: pointer;
@@ -421,14 +499,14 @@
 			transform 0.15s ease;
 	}
 	.composer-card:hover {
-		border-color: #55554c;
-		background: #272720;
+		border-color: var(--sonora-border-focus);
+		background: var(--sonora-surface-raised);
 		transform: translateY(-1px);
 	}
 	.composer-card:focus-visible {
 		outline: 0;
-		border-color: #77776e;
-		box-shadow: 0 0 0 3px rgba(230, 230, 222, 0.08);
+		border-color: var(--sonora-border-focus);
+		box-shadow: 0 0 0 3px var(--sonora-accent-soft);
 	}
 	.composer-card.empty {
 		border-style: dashed;
@@ -441,24 +519,24 @@
 		gap: 10px;
 	}
 	.composer-card strong {
-		color: #eee;
-		font-size: 13px;
+		color: var(--sonora-text);
+		font-size: var(--sonora-text-md);
 	}
 	.composer-card-main :global(svg) {
-    color: #85857c;
+		color: var(--sonora-text-muted);
 	}
 	.composer-card span {
-		font-size: 11px;
-		color: #999990;
+		font-size: var(--sonora-text-sm);
+		color: var(--sonora-text-muted);
 	}
 	.composer-picker {
 		position: relative;
 		z-index: 10;
 		margin-top: 6px;
 		padding: 8px;
-		border: 1px solid #383832;
-		border-radius: 12px;
-		background: #20201c;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-surface-raised);
 		box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
 	}
 	.picker-search {
@@ -466,13 +544,13 @@
 		align-items: center;
 		gap: 7px;
 		padding: 7px 9px;
-		border: 1px solid #33332e;
-		border-radius: 9px;
-		background: #181815;
-		color: #8f8f87;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-surface-raised);
+		color: var(--sonora-text-muted);
 	}
 	.picker-search:focus-within {
-		border-color: #55554c;
+		border-color: var(--sonora-border-focus);
 	}
 	.picker-search input {
 		min-width: 0;
@@ -480,11 +558,11 @@
 		border: 0;
 		outline: 0;
 		background: transparent;
-		color: #e8e8e0;
-		font-size: 13px;
+		color: var(--sonora-text);
+		font-size: var(--sonora-text-md);
 	}
 	.picker-search input::placeholder {
-		color: #5f5f58;
+		color: var(--sonora-text-muted);
 	}
 	.picker-close {
 		width: 24px;
@@ -494,12 +572,12 @@
 		border: 0;
 		border-radius: 6px;
 		background: transparent;
-		color: #77776f;
+		color: var(--sonora-text-muted);
 		cursor: pointer;
 	}
 	.picker-close:hover {
-		background: rgba(255, 255, 255, 0.06);
-		color: #eee;
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
 	}
 	.composer-suggestions {
 		margin-top: 6px;
@@ -515,42 +593,42 @@
 		border: 0;
 		border-radius: 8px;
 		background: transparent;
-		color: #ddd;
+		color: var(--sonora-text);
 		cursor: pointer;
 		text-align: left;
 	}
 	.composer-suggestions button:hover,
 	.composer-suggestions button.selected {
-		background: rgba(255, 255, 255, 0.07);
+		background: var(--sonora-bg-hover);
 	}
 	.composer-name {
-		font-size: 13px;
+		font-size: var(--sonora-text-md);
 		font-weight: 600;
 	}
 	.composer-meta {
 		margin-top: 2px;
-		font-size: 10px;
-		color: #77776f;
+		font-size: var(--sonora-text-sm);
+		color: var(--sonora-text-muted);
 	}
 	.custom-composer {
 		width: 100%;
 		margin-top: 6px;
 		padding: 9px 10px;
-		border: 1px solid #33332e;
+		border: 1px solid var(--sonora-border-strong);
 		border-radius: 8px;
-		background: #22221e;
-		color: #ddd;
+		background: var(--sonora-surface-raised);
+		color: var(--sonora-text);
 		text-align: left;
-		font-size: 12px;
+		font-size: var(--sonora-text-sm);
 		cursor: pointer;
 	}
 	.custom-composer:hover {
-		background: #2a2a25;
+		background: var(--sonora-surface-raised);
 	}
 	.picker-empty {
 		margin: 12px 4px 4px;
-		color: #77776f;
-		font-size: 11px;
+		color: var(--sonora-text-muted);
+		font-size: var(--sonora-text-sm);
 	}
 	.tag-input-wrap {
 		display: flex;
@@ -559,12 +637,12 @@
 		gap: 6px;
 		min-height: 42px;
 		padding: 6px 8px;
-		border: 1px solid #33332e;
-		border-radius: 10px;
-		background: #22221e;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-surface-raised);
 	}
 	.tag-input-wrap:focus-within {
-		border-color: #55554c;
+		border-color: var(--sonora-border-focus);
 	}
 	.edit-tag {
 		display: inline-flex;
@@ -572,10 +650,10 @@
 		gap: 4px;
 		padding: 4px 6px 4px 9px;
 		border-radius: 999px;
-		background: rgba(255, 255, 255, 0.07);
-		border: 1px solid #33332e;
-		color: #c7c7bf;
-		font-size: 12px;
+		background: var(--sonora-bg-hover);
+		border: 1px solid var(--sonora-border-strong);
+		color: var(--sonora-text);
+		font-size: var(--sonora-text-sm);
 	}
 	.edit-tag button {
 		width: 18px;
@@ -585,7 +663,7 @@
 		border: 0;
 		border-radius: 999px;
 		background: transparent;
-		color: #8a8a82;
+		color: var(--sonora-text-muted);
 		cursor: pointer;
 	}
 	.tag-input-wrap input {
@@ -594,8 +672,8 @@
 		border: 0;
 		outline: 0;
 		background: transparent;
-		color: #e8e8e0;
-		font-size: 13px;
+		color: var(--sonora-text);
+		font-size: var(--sonora-text-md);
 		padding: 4px 2px;
 	}
 	.suggestions {
@@ -606,50 +684,54 @@
 		margin-top: 10px;
 	}
 	.suggestions > span {
-		color: #5f5f58;
-		font-size: 10px;
+		color: var(--sonora-text-muted);
+		font-size: var(--sonora-text-sm);
 		text-transform: uppercase;
 	}
 	.suggestions button {
 		padding: 5px 9px;
-		border: 1px solid #33332e;
+		border: 1px solid var(--sonora-border-strong);
 		border-radius: 999px;
-		background: #22221e;
-		color: #c7c7bf;
-		font-size: 11px;
+		background: var(--sonora-surface-raised);
+		color: var(--sonora-text);
+		font-size: var(--sonora-text-sm);
 		cursor: pointer;
 	}
 	.suggestions button:hover {
-		background: #2a2a25;
+		background: var(--sonora-surface-raised);
 	}
 	footer {
 		display: flex;
 		justify-content: flex-end;
 		gap: 8px;
 		padding: 13px 18px;
-		border-top: 1px solid #2d2d28;
-		background: #181815;
+		border-top: 1px solid var(--sonora-border-strong);
+		background: var(--sonora-surface-raised);
 	}
 	.secondary,
 	.primary {
+		background: var(--sonora-accent);
+		color: var(--sonora-accent-contrast);
 		display: inline-flex;
 		align-items: center;
 		gap: 7px;
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 		padding: 9px 13px;
-		font-size: 12px;
+		font-size: var(--sonora-text-sm);
 		font-weight: 600;
 		cursor: pointer;
 	}
 	.secondary {
-		border: 1px solid #33332e;
-		background: #22221e;
-		color: #9d9d95;
+		border: 1px solid var(--sonora-border-strong);
+		background: var(--sonora-surface-raised);
+		color: var(--sonora-text-muted);
 	}
 	.primary {
-		border: 1px solid #3c3c35;
-		background: #e6e6de;
-		color: #171713;
+		background: var(--sonora-accent);
+		color: var(--sonora-accent-contrast);
+		border: 1px solid var(--sonora-border-strong);
+		background: var(--sonora-surface-raised);
+		color: var(--sonora-text);
 	}
 	@media (max-width: 520px) {
 		.field-grid {
@@ -658,5 +740,20 @@
 		.composer-card {
 			grid-template-columns: 1fr;
 		}
+	}
+	.primary {
+		background: var(--sonora-accent);
+		color: var(--sonora-accent-contrast);
+		border-color: transparent;
+	}
+	.work-metadata {
+		margin-top: var(--sonora-space);
+		border-top: 1px solid var(--sonora-border);
+		padding-top: var(--sonora-space);
+	}
+	.work-metadata summary {
+		cursor: pointer;
+		color: var(--sonora-accent);
+		margin-bottom: var(--sonora-space);
 	}
 </style>

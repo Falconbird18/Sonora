@@ -1,0 +1,29 @@
+{{#fte:imslppage
+|Work Title=Suite bergamasque
+|Alternative Title=
+|Opus/Catalogue Number=CD 82 ; L.75
+|Movements Header=4 movements
+|Number of Movements/Sections=4 movements:
+{{#subitem:id=vqyaBWAj|level=1|number=1|title=''Prélude''}}
+::Moderato ({{K|F}}, 89 bars)
+{{#subitem:id=J4IBNtDf|level=1|number=2|title=''Menuet''}}
+::Andantino ({{K|a}}, 104 bars)
+{{#subitem:id=bBuTfZRr|level=1|number=3|title=''Clair de lune''}}
+::Andante très expressif ({{K|Db}}, 72 bars)
+{{#subitem:id=ElPnJhwM|level=1|number=4|title=''Passepied''}}
+::Allegretto ma non troppo ({{K|f#}}, 156 bars)
+|Dedication=
+|Year/Date of Composition=1890-1905
+|Year of First Publication=1905 (June) {{EN}} Paris: [[E. Fromont]], Plate E. 1404 F., 27 pages.
+|Average Duration=15-18 minutes
+|Librettist=
+|Language=
+|Piece Style=Romantic
+|Discography={{MusBrnz|W|51c5a474-470e-48d8-a138-df81f568896a}}
+|Authorities={{Wikidata|Q1367599}}
+|External Links={{CdCD|82}}<br>[[wikipedia:Suite_bergamasque|Wikipedia article]]<br>{{AMG|mc0002369288}}
+|Instrumentation=piano
+|Tags=suites ; pf
+
+
+}}

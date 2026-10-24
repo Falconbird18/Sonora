@@ -1,51 +1,48 @@
-/* Sonora design tokens — dark by default, light via [data-theme='light'] */
+/* Sonora — the engraved library. Semantic tokens shared by every Svelte surface. */
 
 :root {
-	/* Surfaces — deep ink with warm undertone */
-	--sonora-bg: #0c0c0e;
-	--sonora-bg-elevated: #16161a;
-	--sonora-bg-panel: rgba(22, 22, 28, 0.82);
-	--sonora-bg-panel-solid: rgba(18, 18, 24, 0.96);
-	--sonora-bg-deep: #060608;
+	--sonora-bg: #191714;
+	--sonora-bg-elevated: #231f1a;
+	--sonora-bg-panel: #231f1af2;
+	--sonora-bg-panel-solid: #231f1a;
+	--sonora-bg-deep: #120f0d;
 	--sonora-bg-hover: rgba(255, 255, 255, 0.06);
 	--sonora-bg-active: rgba(255, 255, 255, 0.1);
-	--sonora-bg-workspace: radial-gradient(
-		ellipse 120% 80% at 50% -10%,
-		#1a1528 0%,
-		#0e0e12 42%,
-		#0a0a0c 100%
+	--sonora-bg-workspace: linear-gradient(135deg, #211d18, #191714);
+	--sonora-bg-header: #231f1af2;
+	--sonora-bg-sidebar: #1c1915;
+	--sonora-text: #f3ead9;
+	--sonora-text-secondary: #d3c7b3;
+	--sonora-text-muted: #b3a591;
+	--sonora-text-faint: #a39481;
+	--sonora-text-inverse: #191714;
+	--sonora-border: #cfb99424;
+	--sonora-border-strong: #cfb99445;
+	--sonora-border-focus: color-mix(
+		in srgb,
+		var(--sonora-accent) 55%,
+		transparent
 	);
-	--sonora-bg-header: color-mix(in srgb, var(--sonora-bg-elevated) 88%, transparent);
-	--sonora-bg-sidebar: color-mix(in srgb, var(--sonora-bg) 92%, #12101a);
-
-	/* Text */
-	--sonora-text: #f3f2f7;
-	--sonora-text-secondary: #c4c2ce;
-	--sonora-text-muted: #8b8998;
-	--sonora-text-faint: #6a6878;
-	--sonora-text-inverse: #0c0c0e;
-
-	/* Borders */
-	--sonora-border: rgba(255, 255, 255, 0.07);
-	--sonora-border-strong: rgba(255, 255, 255, 0.14);
-	--sonora-border-focus: color-mix(in srgb, var(--sonora-accent) 55%, transparent);
-
-	/* Accent — luminous indigo */
-	--sonora-accent: #7c6cff;
-	--sonora-accent-hover: #958aff;
-	--sonora-accent-soft: rgba(124, 108, 255, 0.18);
-	--sonora-accent-glow: 0 0 24px rgba(124, 108, 255, 0.35);
-	--sonora-accent-contrast: #ffffff;
-
-	/* Semantic */
+	--sonora-accent: #d69991;
+	--sonora-accent-hover: color-mix(
+		in srgb,
+		var(--sonora-accent),
+		var(--sonora-text) 16%
+	);
+	--sonora-accent-soft: color-mix(
+		in srgb,
+		var(--sonora-accent) 15%,
+		transparent
+	);
+	--sonora-accent-glow: 0 2px 8px
+		color-mix(in srgb, var(--sonora-accent) 12%, transparent);
+	--sonora-accent-contrast: #281210;
 	--sonora-danger: #ff6b7a;
 	--sonora-danger-soft: rgba(255, 107, 122, 0.14);
 	--sonora-success: #3dd68c;
 	--sonora-success-soft: rgba(61, 214, 140, 0.14);
 	--sonora-warning: #f5b942;
 	--sonora-warning-soft: rgba(245, 185, 66, 0.14);
-
-	/* Tool accents (viewer) */
 	--sonora-tool-pen: #f59e0b;
 	--sonora-tool-highlighter: #eab308;
 	--sonora-tool-line: #38bdf8;
@@ -53,18 +50,14 @@
 	--sonora-tool-eraser: #ff6b7a;
 	--sonora-tool-symbol: #a78bfa;
 	--sonora-tool-text: #3dd68c;
-
-	/* Geometry */
-	--sonora-radius-xs: 6px;
-	--sonora-radius-sm: 9px;
-	--sonora-radius-md: 12px;
-	--sonora-radius-lg: 16px;
-	--sonora-radius-xl: 20px;
-	--sonora-radius-2xl: 28px;
+	--sonora-radius-xs: 3px;
+	--sonora-radius-sm: 5px;
+	--sonora-radius-md: 8px;
+	--sonora-radius-lg: 12px;
+	--sonora-radius-xl: 14px;
+	--sonora-radius-2xl: 18px;
 	--sonora-radius-pill: 999px;
-
-	/* Controls */
-	--sonora-control-size: 36px;
+	--sonora-control-size: 40px;
 	--sonora-control-size-sm: 32px;
 	--sonora-control-size-lg: 42px;
 	--sonora-touch-target: 40px;
@@ -72,100 +65,122 @@
 	--sonora-gap-md: 8px;
 	--sonora-gap-lg: 12px;
 	--sonora-gap-xl: 20px;
-
-	/* Type */
-	--sonora-font: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+	--sonora-font: 'Charter', 'Bitstream Charter', 'Sitka Text', Georgia, serif;
 	--sonora-font-music: Leland, serif;
-	--sonora-text-xs: 10px;
-	--sonora-text-sm: 11.5px;
-	--sonora-text-md: 13px;
-	--sonora-text-lg: 14.5px;
-	--sonora-text-xl: 18px;
-	--sonora-text-2xl: 24px;
+	--sonora-text-xs: 11px;
+	--sonora-text-sm: 13px;
+	--sonora-text-md: 14px;
+	--sonora-text-lg: 16px;
+	--sonora-text-xl: 21px;
+	--sonora-text-2xl: 28px;
 	--sonora-tracking-tight: -0.025em;
 	--sonora-tracking-wide: 0.04em;
-
-	/* Elevation */
 	--sonora-shadow-xs: 0 2px 8px rgba(0, 0, 0, 0.25);
 	--sonora-shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.32);
 	--sonora-shadow-md: 0 16px 48px rgba(0, 0, 0, 0.42);
 	--sonora-shadow-lg: 0 28px 64px rgba(0, 0, 0, 0.55);
-	--sonora-shadow-glow: 0 0 0 1px var(--sonora-border-strong), var(--sonora-accent-glow);
-
-	/* Motion */
+	--sonora-shadow-glow:
+		0 0 0 1px var(--sonora-border-strong), var(--sonora-accent-glow);
 	--sonora-ease: cubic-bezier(0.22, 1, 0.36, 1);
 	--sonora-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 	--sonora-ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
 	--sonora-duration: 180ms;
 	--sonora-duration-med: 280ms;
 	--sonora-duration-slow: 420ms;
-
-	/* Blur */
 	--sonora-blur: blur(20px);
 	--sonora-blur-sm: blur(10px);
-
-	/* Scrollbar */
 	--sonora-scrollbar-size: 8px;
 	--sonora-scrollbar-track: transparent;
 	--sonora-scrollbar-thumb: rgba(255, 255, 255, 0.12);
 	--sonora-scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
-
-	/* Toast / notice */
-	--sonora-toast-bg: rgba(22, 22, 30, 0.94);
-
+	--sonora-toast-bg: var(--sonora-bg-panel-solid);
+	--sonora-font-display:
+		'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia,
+		serif;
+	--sonora-space: 12px;
 	color-scheme: dark;
 }
 
-/* Light theme */
 [data-theme='light'] {
-	--sonora-bg: #f4f3f8;
-	--sonora-bg-elevated: #ffffff;
-	--sonora-bg-panel: rgba(255, 255, 255, 0.86);
-	--sonora-bg-panel-solid: rgba(255, 255, 255, 0.98);
-	--sonora-bg-deep: #e8e6f0;
-	--sonora-bg-hover: rgba(20, 16, 40, 0.05);
-	--sonora-bg-active: rgba(20, 16, 40, 0.09);
-	--sonora-bg-workspace: radial-gradient(
-		ellipse 120% 80% at 50% -10%,
-		#ebe8f8 0%,
-		#f4f3f8 48%,
-		#f0eef5 100%
-	);
-	--sonora-bg-header: rgba(255, 255, 255, 0.82);
-	--sonora-bg-sidebar: #f0eef6;
-
-	--sonora-text: #14121c;
-	--sonora-text-secondary: #3d3a4a;
-	--sonora-text-muted: #6b687c;
-	--sonora-text-faint: #8e8b9c;
-	--sonora-text-inverse: #f3f2f7;
-
-	--sonora-border: rgba(20, 18, 32, 0.08);
-	--sonora-border-strong: rgba(20, 18, 32, 0.14);
-
-	--sonora-accent: #5b4cf0;
-	--sonora-accent-hover: #4a3de0;
-	--sonora-accent-soft: rgba(91, 76, 240, 0.12);
-	--sonora-accent-glow: 0 0 20px rgba(91, 76, 240, 0.22);
-
-	--sonora-danger: #e03d52;
+	--sonora-bg: #f5f0e6;
+	--sonora-bg-elevated: #fffaf0;
+	--sonora-bg-panel: #fffaf0f2;
+	--sonora-bg-panel-solid: #fffaf0;
+	--sonora-bg-deep: #e8dfce;
+	--sonora-bg-hover: rgba(48, 39, 31, 0.05);
+	--sonora-bg-active: rgba(48, 39, 31, 0.09);
+	--sonora-bg-workspace: linear-gradient(135deg, #faf6ed, #f0e8d9);
+	--sonora-bg-header: #fffaf0f2;
+	--sonora-bg-sidebar: #eee5d5;
+	--sonora-text: #30271f;
+	--sonora-text-secondary: #514333;
+	--sonora-text-muted: #70604e;
+	--sonora-text-faint: #786652;
+	--sonora-text-inverse: #fffaf0;
+	--sonora-border: #644a2926;
+	--sonora-border-strong: #644a294d;
+	--sonora-accent: #863d38;
+	--sonora-danger: #b32637;
 	--sonora-danger-soft: rgba(224, 61, 82, 0.1);
-	--sonora-success: #1faa66;
+	--sonora-success: #286246;
 	--sonora-success-soft: rgba(31, 170, 102, 0.1);
-	--sonora-warning: #d4940a;
+	--sonora-warning: #8a6012;
 	--sonora-warning-soft: rgba(212, 148, 10, 0.1);
-
 	--sonora-shadow-xs: 0 2px 8px rgba(20, 16, 40, 0.06);
 	--sonora-shadow-sm: 0 8px 24px rgba(20, 16, 40, 0.08);
 	--sonora-shadow-md: 0 16px 40px rgba(20, 16, 40, 0.12);
 	--sonora-shadow-lg: 0 24px 56px rgba(20, 16, 40, 0.16);
-
 	--sonora-scrollbar-thumb: rgba(20, 18, 32, 0.15);
 	--sonora-scrollbar-thumb-hover: rgba(20, 18, 32, 0.28);
-
-	--sonora-toast-bg: rgba(255, 255, 255, 0.96);
-
+	--sonora-toast-bg: var(--sonora-bg-panel-solid);
+	--sonora-accent-contrast: #fffaf0;
 	color-scheme: light;
+}
+
+[data-accent='forest'] {
+	--sonora-accent: #8fc3a2;
+	--sonora-accent-contrast: #10291b;
+}
+[data-accent='ocean'] {
+	--sonora-accent: #8ebbd3;
+	--sonora-accent-contrast: #112735;
+}
+[data-accent='plum'] {
+	--sonora-accent: #c7a1ce;
+	--sonora-accent-contrast: #2b1631;
+}
+[data-accent='ochre'] {
+	--sonora-accent: #d4b570;
+	--sonora-accent-contrast: #2b220d;
+}
+[data-theme='light'][data-accent='forest'] {
+	--sonora-accent: #32684b;
+	--sonora-accent-contrast: #fff;
+}
+[data-theme='light'][data-accent='ocean'] {
+	--sonora-accent: #2b617f;
+	--sonora-accent-contrast: #fff;
+}
+[data-theme='light'][data-accent='plum'] {
+	--sonora-accent: #784680;
+	--sonora-accent-contrast: #fff;
+}
+[data-theme='light'][data-accent='ochre'] {
+	--sonora-accent: #795a19;
+	--sonora-accent-contrast: #fff;
+}
+
+[data-density='compact'] {
+	--sonora-control-size: 34px;
+	--sonora-space: 8px;
+	--sonora-gap-lg: 8px;
+	--sonora-gap-xl: 14px;
+}
+[data-density='spacious'] {
+	--sonora-control-size: 46px;
+	--sonora-space: 18px;
+	--sonora-gap-lg: 18px;
+	--sonora-gap-xl: 28px;
 }
 
 @media (max-width: 900px) {
@@ -173,7 +188,6 @@
 		--sonora-touch-target: 44px;
 	}
 }
-
 @media (prefers-reduced-motion: reduce) {
 	:root {
 		--sonora-duration: 0ms;
@@ -181,3 +195,17 @@
 		--sonora-duration-slow: 0ms;
 	}
 }
+
+/* Shared material: laid paper, softly lit edges, and glass over warm ink. */
+:root {
+  --sonora-grain: url('/textures/paper-grain.svg');
+  --sonora-blur: blur(16px);
+  --sonora-blur-sm: var(--sonora-blur);
+  --sonora-scrim: rgba(12, 9, 7, .56);
+  --sonora-bg-panel: color-mix(in srgb, var(--sonora-bg-elevated) 90%, transparent);
+  --sonora-bg-header: var(--sonora-bg-panel);
+  --sonora-inset: inset 0 1px 0 color-mix(in srgb, var(--sonora-text) 11%, transparent), inset 0 -1px 0 color-mix(in srgb, var(--sonora-bg-deep) 42%, transparent);
+  --sonora-surface-raised: var(--sonora-grain), linear-gradient(155deg, color-mix(in srgb, var(--sonora-text) 4%, transparent), transparent 65%), var(--sonora-bg-elevated);
+  --sonora-surface-glass: var(--sonora-grain), linear-gradient(155deg, color-mix(in srgb, var(--sonora-text) 4%, transparent), transparent 65%), var(--sonora-bg-panel);
+}
+[data-texture='false'] {--sonora-grain: linear-gradient(transparent, transparent);}

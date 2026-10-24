@@ -100,8 +100,8 @@
 		flex-basis: 36px;
 		width: 36px;
 		height: 36px;
-		border-radius: 10px;
-		font-size: 11px;
+		border-radius: var(--sonora-radius-md);
+		font-size: var(--sonora-text-sm);
 	}
 	img {
 		position: absolute;

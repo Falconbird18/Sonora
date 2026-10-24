@@ -1,10 +1,22 @@
 <script lang="ts">
+	import { dialogFocus } from './dialogFocus';
 	import { Monitor, Moon, Sun, X } from '@lucide/svelte';
 	import { fade, fly } from 'svelte/transition';
-	import { tick } from 'svelte';
-	import { settings, type ThemePreference } from '../settingsStore';
+
+	import {
+		settings,
+		type ThemePreference,
+		type Accent,
+		type ComposerDisplay,
+		type FileOrganization
+	} from '../settingsStore';
+	import LibrarySharing from './LibrarySharing.svelte';
 	import Toggle from './Toggle.svelte';
-	import { checkForUpdate, CURRENT_VERSION, type UpdateInfo } from '../updateChecker';
+	import {
+		checkForUpdate,
+		CURRENT_VERSION,
+		type UpdateInfo
+	} from '../updateChecker';
 	import { refreshComposersFromRemote } from '../composerDatabase';
 
 	let updateStatus = $state<'idle' | 'checking' | 'done'>('idle');
@@ -13,14 +25,43 @@
 
 	type Props = {
 		open?: boolean;
-		focusSection?: 'theme' | 'experience' | 'viewer' | null;
+		focusSection?: 'theme' | 'experience' | 'viewer' | 'sharing' | null;
+		onOrganize?: () => void;
+		organizing?: boolean;
+		organizationStatus?: string;
+		scoreCount?: number;
+		libraryRoot?: string | null;
+		onImported?: () => Promise<void>;
 		onClose: () => void;
 	};
 
-	let { open = false, focusSection = null, onClose }: Props = $props();
-	let viewerSectionEl = $state<HTMLElement | null>(null);
+	let {
+		open = false,
+		focusSection = null,
+		onOrganize,
+		organizing = false,
+		organizationStatus = '',
+		scoreCount = 0,
+		libraryRoot = null,
+		onImported,
+		onClose
+	}: Props = $props();
+	let activePage = $state('appearance');
+	const pages = [
+		['appearance', 'Appearance'],
+		['library', 'Library'],
+		['experience', 'Experience'],
+		['viewer', 'Score viewer'],
+		['handwriting', 'Handwriting'],
+		['sharing', 'Sharing'],
+		['about', 'About']
+	];
 
-	const themes: { value: ThemePreference; label: string; icon: 'system' | 'dark' | 'light' }[] = [
+	const themes: {
+		value: ThemePreference;
+		label: string;
+		icon: 'system' | 'dark' | 'light';
+	}[] = [
 		{ value: 'system', label: 'System', icon: 'system' },
 		{ value: 'dark', label: 'Dark', icon: 'dark' },
 		{ value: 'light', label: 'Light', icon: 'light' }
@@ -58,12 +99,9 @@
 	}
 
 	$effect(() => {
-		if (!open) return;
-		void tick().then(() => {
-			if (focusSection === 'viewer' && viewerSectionEl) {
-				viewerSectionEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-			}
-		});
+		if (open)
+			activePage =
+				focusSection === 'theme' ? 'appearance' : focusSection || 'appearance';
 	});
 </script>
 
@@ -77,192 +115,389 @@
 		onclick={(e) => {
 			if (e.currentTarget === e.target) onClose();
 		}}
-		transition:fade={{ duration: 200 }}
-	>
+		transition:fade={{ duration: 200 }}>
 		<div
 			class="panel"
+			use:dialogFocus
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby="settings-title"
-			transition:fly={{ y: 20, duration: 320, opacity: 0 }}
-		>
+			transition:fly={{ y: 20, duration: 320, opacity: 0 }}>
 			<header class="panel-header">
 				<div>
 					<h2 id="settings-title">Settings</h2>
-					<p>Appearance, library, and score viewer</p>
+					<p>Make Sonora feel like yours</p>
 				</div>
-				<button type="button" class="close" onclick={onClose} aria-label="Close settings">
+				<button
+					type="button"
+					class="close"
+					onclick={onClose}
+					aria-label="Close settings">
 					<X size={18} strokeWidth={2} />
 				</button>
 			</header>
 
-			<section class="section">
-				<h3>Theme</h3>
-				<div class="theme-grid" role="radiogroup" aria-label="Color theme">
-					{#each themes as theme}
-						<button
-							type="button"
-							class="theme-card"
-							class:active={$settings.theme === theme.value}
-							role="radio"
-							aria-checked={$settings.theme === theme.value}
-							onclick={() => settings.setTheme(theme.value)}
-						>
-							<span class="theme-icon" aria-hidden="true">
-								{#if theme.icon === 'system'}
-									<Monitor size={18} strokeWidth={2} />
-								{:else if theme.icon === 'dark'}
-									<Moon size={18} strokeWidth={2} />
-								{:else}
-									<Sun size={18} strokeWidth={2} />
-								{/if}
-							</span>
-							<span class="theme-label">{theme.label}</span>
-						</button>
-					{/each}
-				</div>
-			</section>
+			<div class="settings-body">
+				<nav aria-label="Settings pages">
+					{#each pages as [id, label]}<button
+							class:current={activePage === id}
+							aria-current={activePage === id ? 'page' : undefined}
+							onclick={() => (activePage = id)}>{label}</button
+						>{/each}
+				</nav>
+				<main class="settings-content">
+					{#if activePage === 'appearance'}
+						<section class="section">
+							<h3>Theme</h3>
+							<div
+								class="theme-grid"
+								role="radiogroup"
+								aria-label="Color theme">
+								{#each themes as theme}
+									<button
+										type="button"
+										class="theme-card"
+										class:active={$settings.theme === theme.value}
+										role="radio"
+										aria-checked={$settings.theme === theme.value}
+										onclick={() => settings.setTheme(theme.value)}>
+										<span class="theme-icon" aria-hidden="true">
+											{#if theme.icon === 'system'}
+												<Monitor size={18} strokeWidth={2} />
+											{:else if theme.icon === 'dark'}
+												<Moon size={18} strokeWidth={2} />
+											{:else}
+												<Sun size={18} strokeWidth={2} />
+											{/if}
+										</span>
+										<span class="theme-label">{theme.label}</span>
+									</button>
+								{/each}
+							</div>
+						</section>
+					{:else if activePage === 'library'}
+						<section class="section">
+							<h3>Personalize your library</h3>
+							<label class="preference"
+								>Accent color
+								<select
+									value={$settings.accent}
+									onchange={(e) =>
+							settings.patch({ accent: e.currentTarget.value as Accent })}>
+									<option value="oxblood">Oxblood</option><option value="forest"
+										>Forest</option
+									><option value="ocean">Ocean</option><option value="plum"
+										>Plum</option
+									><option value="ochre">Ochre</option>
+								</select>
+							</label>
+							<label class="preference"
+								>Density
+								<select
+									value={$settings.density}
+									onchange={(e) =>
+							settings.patch({
+								density: e.currentTarget.value as
+									'comfortable' | 'compact' | 'spacious',
+								compactLibrary: e.currentTarget.value === 'compact'
+							})}>
+									<option value="compact">Compact</option><option
+										value="comfortable">Comfortable</option
+									><option value="spacious">Spacious</option>
+								</select>
+							</label>
+							<label class="preference"
+								>Composer names
+								<select
+									value={$settings.composerDisplay}
+									onchange={(e) =>
+							settings.patch({
+								composerDisplay: e.currentTarget.value as ComposerDisplay
+							})}>
+									<option value="full">Ludwig van Beethoven</option><option
+										value="surname-first">Beethoven, Ludwig van</option
+									><option value="surname">Beethoven</option><option
+										value="initials">L. van Beethoven</option>
+								</select>
+							</label>
+							<label class="preference"
+								>File organization
+								<select
+									value={$settings.fileOrganization}
+									onchange={(e) =>
+							settings.patch({
+								fileOrganization: e.currentTarget.value as FileOrganization
+							})}>
+									<option value="composer-work"
+										>Composer / Work / Edition.pdf</option
+									><option value="composer"
+										>Composer / Work — Edition.pdf</option
+									><option value="flat">Work — Edition.pdf</option>
+								</select>
+							</label>
+							<p class="preference-hint">
+								New downloads use this layout. Apply it below to move existing
+								PDFs and their metadata together.
+							</p>
+							{#if onOrganize}<button
+									class="ghost"
+									disabled={organizing || !scoreCount}
+									onclick={onOrganize}
+									>{organizing
+										? 'Organizing…'
+										: `Apply layout to ${scoreCount} existing scores`}</button
+								>{/if}
+							{#if organizationStatus}<p role="status" class="preference-hint">
+									{organizationStatus}
+								</p>{/if}
+							<label class="row"
+								><span class="row-copy"
+									><strong>Paper texture</strong><span
+										>A subtle engraved-paper background</span
+									></span
+								><Toggle
+									checked={$settings.paperTexture}
+									ariaLabel="Paper texture"
+									onchange={(v) =>
+										settings.patch({ paperTexture: v })} /></label>
+						</section>
+					{:else if activePage === 'experience'}
+						<section class="section">
+							<h3>Experience</h3>
+							<div class="rows">
+								<label class="row">
+									<div class="row-copy">
+										<strong>Reduce motion</strong>
+										<span>Minimize animations and transitions</span>
+									</div>
+									<Toggle
+										checked={$settings.reduceMotion}
+										ariaLabel="Reduce motion"
+										onchange={(v) => settings.setReduceMotion(v)} />
+								</label>
 
-			<section class="section">
-				<h3>Experience</h3>
-				<div class="rows">
-					<label class="row">
-						<div class="row-copy">
-							<strong>Reduce motion</strong>
-							<span>Minimize animations and transitions</span>
-						</div>
-						<Toggle checked={$settings.reduceMotion} ariaLabel="Reduce motion" onchange={(v) => settings.setReduceMotion(v)} />
-					</label>
-					<label class="row">
-						<div class="row-copy">
-							<strong>Compact library</strong>
-							<span>Tighter spacing for score cards</span>
-						</div>
-						<Toggle checked={$settings.compactLibrary} ariaLabel="Compact library" onchange={(v) => settings.setCompactLibrary(v)} />
-					</label>
-					<label class="row">
-						<div class="row-copy">
-							<strong>Organize by composer</strong>
-							<span>Move PDFs into a composer folder when you change the composer</span>
-						</div>
-						<Toggle
-							checked={$settings.organizeByComposer}
-							ariaLabel="Organize by composer"
-							onchange={(v) => settings.setOrganizeByComposer(v)}
-						/>
-					</label>
-				</div>
-			</section>
-
-			<section class="section" class:focus-ring={focusSection === 'viewer'} bind:this={viewerSectionEl}>
-				<h3>Score viewer</h3>
-				<div class="rows">
-					<label class="row">
-						<div class="row-copy">
-							<strong>Auto layout</strong>
-							<span>Two pages in landscape, one in portrait</span>
-						</div>
-						<Toggle checked={$settings.autoLayout} ariaLabel="Auto layout" onchange={(v) => settings.setAutoLayout(v)} />
-					</label>
-					<label class="row" class:disabled={$settings.autoLayout}>
-						<div class="row-copy">
-							<strong>Two-page spread</strong>
-							<span>Show pages side by side when auto layout is off</span>
-						</div>
-						<Toggle checked={$settings.dualPages} disabled={$settings.autoLayout} ariaLabel="Two-page spread" onchange={(v) => settings.setDualPages(v)} />
-					</label>
-					<label class="row">
-						<div class="row-copy">
-							<strong>Keep screen on</strong>
-							<span>Prevent sleep while a score is open</span>
-						</div>
-						<Toggle checked={$settings.keepAwake} ariaLabel="Keep screen on" onchange={(v) => settings.setKeepAwake(v)} />
-					</label>
-					<label class="row">
-						<div class="row-copy">
-							<strong>Show annotations</strong>
-							<span>Pens, highlights, symbols, and text</span>
-						</div>
-						<Toggle checked={$settings.annotationsVisible} ariaLabel="Show annotations" onchange={(v) => settings.setAnnotationsVisible(v)} />
-					</label>
-				</div>
-				<div class="fit-block">
-					<span class="fit-label">Default fit</span>
-					<div class="fit-seg" role="radiogroup" aria-label="Default page fit">
-						<button type="button" class:active={$settings.defaultFit === 'page'} role="radio" aria-checked={$settings.defaultFit === 'page'} onclick={() => settings.setDefaultFit('page')}>Fit page</button>
-						<button type="button" class:active={$settings.defaultFit === 'width'} role="radio" aria-checked={$settings.defaultFit === 'width'} onclick={() => settings.setDefaultFit('width')}>Fit width</button>
-					</div>
-				</div>
-				<label class="text-size-row">
-					<span class="row-copy">
-						<strong>Annotation text size</strong>
-						<span>{$settings.textSize}px</span>
-					</span>
-					<input type="range" min="10" max="36" value={$settings.textSize} oninput={(e) => settings.setTextSize(Number((e.currentTarget as HTMLInputElement).value))} />
-				</label>
-			</section>
-
-			<section class="section">
-				<h3>About</h3>
-				<div class="rows">
-					<div class="row" style="cursor: default;">
-						<div class="row-copy">
-							<strong>Version</strong>
-							<span>Sonora {CURRENT_VERSION}</span>
-						</div>
-					</div>
-					<div class="row" style="cursor: default; flex-wrap: wrap; gap: 8px;">
-						<div class="row-copy" style="flex: 1;">
-							<strong>Updates</strong>
-							<span>
-								{#if updateStatus === 'checking'}
-									Checking GitHub releases…
-								{:else if lastUpdate?.available}
-									{lastUpdate.latestVersion} available —
-									<a
-										href={lastUpdate.htmlUrl || '#'}
-										target="_blank"
-										rel="noopener noreferrer"
-										style="color: var(--sonora-accent);"
-									>download</a>
-								{:else if lastUpdate && !lastUpdate.error}
-									You’re up to date
-								{:else if lastUpdate?.error}
-									Could not check: {lastUpdate.error}
-								{:else}
-									Check GitHub for new releases
-								{/if}
-							</span>
-						</div>
-						<button
-							type="button"
-							class="ghost"
-							style="flex-shrink: 0;"
-							disabled={updateStatus === 'checking'}
-							onclick={() => void runUpdateCheck()}
-						>
-							{updateStatus === 'checking' ? 'Checking…' : 'Check now'}
-						</button>
-					</div>
-					<div class="row" style="cursor: default; flex-wrap: wrap; gap: 8px;">
-						<div class="row-copy" style="flex: 1;">
-							<strong>Composer database</strong>
-							<span>{composerStatus || 'List and portraits sync from GitHub automatically — no app update needed'}</span>
-						</div>
-						<button
-							type="button"
-							class="ghost"
-							style="flex-shrink: 0;"
-							onclick={() => void runComposerRefresh()}
-						>
-							Refresh
-						</button>
-					</div>
-				</div>
-			</section>
-
+								<label class="row">
+									<div class="row-copy">
+										<strong>Organize after metadata edits</strong>
+										<span
+											>Use your file organization layout when you change a
+											composer or work title</span>
+									</div>
+									<Toggle
+										checked={$settings.organizeByComposer}
+										ariaLabel="Organize after metadata edits"
+										onchange={(v) => settings.setOrganizeByComposer(v)} />
+								</label>
+							</div>
+						</section>
+					{:else if activePage === 'viewer'}
+						<section class="section">
+							<h3>Score viewer</h3>
+							<label class="row"
+								><div class="row-copy">
+									<strong>Default appearance</strong><span
+										>Practice tools or distraction-free reading</span>
+								</div>
+								<select
+									value={$settings.viewerMode}
+									onchange={(e) =>
+							settings.patch({
+								viewerMode: e.currentTarget.value as 'practice' | 'reading'
+							})}
+									><option value="practice">Practice</option><option
+										value="reading">Reading</option
+									></select
+								></label>
+							<div class="rows">
+								<label class="row">
+									<div class="row-copy">
+										<strong>Auto layout</strong>
+										<span>Two pages in landscape, one in portrait</span>
+									</div>
+									<Toggle
+										checked={$settings.autoLayout}
+										ariaLabel="Auto layout"
+										onchange={(v) => settings.setAutoLayout(v)} />
+								</label>
+								<label class="row" class:disabled={$settings.autoLayout}>
+									<div class="row-copy">
+										<strong>Two-page spread</strong>
+										<span>Show pages side by side when auto layout is off</span>
+									</div>
+									<Toggle
+										checked={$settings.dualPages}
+										disabled={$settings.autoLayout}
+										ariaLabel="Two-page spread"
+										onchange={(v) => settings.setDualPages(v)} />
+								</label>
+								<label class="row">
+									<div class="row-copy">
+										<strong>Keep screen on</strong>
+										<span>Prevent sleep while a score is open</span>
+									</div>
+									<Toggle
+										checked={$settings.keepAwake}
+										ariaLabel="Keep screen on"
+										onchange={(v) => settings.setKeepAwake(v)} />
+								</label>
+								<label class="row">
+									<div class="row-copy">
+										<strong>Show annotations</strong>
+										<span>Pens, highlights, symbols, and text</span>
+									</div>
+									<Toggle
+										checked={$settings.annotationsVisible}
+										ariaLabel="Show annotations"
+										onchange={(v) => settings.setAnnotationsVisible(v)} />
+								</label>
+							</div>
+							<div class="fit-block">
+								<span class="fit-label">Default fit</span>
+								<div
+									class="fit-seg"
+									role="radiogroup"
+									aria-label="Default page fit">
+									<button
+										type="button"
+										class:active={$settings.defaultFit === 'page'}
+										role="radio"
+										aria-checked={$settings.defaultFit === 'page'}
+										onclick={() => settings.setDefaultFit('page')}
+										>Fit page</button>
+									<button
+										type="button"
+										class:active={$settings.defaultFit === 'width'}
+										role="radio"
+										aria-checked={$settings.defaultFit === 'width'}
+										onclick={() => settings.setDefaultFit('width')}
+										>Fit width</button>
+								</div>
+							</div>
+							<label class="text-size-row">
+								<span class="row-copy">
+									<strong>Annotation text size</strong>
+									<span>{$settings.textSize}px</span>
+								</span>
+								<input
+									type="range"
+									min="10"
+									max="36"
+									value={$settings.textSize}
+									oninput={(e) =>
+							settings.setTextSize(
+								Number((e.currentTarget as HTMLInputElement).value)
+							)} />
+							</label>
+						</section>
+					{:else if activePage === 'handwriting'}
+						<section class="section">
+							<h3>Handwriting</h3>
+							<p class="preference-hint">
+								Write directly on the score. Short breaks between strokes stay
+								together; a longer pause converts your writing automatically.
+							</p>
+							<label class="text-size-row"
+								><span class="row-copy"
+									><strong>Pause before conversion</strong><span
+										>{($settings.handwritingPauseMs / 1000).toFixed(2)} seconds</span
+									></span
+								><input
+									aria-label="Pause before conversion"
+									type="range"
+									min="1000"
+									max="5000"
+									step="250"
+									value={$settings.handwritingPauseMs}
+									oninput={(e) =>
+										settings.patch({
+											handwritingPauseMs: +e.currentTarget.value
+										})} /></label>
+							<label class="preference"
+								>Recognize<select
+									value={$settings.handwritingMode}
+									onchange={(e) => settings.patch({handwritingMode: e.currentTarget.value as 'auto' | 'music' | 'text'})}
+									><option value="auto">Music symbols and text</option><option
+										value="music">Music symbols</option
+									><option value="text">Text</option></select
+								></label
+							>
+							<p class="preference-hint">
+								Recognition runs entirely on your device. Undo restores the
+								original ink.
+							</p>
+						</section>
+					{:else if activePage === 'sharing'}<section class="section">
+							<h3>Library sharing</h3>
+							<LibrarySharing {libraryRoot} {scoreCount} {onImported} />
+						</section>
+					{:else if activePage === 'about'}
+						<section class="section">
+							<h3>About</h3>
+							<div class="rows">
+								<div class="row" style="cursor: default;">
+									<div class="row-copy">
+										<strong>Version</strong>
+										<span>Sonora {CURRENT_VERSION}</span>
+									</div>
+								</div>
+								<div
+									class="row"
+									style="cursor: default; flex-wrap: wrap; gap: 8px;">
+									<div class="row-copy" style="flex: 1;">
+										<strong>Updates</strong>
+										<span>
+											{#if updateStatus === 'checking'}
+												Checking GitHub releases…
+											{:else if lastUpdate?.available}
+												{lastUpdate.latestVersion} available —
+												<a
+													href={lastUpdate.htmlUrl || '#'}
+													target="_blank"
+													rel="noopener noreferrer"
+													style="color: var(--sonora-accent);">download</a>
+											{:else if lastUpdate && !lastUpdate.error}
+												You’re up to date
+											{:else if lastUpdate?.error}
+												Could not check: {lastUpdate.error}
+											{:else}
+												Check GitHub for new releases
+											{/if}
+										</span>
+									</div>
+									<button
+										type="button"
+										class="ghost"
+										style="flex-shrink: 0;"
+										disabled={updateStatus === 'checking'}
+										onclick={() => void runUpdateCheck()}>
+										{updateStatus === 'checking' ? 'Checking…' : 'Check now'}
+									</button>
+								</div>
+								<div
+									class="row"
+									style="cursor: default; flex-wrap: wrap; gap: 8px;">
+									<div class="row-copy" style="flex: 1;">
+										<strong>Composer database</strong>
+										<span
+											>{composerStatus ||
+												'List and portraits sync from GitHub automatically — no app update needed'}</span>
+									</div>
+									<button
+										type="button"
+										class="ghost"
+										style="flex-shrink: 0;"
+										onclick={() => void runComposerRefresh()}>
+										Refresh
+									</button>
+								</div>
+							</div>
+						</section>
+					{/if}
+				</main>
+			</div>
 			<footer class="panel-footer">
-				<button type="button" class="ghost" onclick={() => settings.reset()}>Reset defaults</button>
+				<button type="button" class="ghost" onclick={() => settings.reset()}
+					>Reset defaults</button>
 				<button type="button" class="done" onclick={onClose}>Done</button>
 			</footer>
 		</div>
@@ -270,43 +505,349 @@
 {/if}
 
 <style>
-	.backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; background: rgba(6, 6, 10, 0.55); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-	.panel { width: min(440px, 100%); max-height: min(90dvh, 720px); overflow: auto; border: 1px solid var(--sonora-border-strong); border-radius: var(--sonora-radius-2xl); background: var(--sonora-bg-panel-solid); box-shadow: var(--sonora-shadow-lg); display: flex; flex-direction: column; }
-	.panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 22px 22px 16px; border-bottom: 1px solid var(--sonora-border); position: sticky; top: 0; background: var(--sonora-bg-panel-solid); z-index: 1; }
-	.panel-header h2 { margin: 0; font-size: var(--sonora-text-xl); font-weight: 650; letter-spacing: var(--sonora-tracking-tight); color: var(--sonora-text); }
-	.panel-header p { margin: 4px 0 0; font-size: var(--sonora-text-sm); color: var(--sonora-text-muted); }
-	.close { width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: var(--sonora-radius-md); background: transparent; color: var(--sonora-text-muted); cursor: pointer; transition: background var(--sonora-duration) var(--sonora-ease), color var(--sonora-duration) var(--sonora-ease); }
-	.close:hover { background: var(--sonora-bg-hover); color: var(--sonora-text); }
-	.section { padding: 18px 22px; border-bottom: 1px solid var(--sonora-border); }
-	.section.focus-ring { box-shadow: inset 3px 0 0 var(--sonora-accent); background: color-mix(in srgb, var(--sonora-accent-soft) 40%, transparent); }
-	.section h3 { margin: 0 0 12px; font-size: var(--sonora-text-xs); font-weight: 650; letter-spacing: var(--sonora-tracking-wide); text-transform: uppercase; color: var(--sonora-text-faint); }
-	.theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-	.theme-card { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 10px; border: 1px solid var(--sonora-border); border-radius: var(--sonora-radius-lg); background: var(--sonora-bg-elevated); color: var(--sonora-text-muted); cursor: pointer; transition: background var(--sonora-duration) var(--sonora-ease), border-color var(--sonora-duration) var(--sonora-ease), color var(--sonora-duration) var(--sonora-ease), box-shadow var(--sonora-duration) var(--sonora-ease), transform var(--sonora-duration) var(--sonora-ease); }
-	.theme-card:hover { background: var(--sonora-bg-hover); color: var(--sonora-text); border-color: var(--sonora-border-strong); transform: translateY(-1px); }
-	.theme-card.active { border-color: color-mix(in srgb, var(--sonora-accent) 55%, transparent); background: var(--sonora-accent-soft); color: var(--sonora-text); box-shadow: 0 0 0 1px color-mix(in srgb, var(--sonora-accent) 25%, transparent); }
-	.theme-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 12px; background: var(--sonora-bg-deep); border: 1px solid var(--sonora-border); }
-	.theme-card.active .theme-icon { background: var(--sonora-accent); border-color: transparent; color: var(--sonora-accent-contrast); box-shadow: var(--sonora-accent-glow); }
-	.theme-label { font-size: var(--sonora-text-sm); font-weight: 600; }
-	.rows { display: flex; flex-direction: column; gap: 4px; }
-	.row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 10px; border-radius: var(--sonora-radius-md); cursor: pointer; transition: background var(--sonora-duration) var(--sonora-ease); }
-	.row:hover { background: var(--sonora-bg-hover); }
-	.row.disabled { opacity: 0.45; pointer-events: none; }
-	.row-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-	.row-copy strong { font-size: var(--sonora-text-md); font-weight: 600; color: var(--sonora-text); }
-	.row-copy span { font-size: var(--sonora-text-sm); color: var(--sonora-text-muted); }
-	.fit-block { margin-top: 12px; padding: 0 10px; }
-	.fit-label { display: block; margin-bottom: 8px; font-size: var(--sonora-text-sm); font-weight: 600; color: var(--sonora-text); }
-	.fit-seg { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--sonora-border-strong); border-radius: var(--sonora-radius-md); background: var(--sonora-bg-elevated); }
-	.fit-seg button { flex: 1; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--sonora-text-muted); font-size: var(--sonora-text-sm); font-weight: 600; cursor: pointer; transition: background var(--sonora-duration) var(--sonora-ease), color var(--sonora-duration) var(--sonora-ease); }
-	.fit-seg button:hover { background: var(--sonora-bg-hover); color: var(--sonora-text); }
-	.fit-seg button.active { background: var(--sonora-accent-soft); color: var(--sonora-text); box-shadow: var(--sonora-shadow-xs); }
-	.text-size-row { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; padding: 10px; border-radius: var(--sonora-radius-md); }
-	.text-size-row .row-copy { flex-direction: row; justify-content: space-between; align-items: baseline; }
-	.text-size-row input[type='range'] { width: 100%; accent-color: var(--sonora-accent); }
-	.panel-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; margin-top: auto; position: sticky; bottom: 0; background: var(--sonora-bg-panel-solid); border-top: 1px solid var(--sonora-border); }
-	.ghost, .done { display: inline-flex; align-items: center; justify-content: center; padding: 9px 14px; border-radius: var(--sonora-radius-md); font-size: var(--sonora-text-sm); font-weight: 600; cursor: pointer; transition: background var(--sonora-duration) var(--sonora-ease), color var(--sonora-duration) var(--sonora-ease); }
-	.ghost { border: 1px solid transparent; background: transparent; color: var(--sonora-text-muted); }
-	.ghost:hover { background: var(--sonora-bg-hover); color: var(--sonora-text); }
-	.done { border: 1px solid transparent; background: var(--sonora-accent); color: var(--sonora-accent-contrast); box-shadow: var(--sonora-accent-glow); }
-	.done:hover { background: var(--sonora-accent-hover); }
+	.settings-body {
+		display: grid;
+		grid-template-columns: 175px minmax(0, 1fr);
+		flex: 1;
+		min-height: 0;
+	}
+	nav {
+		padding: 18px 10px;
+		border-right: 1px solid var(--sonora-border);
+		background: var(--sonora-surface-raised);
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+	}
+	nav button {
+		text-align: left;
+		border: 0;
+		background: transparent;
+		color: var(--sonora-text-muted);
+		padding: 11px 14px;
+		border-radius: 9px;
+		cursor: pointer;
+		font: inherit;
+		font-size: 14px;
+	}
+	nav button:hover {
+		background: var(--sonora-bg-hover);
+	}
+	nav button.current {
+		background: var(--sonora-accent-soft);
+		color: var(--sonora-text);
+		font-weight: 650;
+	}
+	.settings-content {
+		overflow: auto;
+		min-width: 0;
+	}
+	@media (max-width: 600px) {
+		.settings-body {
+			grid-template-columns: 120px minmax(0, 1fr);
+		}
+		nav {
+			padding: 12px 5px;
+		}
+		nav button {
+			padding: 10px 8px;
+			font-size: 12px;
+		}
+		.backdrop {
+			padding: 10px;
+		}
+	}
+
+	.preference {
+		display: grid;
+		gap: 7px;
+		margin: 14px 0;
+		font-size: var(--sonora-text-md);
+	}
+	.preference select {
+		width: 100%;
+		padding: 9px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-sm);
+		background: var(--sonora-surface-raised);
+		color: var(--sonora-text);
+	}
+	.preference-hint {
+		font-size: var(--sonora-text-sm);
+		color: var(--sonora-text-muted);
+		line-height: 1.5;
+	}
+
+	.backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 100;
+		display: grid;
+		place-items: center;
+		padding: 24px;
+		background: var(--sonora-scrim);
+		backdrop-filter: var(--sonora-blur);
+		-webkit-backdrop-filter: var(--sonora-blur);
+	}
+	.panel {
+		width: min(840px, 100%);
+		height: min(85dvh, 720px);
+		max-height: min(90dvh, 720px);
+		overflow: hidden;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-2xl);
+		background: var(--sonora-surface-glass);
+		box-shadow: var(--sonora-inset), var(--sonora-shadow-lg);
+		display: flex;
+		flex-direction: column;
+	}
+	.panel-header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 22px 22px 16px;
+		border-bottom: 1px solid var(--sonora-border);
+		position: sticky;
+		top: 0;
+		background: var(--sonora-surface-raised);
+		z-index: 1;
+	}
+	.panel-header h2 {
+		margin: 0;
+		font-size: var(--sonora-text-xl);
+		font-weight: 650;
+		letter-spacing: var(--sonora-tracking-tight);
+		color: var(--sonora-text);
+	}
+	.panel-header p {
+		margin: 4px 0 0;
+		font-size: var(--sonora-text-sm);
+		color: var(--sonora-text-muted);
+	}
+	.close {
+		width: 36px;
+		height: 36px;
+		display: grid;
+		place-items: center;
+		border: 0;
+		border-radius: var(--sonora-radius-md);
+		background: transparent;
+		color: var(--sonora-text-muted);
+		cursor: pointer;
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			color var(--sonora-duration) var(--sonora-ease);
+	}
+	.close:hover {
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
+	}
+	.section {
+		scroll-margin-top: 110px;
+		padding: 18px 22px;
+		border-bottom: 1px solid var(--sonora-border);
+	}
+	.section h3 {
+		margin: 0 0 12px;
+		font-size: var(--sonora-text-xs);
+		font-weight: 650;
+		letter-spacing: var(--sonora-tracking-wide);
+		text-transform: uppercase;
+		color: var(--sonora-text-faint);
+	}
+	.theme-grid {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 10px;
+	}
+	.theme-card {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 8px;
+		padding: 14px 10px;
+		border: 1px solid var(--sonora-border);
+		border-radius: var(--sonora-radius-lg);
+		background: var(--sonora-surface-raised);
+		color: var(--sonora-text-muted);
+		cursor: pointer;
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			border-color var(--sonora-duration) var(--sonora-ease),
+			color var(--sonora-duration) var(--sonora-ease),
+			box-shadow var(--sonora-duration) var(--sonora-ease),
+			transform var(--sonora-duration) var(--sonora-ease);
+	}
+	.theme-card:hover {
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
+		border-color: var(--sonora-border-strong);
+		transform: translateY(-1px);
+	}
+	.theme-card.active {
+		border-color: color-mix(in srgb, var(--sonora-accent) 55%, transparent);
+		background: var(--sonora-accent-soft);
+		color: var(--sonora-text);
+		box-shadow: 0 0 0 1px
+			color-mix(in srgb, var(--sonora-accent) 25%, transparent);
+	}
+	.theme-icon {
+		width: 36px;
+		height: 36px;
+		display: grid;
+		place-items: center;
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-bg-deep);
+		border: 1px solid var(--sonora-border);
+	}
+	.theme-card.active .theme-icon {
+		background: var(--sonora-accent);
+		border-color: transparent;
+		color: var(--sonora-accent-contrast);
+		box-shadow: var(--sonora-accent-glow);
+	}
+	.theme-label {
+		font-size: var(--sonora-text-sm);
+		font-weight: 600;
+	}
+	.rows {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		padding: 12px 10px;
+		border-radius: var(--sonora-radius-md);
+		cursor: pointer;
+		transition: background var(--sonora-duration) var(--sonora-ease);
+	}
+	.row:hover {
+		background: var(--sonora-bg-hover);
+	}
+	.row.disabled {
+		opacity: 0.45;
+		pointer-events: none;
+	}
+	.row-copy {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+	.row-copy strong {
+		font-size: var(--sonora-text-md);
+		font-weight: 600;
+		color: var(--sonora-text);
+	}
+	.row-copy span {
+		font-size: var(--sonora-text-sm);
+		color: var(--sonora-text-muted);
+	}
+	.fit-block {
+		margin-top: 12px;
+		padding: 0 10px;
+	}
+	.fit-label {
+		display: block;
+		margin-bottom: 8px;
+		font-size: var(--sonora-text-sm);
+		font-weight: 600;
+		color: var(--sonora-text);
+	}
+	.fit-seg {
+		display: flex;
+		gap: 4px;
+		padding: 3px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: var(--sonora-radius-md);
+		background: var(--sonora-surface-raised);
+	}
+	.fit-seg button {
+		flex: 1;
+		padding: 8px 10px;
+		border: 0;
+		border-radius: 8px;
+		background: transparent;
+		color: var(--sonora-text-muted);
+		font-size: var(--sonora-text-sm);
+		font-weight: 600;
+		cursor: pointer;
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			color var(--sonora-duration) var(--sonora-ease);
+	}
+	.fit-seg button:hover {
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
+	}
+	.fit-seg button.active {
+		background: var(--sonora-accent-soft);
+		color: var(--sonora-text);
+		box-shadow: var(--sonora-shadow-xs);
+	}
+	.text-size-row {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		margin-top: 14px;
+		padding: 10px;
+		border-radius: var(--sonora-radius-md);
+	}
+	.text-size-row .row-copy {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: baseline;
+	}
+	.text-size-row input[type='range'] {
+		width: 100%;
+		accent-color: var(--sonora-accent);
+	}
+	.panel-footer {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+		padding: 14px 22px;
+		margin-top: auto;
+		position: sticky;
+		bottom: 0;
+		background: var(--sonora-surface-raised);
+		border-top: 1px solid var(--sonora-border);
+	}
+	.ghost,
+	.done {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 9px 14px;
+		border-radius: var(--sonora-radius-md);
+		font-size: var(--sonora-text-sm);
+		font-weight: 600;
+		cursor: pointer;
+		transition:
+			background var(--sonora-duration) var(--sonora-ease),
+			color var(--sonora-duration) var(--sonora-ease);
+	}
+	.ghost {
+		border: 1px solid transparent;
+		background: transparent;
+		color: var(--sonora-text-muted);
+	}
+	.ghost:hover {
+		background: var(--sonora-bg-hover);
+		color: var(--sonora-text);
+	}
+	.done {
+		border: 1px solid transparent;
+		background: var(--sonora-accent);
+		color: var(--sonora-accent-contrast);
+		box-shadow: var(--sonora-accent-glow);
+	}
+	.done:hover {
+		background: var(--sonora-accent-hover);
+	}
 </style>

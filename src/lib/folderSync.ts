@@ -1,11 +1,13 @@
+import { diskFolderId, parentPath } from './libraryFolderPaths';
+import { reconcileDiskFolders } from './libraryFolders';
+import { createMoveMatcher } from './fileIdentity';
 import { invoke } from '@tauri-apps/api/core';
+import { plainScore, migrateAnnotations } from './scoreMeta';
 import { db } from './db';
 import type { FolderSource, ScoreItem } from './types';
-import { getPdfInfoFromSource } from './pdfUtils';
 import { isTauri, joinNativePath, nativeFileUrl } from './paths';
 
 const ROOT_FOLDER_ID = 'library-root';
-const METADATA_CONCURRENCY = 2;
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
 type NativeScoreFile = {
@@ -14,17 +16,23 @@ type NativeScoreFile = {
 	name: string;
 	size: number;
 	modified_at: number;
+	metadata?: Partial<ScoreItem>;
 };
 type BrowserDirectoryHandle = FileSystemDirectoryHandle & {
 	queryPermission(options: { mode: 'read' }): Promise<PermissionState>;
 	requestPermission(options: { mode: 'read' }): Promise<PermissionState>;
 };
 type DirectoryPickerWindow = Window & {
-	showDirectoryPicker(options: { mode: 'read' }): Promise<FileSystemDirectoryHandle>;
+	showDirectoryPicker(options: {
+		mode: 'read';
+	}): Promise<FileSystemDirectoryHandle>;
 };
 
 export function supportsDirectoryAccess() {
-	return isTauri() || (typeof window !== 'undefined' && 'showDirectoryPicker' in window);
+	return (
+		isTauri() ||
+		(typeof window !== 'undefined' && 'showDirectoryPicker' in window)
+	);
 }
 
 async function verifyBrowserPermission(handle: FileSystemDirectoryHandle) {
@@ -37,8 +45,9 @@ async function verifyBrowserPermission(handle: FileSystemDirectoryHandle) {
 export async function verifyFolderPermission(folder: FolderSource) {
 	if (folder.nativePath) {
 		try {
-			await invoke<NativeScoreFile[]>('list_score_files', { path: folder.nativePath });
-			return true;
+			return await invoke<boolean>('score_folder_exists', {
+				path: folder.nativePath
+			});
 		} catch {
 			return false;
 		}
@@ -48,10 +57,14 @@ export async function verifyFolderPermission(folder: FolderSource) {
 
 async function collectBrowserPdfs(
 	handle: FileSystemDirectoryHandle,
-	prefix = ''
+	prefix = '',
+	folderPaths: string[] = []
 ): Promise<Array<{ file: File; path: string }>> {
 	const result: Array<{ file: File; path: string }> = [];
-	const directories: Array<{ handle: FileSystemDirectoryHandle; path: string }> = [];
+	const directories: Array<{
+		handle: FileSystemDirectoryHandle;
+		path: string;
+	}> = [];
 	for await (const [name, entry] of handle.entries()) {
 		if (name.startsWith('.') || name === 'node_modules') continue;
 		const path = prefix ? `${prefix}/${name}` : name;
@@ -59,33 +72,23 @@ async function collectBrowserPdfs(
 			try {
 				result.push({ file: await entry.getFile(), path });
 			} catch (error) {
-				console.warn('Could not read PDF', path, error);
+				throw new Error(`Could not read PDF ${path}: ${String(error)}`);
 			}
 		} else if (entry.kind === 'directory') {
+			folderPaths.push(path);
 			directories.push({ handle: entry, path });
 		}
 	}
 	for (const directory of directories) {
-		result.push(...(await collectBrowserPdfs(directory.handle, directory.path)));
+		result.push(
+			...(await collectBrowserPdfs(
+				directory.handle,
+				directory.path,
+				folderPaths
+			))
+		);
 	}
 	return result;
-}
-
-async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-	const results = new Array<R>(items.length);
-	let cursor = 0;
-	async function worker() {
-		while (cursor < items.length) {
-			const index = cursor++;
-			try {
-				results[index] = await fn(items[index]);
-			} catch (error) {
-				console.warn('Library item failed', error);
-			}
-		}
-	}
-	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-	return results.filter((result): result is R => result !== undefined);
 }
 
 function stableId(path: string) {
@@ -94,39 +97,7 @@ function stableId(path: string) {
 
 function composerFromPath(path: string) {
 	const parts = path.split(/[/\\]/);
-	return parts.length > 1 ? parts[parts.length - 2] : 'Unknown Composer';
-}
-
-/** Strip to structured-cloneable fields only (no Svelte proxies / extra junk). */
-function plainScore(input: ScoreItem): ScoreItem {
-	const out: ScoreItem = {
-		id: String(input.id),
-		title: String(input.title ?? ''),
-		composer: String(input.composer ?? 'Unknown Composer'),
-		totalPages: Number(input.totalPages) || 1,
-		addedAt: Number(input.addedAt) || Date.now()
-	};
-	if (input.year != null && !Number.isNaN(Number(input.year))) out.year = Number(input.year);
-	else out.year = null;
-	if (input.ensemble) out.ensemble = String(input.ensemble);
-	if (input.instruments) out.instruments = String(input.instruments);
-	if (input.pdfUrl) out.pdfUrl = String(input.pdfUrl);
-	if (input.thumbnailUrl) out.thumbnailUrl = String(input.thumbnailUrl);
-	if (input.thumbnailVersion != null) out.thumbnailVersion = Number(input.thumbnailVersion);
-	if (input.lastOpenedAt != null) out.lastOpenedAt = Number(input.lastOpenedAt);
-	out.favorite = !!input.favorite;
-	out.tags = Array.isArray(input.tags) ? input.tags.map(String) : [];
-	if (input.collection) out.collection = String(input.collection);
-	if (input.sourceFolderId) out.sourceFolderId = String(input.sourceFolderId);
-	if (input.sourcePath) out.sourcePath = String(input.sourcePath);
-	if (input.nativePath) out.nativePath = String(input.nativePath);
-	if (input.fileSize != null) out.fileSize = Number(input.fileSize);
-	if (input.fileModifiedAt != null) out.fileModifiedAt = Number(input.fileModifiedAt);
-	// Only persist real Blob/File instances — never proxies or odd objects
-	if (typeof Blob !== 'undefined' && input.pdfBlob instanceof Blob && input.pdfBlob.size > 0) {
-		out.pdfBlob = input.pdfBlob;
-	}
-	return out;
+	return parts.length > 1 ? parts[0] : 'Unknown Composer';
 }
 
 function plainFolder(folder: FolderSource): FolderSource {
@@ -137,7 +108,8 @@ function plainFolder(folder: FolderSource): FolderSource {
 		autoSync: folder.autoSync !== false
 	};
 	if (folder.nativePath) out.nativePath = String(folder.nativePath);
-	if (folder.lastSyncedAt != null) out.lastSyncedAt = Number(folder.lastSyncedAt);
+	if (folder.lastSyncedAt != null)
+		out.lastSyncedAt = Number(folder.lastSyncedAt);
 	// FileSystemDirectoryHandle is structured-cloneable in Chromium when permission is granted
 	if (folder.handle) out.handle = folder.handle;
 	return out;
@@ -146,6 +118,7 @@ function plainFolder(folder: FolderSource): FolderSource {
 /** Copy user-edited metadata from an old row onto a newly detected path. */
 function adoptMetadata(target: ScoreItem, source: ScoreItem): ScoreItem {
 	return plainScore({
+		...source,
 		...target,
 		title: source.title,
 		composer: source.composer,
@@ -159,7 +132,9 @@ function adoptMetadata(target: ScoreItem, source: ScoreItem): ScoreItem {
 		thumbnailVersion: source.thumbnailVersion,
 		totalPages: source.totalPages || target.totalPages,
 		addedAt: source.addedAt,
-		collection: source.collection
+		collection: source.collection,
+		annotationLayers: source.annotationLayers,
+		contentHash: source.contentHash
 	});
 }
 
@@ -167,24 +142,35 @@ async function removeOldRoots() {
 	const folders = await db.folders.toArray();
 	for (const folder of folders) {
 		if (folder.id === ROOT_FOLDER_ID) continue;
-		const scores = await db.scores.where('sourceFolderId').equals(folder.id).toArray();
-		await db.transaction('rw', db.scores, db.annotations, db.folders, async () => {
-			for (const score of scores) {
-				await db.scores.delete(score.id);
-				await db.annotations.where('scoreId').equals(score.id).delete();
+		const scores = await db.scores
+			.where('sourceFolderId')
+			.equals(folder.id)
+			.toArray();
+		await db.transaction(
+			'rw',
+			db.scores,
+			db.annotations,
+			db.folders,
+			async () => {
+				for (const score of scores) {
+					await db.scores.delete(score.id);
+					await db.annotations.where('scoreId').equals(score.id).delete();
+				}
+				await db.folders.delete(folder.id);
 			}
-			await db.folders.delete(folder.id);
-		});
+		);
 	}
 }
 
 export async function chooseAndAddFolder() {
-	if (!supportsDirectoryAccess()) throw new Error('This environment does not support folder access.');
+	if (!supportsDirectoryAccess())
+		throw new Error('This environment does not support folder access.');
 	let folder: FolderSource;
 	const existing = await db.folders.get(ROOT_FOLDER_ID);
 	if (isTauri()) {
 		const path = await invoke<string | null>('pick_score_folder');
-		if (!path) throw new DOMException('Folder selection cancelled', 'AbortError');
+		if (!path)
+			throw new DOMException('Folder selection cancelled', 'AbortError');
 		folder = {
 			id: ROOT_FOLDER_ID,
 			name: path.split(/[\\/]/).filter(Boolean).pop() || 'Score Library',
@@ -217,20 +203,31 @@ export async function chooseAndAddFolder() {
 async function syncNativeFolder(folder: FolderSource) {
 	if (!folder.nativePath) return { added: 0, updated: 0, removed: 0 };
 	let files: NativeScoreFile[];
+	let directories: string[];
 	try {
-		files = await invoke<NativeScoreFile[]>('list_score_files', { path: folder.nativePath });
+		const tree = await invoke<{
+			files: NativeScoreFile[];
+			directories: string[];
+		}>('list_score_tree', {
+			path: folder.nativePath
+		});
+		files = tree.files;
+		directories = tree.directories;
 	} catch (error) {
-		console.warn('list_score_files failed', error);
-		return { added: 0, updated: 0, removed: 0 };
+		throw new Error(`Could not read the score folder: ${String(error)}`);
 	}
 
-	const existing = await db.scores.where('sourceFolderId').equals(folder.id).toArray();
+	const existing = await db.scores
+		.where('sourceFolderId')
+		.equals(folder.id)
+		.toArray();
 	const existingById = new Map(existing.map((score) => [score.id, score]));
 	const present = new Set(files.map((file) => stableId(file.relative_path)));
-	const allowRemovals = files.length > 0 || existing.length === 0;
+	const allowRemovals = true;
 
 	const removed = existing.filter((score) => !present.has(score.id));
 	const claimedRemovals = new Set<string>();
+	const matchMove = createMoveMatcher(removed);
 
 	let added = 0;
 	let updated = 0;
@@ -241,12 +238,17 @@ async function syncNativeFolder(folder: FolderSource) {
 		const id = stableId(file.relative_path);
 		const old = existingById.get(id);
 		const changed =
-			!old || old.fileSize !== file.size || old.fileModifiedAt !== file.modified_at || !old.nativePath;
+			!old ||
+			old.fileSize !== file.size ||
+			old.fileModifiedAt !== file.modified_at ||
+			!old.nativePath ||
+			(old.folderId ?? '') !== diskFolderId(parentPath(file.relative_path));
 		if (!changed && old) continue;
 
 		let next = plainScore({
+			...old,
 			id,
-			title: file.name.replace(/\.pdf$/i, ''),
+			title: old?.title ?? file.name.replace(/\.pdf$/i, ''),
 			composer:
 				old?.composer && old.composer !== 'Unknown Composer'
 					? old.composer
@@ -265,17 +267,13 @@ async function syncNativeFolder(folder: FolderSource) {
 			collection: old?.collection || 'Library',
 			sourceFolderId: folder.id,
 			sourcePath: file.relative_path,
+			folderId: diskFolderId(parentPath(file.relative_path)),
 			fileSize: file.size,
 			fileModifiedAt: file.modified_at
 		});
 
 		if (!old) {
-			const match = removed.find(
-				(r) =>
-					!claimedRemovals.has(r.id) &&
-					r.fileSize === file.size &&
-					r.fileModifiedAt === file.modified_at
-			);
+			const match = matchMove(file.size, file.modified_at);
 			if (match) {
 				claimedRemovals.add(match.id);
 				next = adoptMetadata(next, match);
@@ -285,40 +283,82 @@ async function syncNativeFolder(folder: FolderSource) {
 				added++;
 			}
 		} else {
-			if (old.fileSize !== file.size || old.fileModifiedAt !== file.modified_at) {
+			if (
+				old.fileSize !== file.size ||
+				old.fileModifiedAt !== file.modified_at
+			) {
 				next.thumbnailUrl = undefined;
 				next.totalPages = 1;
 			}
 			updated++;
 		}
 
+		if (!old && file.metadata) {
+			const m = file.metadata;
+			if (m.metadataEdited) next.metadataEdited = true;
+			if (typeof m.year === 'number') next.year = m.year;
+			if (typeof m.favorite === 'boolean') next.favorite = m.favorite;
+			if (Array.isArray(m.tags))
+				next.tags = m.tags.filter(
+					(tag): tag is string => typeof tag === 'string'
+				);
+			// Paths, ids, and file identity always come from the scanner, never the sidecar.
+			for (const key of [
+				'title',
+				'composer',
+				'workId',
+				'workTitle',
+				'edition',
+				'publisher',
+				'editor',
+				'arranger',
+				'catalogue',
+				'key',
+				'compositionDate',
+				'movements',
+				'imslpPage',
+				'instruments'
+			] as const) {
+				if (typeof m[key] === 'string') next[key] = m[key];
+			}
+		}
 		toWrite.push(next);
 	}
 
-	await db.transaction('rw', db.scores, db.annotations, db.folders, async () => {
-		for (const next of toWrite) await db.scores.put(plainScore(next));
+	await db.transaction(
+		'rw',
+		db.scores,
+		db.annotations,
+		db.lists,
+		db.folders,
+		async () => {
+			if (toWrite.length) await db.scores.bulkPut(toWrite.map(plainScore));
 
-		for (const move of annotationMoves) {
-			await db.annotations.where('scoreId').equals(move.from).modify({ scoreId: move.to });
-			await db.scores.delete(move.from);
-		}
+			for (const move of annotationMoves) {
+				await migrateAnnotations(move.from, move.to);
+				await db.scores.delete(move.from);
+			}
 
-		if (allowRemovals) {
-			for (const old of existing) {
-				if (!present.has(old.id) && !claimedRemovals.has(old.id)) {
-					await db.scores.delete(old.id);
-					await db.annotations.where('scoreId').equals(old.id).delete();
+			if (allowRemovals) {
+				for (const old of existing) {
+					if (!present.has(old.id) && !claimedRemovals.has(old.id)) {
+						await db.scores.delete(old.id);
+						await db.annotations.where('scoreId').equals(old.id).delete();
+					}
 				}
 			}
+
+			await db.folders.put(
+				plainFolder({ ...folder, lastSyncedAt: Date.now(), autoSync: true })
+			);
 		}
+	);
 
-		await db.folders.put(
-			plainFolder({ ...folder, lastSyncedAt: Date.now(), autoSync: true })
-		);
-	});
-
+	await reconcileDiskFolders(directories);
 	const trulyRemoved = allowRemovals
-		? existing.filter((score) => !present.has(score.id) && !claimedRemovals.has(score.id)).length
+		? existing.filter(
+				(score) => !present.has(score.id) && !claimedRemovals.has(score.id)
+			).length
 		: 0;
 	return { added, updated, removed: trulyRemoved };
 }
@@ -327,14 +367,19 @@ async function syncBrowserFolder(folder: FolderSource) {
 	if (!folder.handle || !(await verifyBrowserPermission(folder.handle))) {
 		return { added: 0, updated: 0, removed: 0 };
 	}
-	const files = await collectBrowserPdfs(folder.handle);
-	const existing = await db.scores.where('sourceFolderId').equals(folder.id).toArray();
+	const directories: string[] = [];
+	const files = await collectBrowserPdfs(folder.handle, '', directories);
+	const existing = await db.scores
+		.where('sourceFolderId')
+		.equals(folder.id)
+		.toArray();
 	const existingById = new Map(existing.map((score) => [score.id, score]));
 	const present = new Set(files.map(({ path }) => stableId(path)));
-	const allowRemovals = files.length > 0 || existing.length === 0;
+	const allowRemovals = true;
 
 	const removed = existing.filter((score) => !present.has(score.id));
 	const claimedRemovals = new Set<string>();
+	const matchMove = createMoveMatcher(removed);
 
 	const changed = files.filter(({ file, path }) => {
 		const old = existingById.get(stableId(path));
@@ -342,35 +387,37 @@ async function syncBrowserFolder(folder: FolderSource) {
 			!old ||
 			old.fileSize !== file.size ||
 			old.fileModifiedAt !== file.lastModified ||
-			!old.thumbnailUrl
+			!old.pdfBlob ||
+			(old.folderId ?? '') !== diskFolderId(parentPath(path))
 		);
 	});
 
-	const results = await mapConcurrent(changed, METADATA_CONCURRENCY, async ({ file, path }) => {
+	// Publish file rows immediately; the visible-first thumbnail worker fills previews later.
+	const results = changed.map(({ file, path }) => {
 		const id = stableId(path);
 		const old = existingById.get(id);
-		let info: { totalPages: number; thumbnailUrl?: string } | undefined;
-		try {
-			info = await getPdfInfoFromSource({ blob: file });
-		} catch (error) {
-			console.warn('PDF metadata failed', path, error);
-		}
+		const contentChanged =
+			!!old &&
+			(old.fileSize !== file.size || old.fileModifiedAt !== file.lastModified);
 
 		// Prefer a plain Blob over the live File handle for IDB storage
 		const blob =
-			file instanceof Blob ? file.slice(0, file.size, file.type || 'application/pdf') : undefined;
+			file instanceof Blob
+				? file.slice(0, file.size, file.type || 'application/pdf')
+				: undefined;
 
 		let next = plainScore({
+			...old,
 			id,
-			title: file.name.replace(/\.pdf$/i, ''),
+			title: old?.title ?? file.name.replace(/\.pdf$/i, ''),
 			composer:
 				old?.composer && old.composer !== 'Unknown Composer'
 					? old.composer
 					: composerFromPath(path),
 			pdfBlob: blob,
-			thumbnailUrl: info?.thumbnailUrl || old?.thumbnailUrl,
+			thumbnailUrl: contentChanged ? undefined : old?.thumbnailUrl,
 			thumbnailVersion: old?.thumbnailVersion,
-			totalPages: info?.totalPages || old?.totalPages || 1,
+			totalPages: contentChanged ? 1 : old?.totalPages || 1,
 			addedAt: old?.addedAt || Date.now(),
 			lastOpenedAt: old?.lastOpenedAt || 0,
 			favorite: old?.favorite || false,
@@ -381,18 +428,14 @@ async function syncBrowserFolder(folder: FolderSource) {
 			collection: old?.collection || 'Library',
 			sourceFolderId: folder.id,
 			sourcePath: path,
+			folderId: diskFolderId(parentPath(path)),
 			fileSize: file.size,
 			fileModifiedAt: file.lastModified
 		});
 
 		let matchedFrom: string | undefined;
 		if (!old) {
-			const match = removed.find(
-				(r) =>
-					!claimedRemovals.has(r.id) &&
-					r.fileSize === file.size &&
-					r.fileModifiedAt === file.lastModified
-			);
+			const match = matchMove(file.size, file.lastModified);
 			if (match) {
 				claimedRemovals.add(match.id);
 				next = adoptMetadata(next, match);
@@ -405,41 +448,54 @@ async function syncBrowserFolder(folder: FolderSource) {
 		return { next, existed: !!old, matchedFrom };
 	});
 
-	await db.transaction('rw', db.scores, db.annotations, db.folders, async () => {
-		for (const { next, matchedFrom } of results) {
-			await db.scores.put(plainScore(next));
-			if (matchedFrom) {
-				await db.annotations.where('scoreId').equals(matchedFrom).modify({ scoreId: next.id });
-				await db.scores.delete(matchedFrom);
-			}
-		}
-
-		if (allowRemovals) {
-			for (const old of existing) {
-				if (!present.has(old.id) && !claimedRemovals.has(old.id)) {
-					await db.scores.delete(old.id);
-					await db.annotations.where('scoreId').equals(old.id).delete();
+	await db.transaction(
+		'rw',
+		db.scores,
+		db.annotations,
+		db.lists,
+		db.folders,
+		async () => {
+			if (results.length)
+				await db.scores.bulkPut(results.map(({ next }) => plainScore(next)));
+			for (const { next, matchedFrom } of results) {
+				if (matchedFrom) {
+					await migrateAnnotations(matchedFrom, next.id);
+					await db.scores.delete(matchedFrom);
 				}
 			}
+
+			if (allowRemovals) {
+				for (const old of existing) {
+					if (!present.has(old.id) && !claimedRemovals.has(old.id)) {
+						await db.scores.delete(old.id);
+						await db.annotations.where('scoreId').equals(old.id).delete();
+					}
+				}
+			}
+
+			await db.folders.put(
+				plainFolder({ ...folder, lastSyncedAt: Date.now(), autoSync: true })
+			);
 		}
+	);
 
-		await db.folders.put(
-			plainFolder({ ...folder, lastSyncedAt: Date.now(), autoSync: true })
-		);
-	});
-
+	await reconcileDiskFolders(directories);
 	return {
 		added: results.filter((r) => !r.existed && !r.matchedFrom).length,
 		updated: results.filter((r) => r.existed || r.matchedFrom).length,
 		removed: allowRemovals
-			? existing.filter((s) => !present.has(s.id) && !claimedRemovals.has(s.id)).length
+			? existing.filter((s) => !present.has(s.id) && !claimedRemovals.has(s.id))
+					.length
 			: 0
 	};
 }
 
 export async function syncFolder(folder: FolderSource) {
-	if (!(await verifyFolderPermission(folder))) return { added: 0, updated: 0, removed: 0 };
-	return folder.nativePath ? syncNativeFolder(folder) : syncBrowserFolder(folder);
+	if (!folder.nativePath && !(await verifyFolderPermission(folder)))
+		return { added: 0, updated: 0, removed: 0 };
+	return folder.nativePath
+		? syncNativeFolder(folder)
+		: syncBrowserFolder(folder);
 }
 
 export async function syncAllFolders(force = false) {
@@ -448,7 +504,11 @@ export async function syncAllFolders(force = false) {
 	let needsPathBackfill = force;
 	if (!needsPathBackfill && folder.nativePath) {
 		try {
-			const sample = await db.scores.where('sourceFolderId').equals(folder.id).limit(50).toArray();
+			const sample = await db.scores
+				.where('sourceFolderId')
+				.equals(folder.id)
+				.limit(50)
+				.toArray();
 			needsPathBackfill = sample.some((s) => !s.nativePath && !!s.sourcePath);
 		} catch {
 			needsPathBackfill = true;
@@ -469,15 +529,29 @@ export function resolveScoreSource(
 	score: ScoreItem,
 	folder?: FolderSource
 ): { url?: string; blob?: Blob; nativePath?: string } {
-	if (score.pdfUrl?.length) return { url: score.pdfUrl, blob: score.pdfBlob, nativePath: score.nativePath };
+	if (score.pdfUrl?.length)
+		return {
+			url: score.pdfUrl,
+			blob: score.pdfBlob,
+			nativePath: score.nativePath
+		};
 	if (score.nativePath && isTauri()) {
-		return { url: nativeFileUrl(score.nativePath), nativePath: score.nativePath, blob: score.pdfBlob };
+		return {
+			url: nativeFileUrl(score.nativePath),
+			nativePath: score.nativePath,
+			blob: score.pdfBlob
+		};
 	}
 	if (isTauri() && score.sourcePath && folder?.nativePath) {
 		const absolute = joinNativePath(folder.nativePath, score.sourcePath);
-		return { url: nativeFileUrl(absolute), nativePath: absolute, blob: score.pdfBlob };
+		return {
+			url: nativeFileUrl(absolute),
+			nativePath: absolute,
+			blob: score.pdfBlob
+		};
 	}
-	if (score.pdfBlob?.size) return { blob: score.pdfBlob, nativePath: score.nativePath };
+	if (score.pdfBlob?.size)
+		return { blob: score.pdfBlob, nativePath: score.nativePath };
 	return {};
 }
 
@@ -493,13 +567,22 @@ export async function resolveScoreSourceAsync(score: ScoreItem) {
 
 export async function removeFolder(folder: FolderSource, removeScores = false) {
 	if (removeScores) {
-		const scores = await db.scores.where('sourceFolderId').equals(folder.id).toArray();
-		await db.transaction('rw', db.scores, db.annotations, async () => {
-			for (const score of scores) {
-				await db.scores.delete(score.id);
-				await db.annotations.where('scoreId').equals(score.id).delete();
+		const scores = await db.scores
+			.where('sourceFolderId')
+			.equals(folder.id)
+			.toArray();
+		await db.transaction(
+			'rw',
+			db.scores,
+			db.annotations,
+			db.lists,
+			async () => {
+				for (const score of scores) {
+					await db.scores.delete(score.id);
+					await db.annotations.where('scoreId').equals(score.id).delete();
+				}
 			}
-		});
+		);
 	}
 	await db.folders.delete(folder.id);
 }

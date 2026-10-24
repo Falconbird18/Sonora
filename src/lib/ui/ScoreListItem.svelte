@@ -1,10 +1,13 @@
 <script lang="ts">
+	import { formatComposer } from '../composerDisplay';
+	import { settings } from '../settingsStore';
 	import { FileText, Star } from '@lucide/svelte';
 	import type { ScoreItem } from '../types';
 	import ScoreActionsMenu from './ScoreActionsMenu.svelte';
 
 	type Props = {
 		score: ScoreItem;
+		previewUrl?: string;
 		opening?: boolean;
 		menuOpen?: boolean;
 		onOpen: (score: ScoreItem) => void;
@@ -18,6 +21,7 @@
 
 	let {
 		score,
+		previewUrl,
 		opening = false,
 		menuOpen = false,
 		onOpen,
@@ -31,17 +35,31 @@
 </script>
 
 <div class="list-row" class:opening>
-	<button type="button" class="list-open" onclick={() => onOpen(score)} aria-label={`Open ${score.title}`}>
+	<button
+		type="button"
+		class="list-open"
+		onclick={() => onOpen(score)}
+		aria-label={`Open ${score.title}`}>
 		<div class="list-cover">
-			{#if score.thumbnailUrl}
-				<img src={score.thumbnailUrl} alt="" loading="eager" decoding="async" />
+			{#if previewUrl || score.thumbnailUrl}
+				<img
+					src={previewUrl || score.thumbnailUrl}
+					alt=""
+					loading="eager"
+					decoding="async" />
 			{:else}
 				<div class="no-cover"><FileText size={18} strokeWidth={1.6} /></div>
 			{/if}
 		</div>
 		<div class="list-info">
 			<h3 title={score.title}>{score.title}</h3>
-			<p>{score.composer}</p>
+			<p>{formatComposer(score.composer, $settings.composerDisplay)}</p>
+			{#if score.edition || score.publisher || score.editor}<p
+					class="edition-details">
+					{[score.edition, score.publisher, score.editor]
+						.filter(Boolean)
+						.join(' · ')}
+				</p>{/if}
 			{#if score.tags?.length}
 				<div class="tags">
 					{#each score.tags.slice(0, 3) as tag}
@@ -64,23 +82,33 @@
 			onclick={(event) => onToggleFavorite(score, event)}
 			aria-label={score.favorite ? 'Remove from favorites' : 'Add to favorites'}
 			aria-pressed={score.favorite}
-			title={score.favorite ? 'Remove from favorites' : 'Add to favorites'}
-		>
-			<Star size={16} strokeWidth={2} fill={score.favorite ? 'currentColor' : 'none'} />
+			title={score.favorite ? 'Remove from favorites' : 'Add to favorites'}>
+			<Star
+				size={16}
+				strokeWidth={2}
+				fill={score.favorite ? 'currentColor' : 'none'} />
 		</button>
 		<ScoreActionsMenu
 			{score}
 			open={menuOpen}
 			onToggle={onToggleMenu}
-			onEditTags={onEditTags}
-			onDownload={onDownload}
-			onPrint={onPrint}
-			onDelete={onDelete}
-		/>
+			{onEditTags}
+			{onDownload}
+			{onPrint}
+			{onDelete} />
 	</div>
 </div>
 
 <style>
+	.edition-details {
+		font-size: var(--sonora-text-sm);
+		color: var(--sonora-text-muted);
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
 	.list-row {
 		display: grid;
 		grid-template-columns: 1fr auto;
@@ -165,11 +193,11 @@
 		border-radius: 999px;
 		background: var(--sonora-accent-soft);
 		color: #93c5fd;
-		font-size: 10px;
+		font-size: var(--sonora-text-sm);
 	}
 	.list-meta {
 		color: var(--sonora-text-faint);
-		font-size: 11px;
+		font-size: var(--sonora-text-sm);
 	}
 	.list-actions {
 		display: flex;
@@ -182,7 +210,7 @@
 		display: grid;
 		place-items: center;
 		border: 1px solid transparent;
-		border-radius: 10px;
+		border-radius: var(--sonora-radius-md);
 		background: transparent;
 		color: var(--sonora-text-muted);
 		cursor: pointer;

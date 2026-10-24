@@ -1,0 +1,66 @@
+{
+  "profile": "debug",
+  "rows": [
+    {
+      "medianMs": 2.172932,
+      "name": "nativeScan",
+      "p95Ms": 3.474606,
+      "size": 1000
+    },
+    {
+      "medianMs": 25.402524,
+      "name": "nativeScan",
+      "p95Ms": 26.018156,
+      "size": 10000
+    },
+    {
+      "medianMs": 120.580586,
+      "name": "nativeScan",
+      "p95Ms": 128.74393700000002,
+      "size": 50000
+    },
+    {
+      "medianMs": 79.19796899999999,
+      "name": "readAndJsonEncode",
+      "p95Ms": 82.395496,
+      "responseBytes": 4194305,
+      "sizeMiB": 1
+    },
+    {
+      "medianMs": 0.058533999999999996,
+      "name": "readAndBinaryResponse",
+      "p95Ms": 0.311823,
+      "responseBytes": 1048576,
+      "sizeMiB": 1
+    },
+    {
+      "medianMs": 801.0133950000001,
+      "name": "readAndJsonEncode",
+      "p95Ms": 812.216628,
+      "responseBytes": 41943041,
+      "sizeMiB": 10
+    },
+    {
+      "medianMs": 1.1238940000000002,
+      "name": "readAndBinaryResponse",
+      "p95Ms": 2.3073910000000004,
+      "responseBytes": 10485760,
+      "sizeMiB": 10
+    },
+    {
+      "medianMs": 4022.408821,
+      "name": "readAndJsonEncode",
+      "p95Ms": 4237.220308999999,
+      "responseBytes": 209715201,
+      "sizeMiB": 50
+    },
+    {
+      "medianMs": 8.55031,
+      "name": "readAndBinaryResponse",
+      "p95Ms": 8.714141999999999,
+      "responseBytes": 52428800,
+      "sizeMiB": 50
+    }
+  ],
+  "samples": 7
+}

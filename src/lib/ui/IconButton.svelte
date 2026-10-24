@@ -67,16 +67,16 @@
 	}
 	.sonora-icon-btn:hover:not(:disabled),
 	.sonora-icon-btn.active {
-		background: rgba(255, 255, 255, 0.08);
+		background: var(--sonora-bg-hover);
 		color: var(--sonora-text);
 	}
 	.sonora-icon-btn.solid {
 		background: var(--sonora-accent);
-		color: #fff;
+		color: var(--sonora-accent-contrast);
 	}
 	.sonora-icon-btn.solid:hover:not(:disabled) {
 		background: color-mix(in srgb, var(--sonora-accent) 85%, white);
-		color: #fff;
+		color: var(--sonora-accent-contrast);
 	}
 	.sonora-icon-btn.danger:hover:not(:disabled),
 	.sonora-icon-btn.danger.active {

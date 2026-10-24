@@ -53,7 +53,7 @@
 	}
 	.search-field:focus-within {
 		border-color: color-mix(in srgb, var(--sonora-accent) 55%, var(--sonora-border-strong));
-		background: var(--sonora-bg-elevated);
+		background: var(--sonora-surface-raised);
 		box-shadow:
 			inset 0 1px 0 rgba(255, 255, 255, 0.04),
 			0 0 0 3px var(--sonora-accent-soft);
@@ -97,7 +97,7 @@
 			color var(--sonora-duration) ease;
 	}
 	.clear:hover {
-		background: rgba(255, 255, 255, 0.08);
+		background: var(--sonora-bg-hover);
 		color: var(--sonora-text);
 	}
 </style>
