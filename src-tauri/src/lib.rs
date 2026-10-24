@@ -1,3 +1,4 @@
+mod handwriting;
 mod library_archive;
 mod score_folders;
 use serde::{Deserialize, Serialize};
@@ -2149,6 +2150,8 @@ pub fn run() {
             read_score_file,
             read_score_file_binary,
             ocr_score_page,
+            handwriting::prepare_handwriting_recognizer,
+            handwriting::recognize_handwriting_text,
             read_score_file_base64,
             read_text_file,
             move_score_into_composer_folder,

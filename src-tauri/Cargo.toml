@@ -5,7 +5,7 @@ description = "Sonora sheet music library and score viewer"
 authors = ["Austin Tallent"]
 edition = "2021"
 license = "MIT"
-rust-version = "1.77"
+rust-version = "1.92"
 
 [lib]
 name = "sonora_lib"
@@ -27,3 +27,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 base64 = "0.22"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 markup5ever = "0.38"
+
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-rustls", "api-31"] }

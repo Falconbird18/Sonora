@@ -96,3 +96,34 @@ cargo test --lib --offline
 ```
 
 The practice checks cover filename cleanup, composer recognition, layer compatibility, isolated undo, archive preservation, and tuner accuracy using synthesized notes at 44.1 and 48 kHz. The optional native OCR integration check is `cargo test --lib local_ocr_reads_title_page -- --ignored`.
+
+### Offline handwriting annotations
+
+Open Annotation tools and select **Handwriting**. Write with the left mouse
+button or stylus. Every stroke restarts a two-second pause, so short breaks
+inside a word are ignored. Adjust the pause from one to five seconds in
+**Model setup**. Converted symbols and text are movable annotation objects.
+Undo once restores the original ink; undo again removes the last stroke.
+Use two fingers to pan or pinch to zoom.
+
+Recognition is built into Sonora: approximately 0.83 MB of music classifier
+weights and 4.81 MB of handwritten-text weights. No Ollama service, account,
+separate model download or network connection is needed. The desktop uses
+native ONNX Runtime for text inference and a background worker for ink
+processing. Models are kept warm. Browser previews use a slower WASM fallback.
+
+**Auto** recognizes common music marks and words. **Music symbols** and **Text**
+let you resolve ambiguous writing. Unsupported or low-confidence marks remain
+ink, with a retry action. Supported music stamps include clefs, noteheads,
+accidentals and several rests; text recognition also maps familiar dynamics,
+fingering and several simple marks to the existing palette. This is annotation
+recognition, not full-score OMR or a change to playback. Handwriting accuracy
+still varies; the models do not cover every palette symbol.
+
+The development fixtures `/tests/ui/handwriting.html` and
+`/tests/ui/handwriting-fast.html` check the viewer workflow and real model
+inference respectively. Run `npm run test:handwriting` and
+`cargo test --manifest-path src-tauri/Cargo.toml handwriting::tests --lib`.
+Native builds now require Rust 1.92 or newer. ONNX Runtime is linked into the
+app during the native build. See [benchmarks and training instructions](benchmarks/handwriting/README.md)
+and [model attribution](public/handwriting/MODEL-NOTICES.md).

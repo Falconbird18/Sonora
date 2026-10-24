@@ -1,4 +1,13 @@
 <script lang="ts">
+	import {
+		handwritingImage,
+		recognizeHandwriting,
+		loadHandwritingPause
+	} from './handwriting';
+	import {
+		prepareRecognition,
+		type RecognitionMode
+	} from './recognition/client';
 	import { scoreRasterScale, scoreRasterKey } from './scoreRaster';
 	import { formatComposer } from './composerDisplay';
 	import { onMount, tick, untrack } from 'svelte';
@@ -19,6 +28,7 @@
 	import { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';
 	import { acquireScreenWakeLock, releaseScreenWakeLock } from './wakeLock';
 	import { settings } from './settingsStore';
+	import HandwritingSetup from './ui/HandwritingSetup.svelte';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
 	import PracticeTools from './ui/PracticeTools.svelte';
 	import AnnotationLayersPanel from './ui/AnnotationLayersPanel.svelte';
@@ -47,6 +57,7 @@
 		Minus,
 		Music2,
 		PenTool,
+		PenLine,
 		Printer,
 		Redo2,
 		Search,
@@ -96,6 +107,7 @@
 	type Tool =
 		| 'pan'
 		| 'pen'
+		| 'handwriting'
 		| 'highlighter'
 		| 'eraser'
 		| 'line'
@@ -221,6 +233,7 @@
 	let annotating = $derived(controls && tool !== 'pan' && !reading);
 	const strokeTool = $derived(
 		tool === 'pen' ||
+			tool === 'handwriting' ||
 			tool === 'highlighter' ||
 			tool === 'line' ||
 			tool === 'arrow'
@@ -344,6 +357,7 @@
 	let isFullscreen = $state(false);
 
 	async function flushPendingAnnotations() {
+		cancelHandwriting();
 		// Cancel any debounced timers and force-write those pages first.
 		const pendingPages = [...saveTimers.keys()];
 		for (const number of pendingPages) {
@@ -507,6 +521,7 @@
 		};
 		document.addEventListener('visibilitychange', onVisibility);
 		const key = (event: KeyboardEvent) => {
+			if (handwritingSetupOpen) return;
 			if (textEditor) {
 				if (event.key === 'Escape') {
 					event.preventDefault();
@@ -1086,8 +1101,154 @@
 		const h = Math.max(1, canvas.clientHeight);
 		return { x: point.x * w, y: point.y * h };
 	}
+	let handwritingStatus = $state('Write a symbol or text; pause to convert.');
+	let handwritingMode = $state<RecognitionMode>('auto');
+	let handwritingPauseMs = $state(loadHandwritingPause());
+	let handwritingRetryAvailable = $state(false);
+	let handwritingSetupOpen = $state(false);
+	let handwritingTimer: ReturnType<typeof setTimeout> | undefined;
+	let handwritingEpoch = 0;
+	let handwritingBatch: { page: number; layer: string; ids: string[] } | null =
+		null;
+	let recognitionQueue: Promise<unknown> = Promise.resolve();
+	function cancelHandwriting() {
+		clearTimeout(handwritingTimer);
+		handwritingEpoch++;
+		handwritingBatch = null;
+		handwritingRetryAvailable = false;
+	}
+	function queueHandwriting(
+		number: number,
+		canvas: HTMLCanvasElement,
+		stroke: Stroke
+	) {
+		if (!stroke.id) return;
+		if (
+			!handwritingBatch ||
+			handwritingBatch.page !== number ||
+			handwritingBatch.layer !== activeLayer
+		)
+			handwritingBatch = { page: number, layer: activeLayer, ids: [] };
+		if (!handwritingBatch.ids.includes(stroke.id))
+			handwritingBatch.ids.push(stroke.id);
+		handwritingRetryAvailable = false;
+		const batch = { ...handwritingBatch, ids: [...handwritingBatch.ids] };
+		const epoch = ++handwritingEpoch;
+		clearTimeout(handwritingTimer);
+		handwritingStatus = 'Waiting for you to finish writing…';
+		handwritingTimer = setTimeout(() => {
+			const scoreId = score.id;
+			const baseline = JSON.stringify(snapshot(number));
+			const valid = () =>
+				epoch === handwritingEpoch &&
+				!closed &&
+				tool === 'handwriting' &&
+				score.id === scoreId &&
+				activeLayer === batch.layer &&
+				visiblePages.includes(number) &&
+				layers.some((l) => l.id === batch.layer && l.visible) &&
+				!drawing &&
+				!draggingAnnot &&
+				baseline === JSON.stringify(snapshot(number));
+			recognitionQueue = recognitionQueue
+				.catch(() => undefined)
+				.then(async () => {
+					if (!valid()) return;
+					handwritingStatus = 'Recognizing on this device…';
+					try {
+						const ink = cloneData(
+							(strokes[number] || []).filter(
+								(s) => !!s.id && batch.ids.includes(s.id)
+							)
+						);
+						if (ink.length !== batch.ids.length) return;
+						const sample = handwritingImage(
+							ink,
+							canvas.clientWidth,
+							canvas.clientHeight
+						);
+						const result = await recognizeHandwriting(
+							sample.image,
+							sample.ink,
+							handwritingMode
+						);
+						if (!valid()) return;
+						if (!result) {
+							handwritingStatus =
+								'Could not recognize that. Add more strokes or retry.';
+							handwritingRetryAvailable = true;
+							return;
+						}
+						handwritingBatch = null;
+						const base = {
+							id: crypto.randomUUID(),
+							layerId: batch.layer,
+							color: ink[0].color
+						};
+						if (result.kind === 'symbol') {
+							stamps[number] = [
+								...(stamps[number] || []),
+								{
+									...base,
+									symbol: result.symbol.glyph,
+									label: result.symbol.name,
+									x: sample.x + sample.width / 2,
+									y: sample.y + sample.height / 2,
+									fontSize: Math.max(
+										16,
+										Math.min(120, sample.height * canvas.clientHeight)
+									)
+								}
+							];
+						} else {
+							notes[number] = [
+								...(notes[number] || []),
+								{
+									...base,
+									text: result.text,
+									x: sample.x,
+									y: sample.y,
+									fontSize: Math.max(
+										12,
+										Math.min(72, sample.height * canvas.clientHeight)
+									)
+								}
+							];
+						}
+						strokes[number] = (strokes[number] || []).filter(
+							(s) => !s.id || !batch.ids.includes(s.id)
+						);
+						checkpoint(number);
+						redraw(number, canvas);
+						handwritingStatus =
+							'Converted. Drag to move; Undo restores your ink.';
+					} catch (error) {
+						if (valid()) {
+							handwritingRetryAvailable = true;
+							handwritingStatus = `${String(error)} Your ink is preserved.`;
+						}
+					}
+				});
+		}, handwritingPauseMs);
+	}
+	function retryHandwriting() {
+		const batch = handwritingBatch;
+		if (!batch) return;
+		const canvas = batch.page === visiblePages[0] ? leftInk : rightInk;
+		const stroke = (strokes[batch.page] || []).find(
+			(s) => s.id === batch.ids.at(-1)
+		);
+		if (canvas && stroke) queueHandwriting(batch.page, canvas, stroke);
+	}
 	function choose(nextTool: Tool) {
+		cancelHandwriting();
 		tool = nextTool;
+		if (nextTool === 'handwriting')
+			void prepareRecognition().catch((error) => {
+				if (closed || tool !== 'handwriting') return;
+				handwritingStatus = String(error);
+				handwritingSetupOpen = true;
+			});
 		if (nextTool !== 'text') {
 			textEditor = null;
 			textDraft = '';
@@ -1162,6 +1323,16 @@
 			!layers.some((l) => l.id === activeLayer && l.visible)
 		)
 			return;
+		if (
+			event.pointerType === 'touch' ||
+			event.button !== 0 ||
+			drawing ||
+			draggingAnnot
+		)
+			return;
+		clearTimeout(handwritingTimer);
+		handwritingEpoch++;
+		handwritingRetryAvailable = false;
 		if (textEditor) {
 			commitText();
 			return;
@@ -1176,7 +1347,9 @@
 				tool === 'symbol' || tool === 'text' ? 0.05 : 0.035
 			);
 			if (hit) {
-				canvas.setPointerCapture(event.pointerId);
+				try {
+					canvas.setPointerCapture(event.pointerId);
+				} catch {}
 				draggingAnnot = {
 					kind: hit.kind,
 					page: number,
@@ -1187,7 +1360,9 @@
 				return;
 			}
 		}
-		canvas.setPointerCapture(event.pointerId);
+		try {
+			canvas.setPointerCapture(event.pointerId);
+		} catch {}
 		if (tool === 'symbol') {
 			placeSymbolAt(number, point, canvas);
 			return;
@@ -1307,6 +1482,10 @@
 	}
 
 	function move(event: PointerEvent) {
+		if (event.pointerType === 'touch') return;
+		const activePointer = draggingAnnot?.pointerId ?? drawing?.pointerId;
+		if (activePointer !== undefined && activePointer !== event.pointerId)
+			return;
 		const targetCanvas =
 			draggingAnnot?.canvas ||
 			drawing?.canvas ||
@@ -1333,7 +1512,8 @@
 			return;
 		}
 		if (!drawing) return;
-		for (const pointEvent of event.getCoalescedEvents?.() || [event]) {
+		const coalesced = event.getCoalescedEvents?.();
+		for (const pointEvent of coalesced?.length ? coalesced : [event]) {
 			if (drawing.stroke) {
 				const stroke = (strokes[drawing.page] || []).find(
 					(item) => item.id === drawing?.stroke?.id
@@ -1359,7 +1539,11 @@
 				if (drawing) drawing.raf = undefined;
 			});
 	}
-	function end() {
+	function end(event: PointerEvent) {
+		const activePointer = draggingAnnot?.pointerId ?? drawing?.pointerId;
+		if (activePointer !== undefined && activePointer !== event.pointerId)
+			return;
+		if (event.type === 'pointercancel') cancelHandwriting();
 		if (draggingAnnot) {
 			const active = draggingAnnot;
 			draggingAnnot = null;
@@ -1372,6 +1556,13 @@
 		}
 		if (!drawing) return;
 		const active = drawing;
+		if (active.stroke && event.type !== 'pointercancel') {
+			const stroke = (strokes[active.page] || []).find(
+				(s) => s.id === active.stroke?.id
+			);
+			if (stroke)
+				stroke.points = [...stroke.points, position(event, active.canvas)];
+		}
 		if (active.raf) cancelAnimationFrame(active.raf);
 		drawing = null;
 		isDrawing = false;
@@ -1380,6 +1571,12 @@
 		} catch {}
 		redraw(active.page, active.canvas);
 		checkpoint(active.page);
+		if (
+			tool === 'handwriting' &&
+			active.stroke &&
+			event.type !== 'pointercancel'
+		)
+			queueHandwriting(active.page, active.canvas, active.stroke);
 	}
 
 	function onInkPointerLeave() {
@@ -1609,6 +1806,7 @@
 		scheduleSave(number);
 	}
 	function undo() {
+		cancelHandwriting();
 		if (!layers.some((l) => l.id === activeLayer && l.visible)) return;
 		for (const p of visiblePages) {
 			ensureHistory(p);
@@ -1620,6 +1818,7 @@
 		}
 	}
 	function redo() {
+		cancelHandwriting();
 		if (!layers.some((l) => l.id === activeLayer && l.visible)) return;
 		for (const p of visiblePages) {
 			ensureHistory(p);
@@ -1705,6 +1904,7 @@
 		void render({ quiet: hasPainted });
 	}
 	function next() {
+		cancelHandwriting();
 		if (!pdf) return;
 		pageTransition = true;
 		stopPanMomentum();
@@ -1723,6 +1923,7 @@
 		});
 	}
 	function previous() {
+		cancelHandwriting();
 		if (!pdf) return;
 		pageTransition = true;
 		stopPanMomentum();
@@ -1738,6 +1939,7 @@
 		});
 	}
 	function goToPage() {
+		cancelHandwriting();
 		const value = Math.max(
 			1,
 			Math.min(pdf?.numPages || 1, Number.parseInt(pageInput, 10) || 1)
@@ -1826,6 +2028,7 @@
 		return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
 	}
 	function cancelActiveStroke() {
+		cancelHandwriting();
 		if (drawing) {
 			const active = drawing;
 			if (active.raf) cancelAnimationFrame(active.raf);
@@ -1885,6 +2088,7 @@
 	}
 
 	function onWorkspacePointerDown(event: PointerEvent) {
+		if (event.pointerType === 'touch') return;
 		if (annotating || reading || textEditor) return;
 		if (event.button !== 0 && event.pointerType === 'mouse') return;
 		stopPanMomentum();
@@ -2368,6 +2572,22 @@
 		</div>
 	{/if}
 
+	{#if !reading && controls && tool === 'handwriting'}
+		<div class="handwriting-status">
+			<select
+				aria-label="Handwriting recognition mode"
+				value={handwritingMode}
+				onchange={(event) => { handwritingMode = event.currentTarget.value as RecognitionMode; clearTimeout(handwritingTimer); handwritingEpoch++; if (handwritingBatch) retryHandwriting(); }}
+				><option value="auto">Auto</option><option value="music"
+					>Music symbols</option
+				><option value="text">Text</option></select
+			><span role="status">{handwritingStatus}</span>
+			{#if handwritingRetryAvailable}<button onclick={retryHandwriting}
+					>Retry conversion</button
+				>{/if}<button onclick={() => (handwritingSetupOpen = true)}
+				>Model setup</button>
+		</div>
+	{/if}
 	{#if !reading && controls}
 		<div
 			class="palette"
@@ -2384,6 +2604,16 @@
 				<div class="rail-group" role="toolbar" aria-label="Draw">
 					<button
 						type="button"
+						class="rail-btn"
+						class:active={tool === 'handwriting'}
+						data-tool="handwriting"
+						title="Handwriting: automatically convert symbols and text"
+						aria-label="Handwriting"
+						onclick={() => choose('handwriting')}>
+						<PenLine size={18} />
+					</button>
+					<button
+						type="button"
 						class:active={tool === 'pen'}
 						class="rail-btn"
 						data-tool="pen"
@@ -2398,8 +2628,7 @@
 						title="Highlighter (H)"
 						aria-label="Highlighter"
 						onclick={() => choose('highlighter')}
-						><Highlighter size={18} /><span class="rail-label">Highlight</span
-						></button>
+						><Highlighter size={18} /></button>
 					<button
 						type="button"
 						class:active={tool === 'line'}
@@ -2415,9 +2644,7 @@
 						data-tool="arrow"
 						title="Arrow"
 						aria-label="Arrow"
-						onclick={() => choose('arrow')}
-						><ArrowUpRight size={18} /><span class="rail-label">Arrow</span
-						></button>
+						onclick={() => choose('arrow')}><ArrowUpRight size={18} /></button>
 					<button
 						type="button"
 						class:active={tool === 'eraser'}
@@ -2638,7 +2865,55 @@
 	{/if}
 </div>
 
+<HandwritingSetup
+	pauseMs={handwritingPauseMs}
+	onPauseChange={(value) => {
+		handwritingPauseMs = value;
+		try {
+			localStorage.setItem('sonora-handwriting-pause-ms', String(value));
+		} catch {}
+	}}
+	bind:open={handwritingSetupOpen}
+	onReady={() => {
+		handwritingStatus = 'Offline model ready. Write on the score.';
+	}} />
+
 <style>
+	.handwriting-status {
+		position: absolute;
+		left: 76px;
+		bottom: 18px;
+		max-width: min(420px, calc(100% - 100px));
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 10px 14px;
+		background: var(--sonora-bg-panel-solid);
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: 12px;
+		font:
+			12px/1.4 system-ui,
+			sans-serif;
+		color: var(--sonora-text-muted);
+		z-index: 20;
+	}
+	.handwriting-status select {
+		max-width: 115px;
+		color: var(--sonora-text);
+		background: var(--sonora-bg-panel-solid);
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: 6px;
+		padding: 4px;
+		font: inherit;
+	}
+	.handwriting-status button {
+		flex-shrink: 0;
+		background: transparent;
+		border: 0;
+		color: var(--sonora-accent);
+		font: inherit;
+		cursor: pointer;
+	}
 	.toolbar-divider {
 		height: 18px;
 		width: 1px;
@@ -3292,6 +3567,9 @@
 		background: var(--sonora-border-strong);
 	}
 	.rail-btn {
+		flex-shrink: 0;
+		padding: 0;
+		line-height: 1;
 		width: 40px;
 		height: 40px;
 		border: 1px solid transparent;
@@ -3323,6 +3601,15 @@
 		);
 		box-shadow: inset 0 0 0 1px
 			color-mix(in srgb, var(--tool-accent, #3b82f6) 55%, transparent);
+	}
+	.rail-btn :global(svg) {
+		display: block;
+		width: 18px;
+		height: 18px;
+		flex-shrink: 0;
+	}
+	.rail-btn[data-tool='handwriting'] {
+		--tool-accent: var(--sonora-accent);
 	}
 	.rail-btn[data-tool='pen'] {
 		--tool-accent: #f59e0b;

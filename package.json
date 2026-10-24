@@ -19,13 +19,14 @@
     "bench:library": "node scripts/bench-library.mjs",
     "test:performance": "node scripts/test-performance.mjs",
     "bench:compare": "node scripts/compare-benchmarks.mjs",
-    "test:pdf": "node scripts/test-pdf-scheduler.mjs && node scripts/test-folder-thumbnails.mjs"
+    "test:pdf": "node scripts/test-pdf-scheduler.mjs && node scripts/test-folder-thumbnails.mjs",
+    "test:handwriting": "node scripts/test-handwriting-model.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "@tauri-apps/cli": "^2",
-    "@types/node": "^24.13.3",
     "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^24.13.3",
     "prettier-plugin-svelte": "^3.2.2",
     "svelte": "^5.56.8",
     "svelte-check": "^4.7.3",
@@ -37,6 +38,7 @@
     "@embedpdf/pdfium": "^2.15.0",
     "@lucide/svelte": "^1.34.0",
     "@tauri-apps/api": "^2",
-    "dexie": "^4.4.5"
+    "dexie": "^4.4.5",
+    "onnxruntime-web": "1.30.0"
   }
 }

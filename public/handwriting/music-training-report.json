@@ -1,0 +1,22 @@
+{
+  "features": "770; gradient histogram + ink occupancy + aspect + stroke count",
+  "hidden": 256,
+  "classes": 33,
+  "bytes": 829588,
+  "seed": 42,
+  "groups": {
+    "music": {
+      "samples": 3040,
+      "accuracy": 0.8615131578947368,
+      "accepted_fraction": 0.6263157894736842,
+      "accepted_precision": 0.9805672268907563
+    },
+    "synthetic_text_rejects": {
+      "samples": 1000,
+      "accuracy": 0.998,
+      "accepted_fraction": 0.969,
+      "accepted_precision": 1.0
+    }
+  },
+  "limits": "Exploratory held-out-writer evaluation; closed-set classification only. Does not measure full application auto-routing or all real handwriting. Text rejects are synthetic Hershey fonts."
+}
