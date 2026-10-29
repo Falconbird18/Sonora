@@ -16,6 +16,7 @@ Import individual PDFs or folders, review smart title and tag suggestions, brows
 - **Practice tools** — separate metronome and tuner buttons open compact app panels. Metronome includes tap tempo, beat accents and volume; tuner includes cents feedback and A4 calibration (415–466 Hz). Microphone audio stays local. Closing a panel or hiding the interface keeps active audio tools running; returning to the library stops them.
 - **Viewer appearance** — practice by default, with a reading default available in Settings and an interface toggle (`F`).
 - **Desktop app** via Tauri with native folder picking and file access
+- **Local score digitization** — Audiveris-based PDF/photo to MusicXML conversion, score-specific recognition settings, background jobs, editable projects, and structural review. Requires a local Audiveris installation and compatible OCR data; see [OMR setup and limitations](docs/omr.md).
 
 ## Develop (web)
 

@@ -21,6 +21,7 @@ tauri-plugin-fs = "2"
 rfd = "0.17.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+quick-xml = "0.41"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
@@ -29,3 +30,6 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 markup5ever = "0.38"
 
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-rustls", "api-31"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

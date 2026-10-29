@@ -1,5 +1,6 @@
 mod handwriting;
 mod library_archive;
+mod omr;
 mod score_folders;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -2135,9 +2136,17 @@ fn read_text_file(path: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(omr::OmrState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
+            omr::start_omr,
+            omr::omr_status,
+            omr::latest_omr,
+            omr::cancel_omr,
+            omr::pick_omr_engine,
+            omr::pick_omr_tessdata,
+            omr::save_omr_artifact,
             library_archive::export_library_archive,
             library_archive::import_library_archive,
             pick_score_folder,
@@ -2161,8 +2170,14 @@ pub fn run() {
             imslp_work_scores,
             imslp_download_score
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Sonora");
+        .build(tauri::generate_context!())
+        .expect("error while building Sonora")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                use tauri::Manager;
+                app.state::<omr::OmrState>().shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

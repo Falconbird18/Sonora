@@ -23,6 +23,7 @@
 	import { acquireScreenWakeLock, releaseScreenWakeLock } from './wakeLock';
 	import { settings } from './settingsStore';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
+	import OmrPanel from './ui/OmrPanel.svelte';
 	import PracticeTools from './ui/PracticeTools.svelte';
 	import AnnotationLayersPanel from './ui/AnnotationLayersPanel.svelte';
 	import { db } from './db';
@@ -160,6 +161,7 @@
 	let practicePanel = $state<'metronome' | 'tuner' | null>(null);
 	let practiceState = $state({ metronome: false, tuner: false });
 	function togglePractice(panel: 'metronome' | 'tuner') {
+		omrOpen = false;
 		practicePanel = practicePanel === panel ? null : panel;
 		layersOpen = false;
 		searchOpen = false;
@@ -168,6 +170,7 @@
 	let searchText = $state('');
 	let searchStatus = $state('');
 	let settingsOpen = $state(false);
+	let omrOpen = $state(false);
 	let bookmarked = $state(false);
 	let annotationsVisible = $state(true);
 	let layers = $state<AnnotationLayer[]>([
@@ -531,8 +534,9 @@
 				}
 				return;
 			}
-			if (event.key === 'Escape' && (practicePanel || layersOpen)) {
+			if (event.key === 'Escape' && (practicePanel || layersOpen || omrOpen)) {
 				event.preventDefault();
+				omrOpen = false;
 				practicePanel = null;
 				layersOpen = false;
 				return;
@@ -2362,6 +2366,9 @@
 					><ChevronRight size={19} /></button>
 			</div>
 			<div class="topbar-right" role="toolbar" aria-label="Score tools">
+				<button class="icon-button" class:active={omrOpen}
+					title="Digitize score to MusicXML" aria-label="Digitize score to MusicXML" aria-expanded={omrOpen}
+					onclick={() => { omrOpen = !omrOpen; layersOpen = false; practicePanel = null; searchOpen = false; }}><Music2 size={18} /></button>
 				<button
 					class="icon-button"
 					class:active={controls}
@@ -2377,6 +2384,7 @@
 					aria-expanded={layersOpen}
 					onclick={() => {
 						layersOpen = !layersOpen;
+						omrOpen = false;
 						practicePanel = null;
 						searchOpen = false;
 					}}><Layers size={18} /></button>
@@ -2410,6 +2418,7 @@
 					aria-expanded={searchOpen}
 					onclick={() => {
 						searchOpen = !searchOpen;
+						omrOpen = false;
 						layersOpen = false;
 						practicePanel = null;
 					}}><Search size={18} /></button>
@@ -2526,6 +2535,9 @@
 			onMove={moveLayer}
 			onAdd={addLayer}
 			onClose={() => (layersOpen = false)} />{/if}
+	{#if !reading && omrOpen}
+		{#key score.id}<OmrPanel {score} onClose={() => (omrOpen = false)} />{/key}
+	{/if}
 	<div hidden={reading}>
 		<PracticeTools
 			panel={practicePanel}
