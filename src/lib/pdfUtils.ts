@@ -150,7 +150,7 @@ export async function openPdfBytes(
 	return wrapDocument(document);
 }
 
-function wrapDocument(document: PdfDocumentRenderer): OpenedPdf {
+export function wrapDocument(document: PdfDocumentRenderer): OpenedPdf {
 	const pages = document.pages;
 	const proxy: PdfDocumentProxy = {
 		numPages: pages.length,
@@ -272,7 +272,8 @@ async function renderThumbnail(document: PdfDocumentProxy) {
 	}
 }
 export async function getPdfInfoFromSource(source: PdfSource) {
-	const opened = await openPdfSource(source, { background: true });
+	const { openScoreSource } = await import('./scoreRenderer');
+	const opened = await openScoreSource(source, { background: true });
 	try {
 		const totalPages = opened.document.numPages;
 		const thumbnailUrl = await renderThumbnail(opened.document);

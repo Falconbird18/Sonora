@@ -1,5 +1,11 @@
 <script lang="ts">
-	import { Download, MoreHorizontal, Printer, Tag, Trash2 } from '@lucide/svelte';
+	import {
+		Download,
+		MoreHorizontal,
+		Printer,
+		Tag,
+		Trash2
+	} from '@lucide/svelte';
 	import type { ScoreItem } from '../types';
 
 	type Props = {
@@ -31,27 +37,37 @@
 		onclick={(event) => onToggle(score, event)}
 		aria-label="More actions"
 		aria-expanded={open}
-		title="More actions"
-	>
+		title="More actions">
 		<MoreHorizontal size={17} strokeWidth={2} />
 	</button>
 	{#if open}
 		<div class="score-menu" role="menu">
-			<button type="button" role="menuitem" onclick={(event) => onEditTags(score, event)}>
+			<button
+				type="button"
+				role="menuitem"
+				onclick={(event) => onEditTags(score, event)}>
 				<Tag size={15} strokeWidth={2} />Edit metadata
 			</button>
-			<button type="button" role="menuitem" onclick={(event) => onDownload(score, event)}>
-				<Download size={15} strokeWidth={2} />Download PDF
+			<button
+				type="button"
+				role="menuitem"
+				onclick={(event) => onDownload(score, event)}>
+				<Download size={15} strokeWidth={2} />Download {score.format ===
+				'musicxml'
+					? 'MusicXML'
+					: 'PDF'}
 			</button>
-			<button type="button" role="menuitem" onclick={(event) => onPrint(score, event)}>
-				<Printer size={15} strokeWidth={2} />Print
-			</button>
+			{#if score.format !== 'musicxml'}<button
+					type="button"
+					role="menuitem"
+					onclick={(event) => onPrint(score, event)}>
+					<Printer size={15} strokeWidth={2} />Print
+				</button>{/if}
 			<button
 				type="button"
 				class="danger"
 				role="menuitem"
-				onclick={(event) => onDelete(score, event)}
-			>
+				onclick={(event) => onDelete(score, event)}>
 				<Trash2 size={15} strokeWidth={2} />Remove from library
 			</button>
 		</div>
@@ -125,10 +141,10 @@
 		color: var(--sonora-text);
 	}
 	.score-menu button.danger {
-		color:var(--sonora-danger);
+		color: var(--sonora-danger);
 	}
 	.score-menu button.danger:hover {
 		background: color-mix(in srgb, var(--sonora-danger) 16%, transparent);
-		color:var(--sonora-danger);
+		color: var(--sonora-danger);
 	}
 </style>

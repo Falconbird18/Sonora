@@ -43,7 +43,7 @@ mockIPC((command, payload) => {
 			return current;
 		case 'omr_status':
 			return current;
-		case 'start_omr':
+		case 'start_automatic_omr':
 			assert(
 				payload?.inputPath === score.nativePath,
 				'Must recognize the original document'
@@ -78,18 +78,18 @@ let panel = mount(OmrPanel, { target, props: { score, onClose: () => {} } });
 try {
 	await until(() =>
 		[...target.querySelectorAll('button')].some(
-			(b) => b.textContent === 'Create MusicXML' && !b.disabled
+			(b) => b.textContent === 'Convert' && !b.disabled
 		)
 	);
-	button('Create MusicXML').click();
-	await until(() => target.textContent!.includes('Cancel recognition'));
+	button('Convert').click();
+	await until(() => target.textContent!.includes('Cancel'));
 	assert(
-		target.querySelector('fieldset')?.disabled,
-		'Settings are locked during recognition'
+		!target.querySelector('input, select'),
+		'Conversion exposes no recognition settings'
 	);
 	await unmount(panel);
 	panel = mount(OmrPanel, { target, props: { score, onClose: () => {} } });
-	await until(() => target.textContent!.includes('Cancel recognition'));
+	await until(() => target.textContent!.includes('Cancel'));
 	assert(
 		current?.status === 'running',
 		'Closing the panel must preserve the job'
@@ -117,18 +117,18 @@ try {
 		],
 		log_tail: 'Export complete'
 	};
-	await until(() => target.textContent!.includes('Save MusicXML'));
+	await until(() => target.textContent!.includes('Download MusicXML'));
 	assert(
 		target.textContent!.includes('measure 10'),
 		'Measure-level review must be available'
 	);
-	button('Save MusicXML').click();
+	button('Download MusicXML').click();
 	await until(() => saved);
-	button('Recognize again').click();
-	await until(() => target.textContent!.includes('Cancel recognition'));
-	button('Cancel recognition').click();
+	button('Convert again').click();
+	await until(() => target.textContent!.includes('Cancel'));
+	button('Cancel').click();
 	await until(() => cancelled);
-	await until(() => target.textContent!.includes('Recognition cancelled'));
+	await until(() => target.textContent!.includes('Conversion cancelled'));
 	result.textContent =
 		'PASS: original input, background recognition, reconnect, review, export and cancellation';
 	// Leave a complete result visible for manual visual review.

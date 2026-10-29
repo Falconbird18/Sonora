@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>MusicXML renderer regression</title>
+		<style>
+			html,
+			body,
+			#app {
+				margin: 0;
+				width: 100%;
+				height: 100%;
+			}
+			#result {
+				position: fixed;
+				left: 0;
+				bottom: 0;
+				z-index: 9999;
+				background: #222;
+				color: white;
+				padding: 4px;
+				font: 11px system-ui;
+			}
+		</style>
+	</head>
+	<body>
+		<output id="result">Running…</output>
+		<div id="app"></div>
+		<script type="module" src="./musicxml.ts"></script>
+	</body>
+</html>

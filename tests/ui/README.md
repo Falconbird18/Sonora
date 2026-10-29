@@ -1,5 +1,17 @@
 # Visual review harness
 
+## Score conversion and engraving
+
+On an isolated empty origin, `/tests/ui/convert.html` exercises the Convert sidebar,
+automatic conversion with no recognition controls, stored-PDF input, viewing and
+keeping MusicXML, reopening it from the library, and conversion history. Native
+IPC is mocked; the MusicXML engraver and shared viewer are real.
+`/tests/ui/musicxml.html` verifies real XML/MXL engraving, fixed two-page layout,
+visible notation, cancellation, cleanup, original-byte preservation and PDF dispatch.
+`/tests/ui/omr.html` checks the single-button conversion panel, reconnect and cancellation.
+Each fixture reports PASS or FAIL. Native provisioning and real score-conversion
+integration checks are described in [OMR documentation](../../docs/omr.md).
+
 Start Vite on an isolated origin (`npm run dev -- --port 5175`) and open `/tests/ui/`. The harness refuses to seed an existing score database. Use a fresh origin or a fresh browser profile for each run.
 
 Fixtures exercise work grouping, edition comparison, metadata editing, settings, light/dark themes, curated accents, density, composer-name formats, and keyboard focus. Native IPC is mocked. Actual IMSLP networking, parsing, and filesystem operations have separate Rust tests.

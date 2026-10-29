@@ -161,6 +161,7 @@
 					<Viewer
 						score={activeScore}
 						onClose={closeScore}
+						onOpenScore={(score: ScoreItem) => void openScore(score)}
 						sequenceLabel={programLabel}
 						onPreviousScore={programIndex > 0
 							? () => navigateProgram(-1)

@@ -68,7 +68,7 @@ async function collectBrowserPdfs(
 	for await (const [name, entry] of handle.entries()) {
 		if (name.startsWith('.') || name === 'node_modules') continue;
 		const path = prefix ? `${prefix}/${name}` : name;
-		if (entry.kind === 'file' && name.toLowerCase().endsWith('.pdf')) {
+		if (entry.kind === 'file' && /\.(pdf|musicxml|xml|mxl)$/i.test(name)) {
 			try {
 				result.push({ file: await entry.getFile(), path });
 			} catch (error) {
@@ -248,7 +248,9 @@ async function syncNativeFolder(folder: FolderSource) {
 		let next = plainScore({
 			...old,
 			id,
-			title: old?.title ?? file.name.replace(/\.pdf$/i, ''),
+			format: /\.(musicxml|xml|mxl)$/i.test(file.name) ? 'musicxml' : 'pdf',
+			fileExtension: file.name.split('.').at(-1)!.toLowerCase() as ScoreItem['fileExtension'],
+			title: old?.title ?? file.name.replace(/\.(pdf|musicxml|xml|mxl)$/i, ''),
 			composer:
 				old?.composer && old.composer !== 'Unknown Composer'
 					? old.composer
@@ -403,13 +405,15 @@ async function syncBrowserFolder(folder: FolderSource) {
 		// Prefer a plain Blob over the live File handle for IDB storage
 		const blob =
 			file instanceof Blob
-				? file.slice(0, file.size, file.type || 'application/pdf')
+				? file.slice(0, file.size, /\.(musicxml|xml|mxl)$/i.test(file.name) ? 'application/vnd.recordare.musicxml' : file.type || 'application/pdf')
 				: undefined;
 
 		let next = plainScore({
 			...old,
 			id,
-			title: old?.title ?? file.name.replace(/\.pdf$/i, ''),
+			format: /\.(musicxml|xml|mxl)$/i.test(file.name) ? 'musicxml' : 'pdf',
+			fileExtension: file.name.split('.').at(-1)!.toLowerCase() as ScoreItem['fileExtension'],
+			title: old?.title ?? file.name.replace(/\.(pdf|musicxml|xml|mxl)$/i, ''),
 			composer:
 				old?.composer && old.composer !== 'Unknown Composer'
 					? old.composer

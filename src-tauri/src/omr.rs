@@ -2,6 +2,7 @@
 //! correction; a successful subprocess exit alone is not proof of a usable score.
 mod musicxml;
 mod project;
+mod runtime;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -106,6 +107,113 @@ struct Active {
 pub struct OmrState {
     active: Mutex<Option<Arc<Active>>>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    preparing: AtomicBool,
+}
+
+fn automatic_options(context: &str) -> Options {
+    let text = context.to_lowercase();
+    let mut languages = vec!["eng", "ita"];
+    let groups: &[(&[&str], &str)] = &[
+        (
+            &[
+                "german",
+                "germany",
+                "austria",
+                "bach",
+                "schumann",
+                "schubert",
+                "brahms",
+                "beethoven",
+                "wolf",
+                "mahler",
+            ],
+            "deu",
+        ),
+        (
+            &[
+                "french", "france", "debussy", "ravel", "fauré", "faure", "poulenc", "berlioz",
+            ],
+            "fra",
+        ),
+        (
+            &[
+                "russian", "russia", "rachman", "tchaikov", "mussorg", "rimsky",
+            ],
+            "rus",
+        ),
+        (
+            &["czech", "czechia", "dvořák", "dvorak", "janáček", "janacek"],
+            "ces",
+        ),
+        (&["spanish", "spain", "granados", "falla"], "spa"),
+        (&["polish", "poland", "chopin", "szymanowski"], "pol"),
+        (
+            &[
+                "requiem",
+                "missa",
+                "mass",
+                "magnificat",
+                "stabat",
+                "ave maria",
+                "latin",
+                "motet",
+            ],
+            "lat",
+        ),
+    ];
+    for (hints, language) in groups {
+        if hints.iter().any(|hint| text.contains(hint)) {
+            languages.push(language);
+        }
+    }
+    if languages.len() == 2 {
+        languages.extend(["deu", "fra", "lat"]);
+    }
+    languages.sort_unstable();
+    languages.dedup();
+    Options {
+        languages: languages.join("+"),
+        small_notes: ["cue notes", "small notes", "cadenza", "grace notes"].iter().any(|hint| text.contains(hint)),
+        fingerings: ["piano", "étude", "etude", "study", "studies"]
+            .iter()
+            .any(|hint| text.contains(hint)),
+        ..Options::default()
+    }
+}
+
+#[tauri::command]
+pub async fn start_automatic_omr(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, OmrState>,
+    score_id: String,
+    input_path: Option<String>,
+    context: String,
+) -> Result<Job, String> {
+    let base = root(&app)?;
+    if state.preparing.swap(true, Ordering::SeqCst) {
+        return Err("Local recognition is already being prepared. Please wait a moment.".into());
+    }
+    struct ResetPreparing<'a>(&'a AtomicBool);
+    impl Drop for ResetPreparing<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let reset = ResetPreparing(&state.preparing);
+    let mut options = automatic_options(&context);
+    let prepared = runtime::prepare(&base, &options.languages).await;
+    drop(reset);
+    let (engine, data) = prepared?;
+    options.tessdata_path = data.to_string_lossy().into_owned();
+    start_omr(
+        app,
+        state,
+        score_id,
+        input_path,
+        Some(engine.to_string_lossy().into_owned()),
+        options,
+    )
+    .await
 }
 
 impl OmrState {
@@ -514,6 +622,178 @@ pub async fn pick_omr_tessdata() -> Option<String> {
 }
 
 #[tauri::command]
+pub async fn pick_omr_input() -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("Choose a score PDF or photo")
+        .add_filter("Scores", &["pdf", "png", "jpg", "jpeg", "tif", "tiff"])
+        .pick_file()
+        .await
+        .map(|file| file.path().to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn cache_omr_pdf(
+    app: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes)
+            if bytes.starts_with(b"%PDF-") && bytes.len() <= 256 * 1024 * 1024 =>
+        {
+            bytes.clone()
+        }
+        _ => return Err("Choose a PDF smaller than 256 MB".into()),
+    };
+    let folder = root(&app)?.join("imports");
+    tokio::task::spawn_blocking(move || {
+        fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+        let path = folder.join(format!(
+            "score-{}.pdf",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Explicit, one-time setup. Score conversion itself never downloads anything.
+#[tauri::command]
+pub async fn install_omr_languages(
+    app: tauri::AppHandle,
+    languages: String,
+) -> Result<String, String> {
+    Options {
+        languages: languages.clone(),
+        ..Options::default()
+    }
+    .validate()?;
+    let folder = root(&app)?.join("tessdata");
+    fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .user_agent("Sonora local OCR setup")
+        .build()
+        .map_err(|e| e.to_string())?;
+    for code in languages.split('+') {
+        let target = folder.join(format!("{code}.traineddata"));
+        if legacy_ocr_data(&target) {
+            continue;
+        }
+        let mut response = client
+            .get(format!(
+                "https://raw.githubusercontent.com/tesseract-ocr/tessdata/4.1.0/{code}.traineddata"
+            ))
+            .send()
+            .await
+            .map_err(|e| format!("Could not download {code} OCR data: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("OCR language {code} is unavailable: {e}"))?;
+        let temporary = folder.join(format!(
+            "{code}-{}.tmp",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let result = async {
+            use std::io::Write;
+            let mut file = File::create(&temporary).map_err(|e| e.to_string())?;
+            let mut size = 0usize;
+            while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+                size += chunk.len();
+                if size > 100 * 1024 * 1024 {
+                    return Err("OCR dictionary exceeds download size limit".to_string());
+                }
+                file.write_all(&chunk).map_err(|e| e.to_string())?;
+            }
+            drop(file);
+            if !legacy_ocr_data(&temporary) {
+                return Err(format!(
+                    "Downloaded {code} data is not compatible with Audiveris 5.11"
+                ));
+            }
+            fs::rename(&temporary, &target).map_err(|e| e.to_string())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+    }
+    Ok(folder.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn list_omr(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, OmrState>,
+) -> Result<Vec<Job>, String> {
+    let active = state
+        .active
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .map(|a| a.job.lock().map(|j| j.clone()).map_err(|e| e.to_string()))
+        .transpose()?;
+    let mut jobs = Vec::new();
+    let root = root(&app)?;
+    if root.is_dir() {
+        for entry in fs::read_dir(root).map_err(|e| e.to_string())?.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                if let Ok(job) = load(&entry.path()) {
+                    if active.as_ref().is_none_or(|a| a.id != job.id) {
+                        jobs.push(job);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(job) = active {
+        jobs.push(job);
+    }
+    jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    jobs.truncate(100);
+    Ok(jobs)
+}
+
+#[tauri::command]
+pub async fn read_omr_artifact(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, OmrState>,
+    id: String,
+    index: usize,
+) -> Result<String, String> {
+    let job = omr_status(app.clone(), state, id.clone())?;
+    if job.status == "running" {
+        return Err("Recognition is still running".into());
+    }
+    let artifact = job
+        .artifacts
+        .get(index)
+        .filter(|a| a.kind == "musicxml")
+        .ok_or("Choose a MusicXML movement")?;
+    let source = artifact_path(&job_dir(&root(&app)?, &id)?, &artifact.name)?;
+    tokio::task::spawn_blocking(move || {
+        let file = File::open(source).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(XML_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > XML_LIMIT {
+            return Err("MusicXML exceeds the 64 MB size limit".into());
+        }
+        String::from_utf8(bytes).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn start_omr(
     app: tauri::AppHandle,
     state: tauri::State<'_, OmrState>,
@@ -551,7 +831,20 @@ pub async fn start_omr(
     let engine = engine_path
         .filter(|p| !p.trim().is_empty())
         .or_else(|| std::env::var("SONORA_AUDIVERIS").ok())
-        .unwrap_or_else(|| "Audiveris".into());
+        .unwrap_or_else(|| {
+            let mut candidates = vec![
+                PathBuf::from("/opt/audiveris/bin/Audiveris"),
+                PathBuf::from("/Applications/Audiveris.app/Contents/MacOS/Audiveris"),
+            ];
+            if let Some(root) = std::env::var_os("PROGRAMFILES") {
+                candidates.push(PathBuf::from(root).join("Audiveris/Audiveris.exe"));
+            }
+            candidates
+                .into_iter()
+                .find(|p| p.is_file())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Audiveris".into())
+        });
     let mut slot = state.active.lock().map_err(|e| e.to_string())?;
     if slot
         .as_ref()
@@ -764,6 +1057,24 @@ mod tests {
             assert!(args.iter().any(|s| s == value), "{value}");
         }
     }
+
+    #[test]
+    fn automatic_profile_needs_no_user_settings() {
+        let vocal = automatic_options("Robert Schumann Germany voice and piano");
+        assert_eq!(vocal.languages, "deu+eng+ita");
+        assert!(vocal.lyrics && vocal.tremolos && vocal.fingerings);
+        assert!(!vocal.small_notes);
+        assert!(automatic_options("Chamber score with cue notes").small_notes);
+        assert_eq!(
+            (vocal.first_page, vocal.last_page, vocal.dpi),
+            (1, None, 400)
+        );
+        assert!(automatic_options("Requiem").languages.contains("lat"));
+        assert!(automatic_options("Rachmaninoff Russian song")
+            .languages
+            .contains("rus"));
+        assert!(automatic_options("").languages.contains("fra"));
+    }
     #[test]
     fn rejects_bad_ranges_and_job_traversal() {
         assert!(Options {
@@ -919,11 +1230,15 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(&dir).unwrap();
-        let options = Options {
+        let mut options = Options {
             last_page: Some(1),
             languages: std::env::var("SONORA_OMR_TEST_LANGUAGES").unwrap_or_else(|_| "eng".into()),
             ..Options::default()
         };
+        if let Ok(context) = std::env::var("SONORA_OMR_TEST_AUTO_CONTEXT") {
+            options = automatic_options(&context);
+            options.last_page = Some(1);
+        }
         let job = Job {
             id: "1".into(),
             score_id: "test".into(),

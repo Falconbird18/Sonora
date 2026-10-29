@@ -20,9 +20,11 @@
 		Music2,
 		RefreshCw,
 		Settings,
-		Star
+		Star,
+		ScanLine
 	} from '@lucide/svelte';
 	import LibrarySelection from './ui/LibrarySelection.svelte';
+	import ConvertView from './ConvertView.svelte';
 	import LibraryFolderItem from './ui/LibraryFolderItem.svelte';
 	import FolderOrganizeDialog from './ui/FolderOrganizeDialog.svelte';
 	import {
@@ -115,6 +117,7 @@
 	let settingsSection = $state<'sharing' | null>(null);
 	let imslpOpen = $state(false);
 	let libraryMode = $state<'all' | 'folders'>('folders');
+	let convertOpen = $state(false);
 	let selectedFolderId = $state<string | null>(null);
 	let draggedEntries = $state<{ path: string; directory: boolean }[]>([]);
 	let dropTarget = $state<string | null>(null);
@@ -196,6 +199,7 @@
 			: [...selectedFolders, id];
 	}
 	function navigateFolder(id: string | null) {
+		convertOpen = false;
 		libraryMode = 'folders';
 		selectedFolderId = id;
 		selectedListId = null;
@@ -699,7 +703,7 @@
 		}
 		const link = document.createElement('a');
 		link.href = href;
-		link.download = `${score.title || 'score'}.pdf`;
+		link.download = `${score.title || 'score'}.${score.fileExtension || (score.format === 'musicxml' ? 'musicxml' : 'pdf')}`;
 		link.target = '_blank';
 		link.rel = 'noopener';
 		link.click();
@@ -1020,10 +1024,10 @@
 			<span class="brand-mark" aria-hidden="true"><Music2 size={24} /></span>
 			<strong>Sonora</strong>
 		</div>
-		<SearchField
+		{#if !convertOpen}<SearchField
 			bind:value={search}
 			placeholder="Search your scores"
-			ariaLabel="Search scores" />
+			ariaLabel="Search scores" />{/if}
 		<div class="header-actions">
 			<button class="folder-button" onclick={() => (importOpen = true)}>
 				<FolderPlus size={17} strokeWidth={2} />
@@ -1094,7 +1098,7 @@
 		<aside class="sidebar">
 			<nav aria-label="Library filters">
 				<button
-					class:active={!selectedList &&
+					class:active={!convertOpen && !selectedList &&
 						filter === 'all' &&
 						!composer &&
 						libraryMode === 'all'}
@@ -1102,7 +1106,7 @@
 					><Files size={16} /><span>All Scores</span><b>{scores.length}</b
 					></button>
 				<button
-					class:active={!selectedList &&
+					class:active={!convertOpen && !selectedList &&
 						filter === 'all' &&
 						!composer &&
 						libraryMode === 'folders'}
@@ -1116,21 +1120,24 @@
 						>{libraryFolders.length}</b
 					></button>
 				<button
-					class:active={!selectedList && filter === 'recent'}
+					class:active={!convertOpen && !selectedList && filter === 'recent'}
 					onclick={() => {
+						convertOpen = false;
 						selectedFolderId = null;
 						selectedListId = null;
 						filter = 'recent';
 						composer = null;
 					}}><Clock3 size={16} /><span>Recently opened</span></button>
 				<button
-					class:active={!selectedList && filter === 'favorites'}
+					class:active={!convertOpen && !selectedList && filter === 'favorites'}
 					onclick={() => {
+						convertOpen = false;
 						selectedFolderId = null;
 						selectedListId = null;
 						filter = 'favorites';
 						composer = null;
 					}}><Star size={16} /><span>Favorites</span></button>
+				<button class:active={convertOpen} aria-current={convertOpen ? 'page' : undefined} onclick={() => { convertOpen = true; clearSelection(); }}><ScanLine size={16} /><span>Convert</span></button>
 			</nav>
 			<section class="list-section">
 				<div class="list-heading">
@@ -1142,8 +1149,9 @@
 						onclick={() => void newList()}><Plus size={16} /></IconButton>
 				</div>
 				{#each lists as list (list.id)}<button
-						class:active={selectedListId === list.id}
+						class:active={!convertOpen && selectedListId === list.id}
 						onclick={() => {
+							convertOpen = false;
 							selectedListId = list.id;
 							selectedFolderId = null;
 						}}
@@ -1174,8 +1182,9 @@
 						.slice(0, 16) as [name, count]}
 						{@const portrait = getComposerPortrait(name)}
 						<button
-							class:active={!selectedList && composer === name}
+							class:active={!convertOpen && !selectedList && composer === name}
 							onclick={() => {
+								convertOpen = false;
 								selectedFolderId = null;
 								selectedListId = null;
 								composer = name;
@@ -1189,7 +1198,10 @@
 				</section>
 			{/if}
 		</aside>
-		<main class="main">
+		<main class="main" class:convert-main={convertOpen}>
+			{#if convertOpen}
+				<ConvertView {scores} onOpen={(score) => onSelectScore(score)} onChanged={refresh} />
+			{:else}
 			<div class="toolbar">
 				<div>
 					{#if selectedFolder}
@@ -1396,6 +1408,7 @@
 						disabled={currentPage + 1 >= pageCount}
 						onclick={() => (libraryPage = currentPage + 1)}>Next</button>
 				</nav>
+			{/if}
 			{/if}
 		</main>
 	</div>
@@ -1808,6 +1821,7 @@
 		overflow-y: auto;
 		padding: 24px 28px 104px;
 	}
+	.main.convert-main { padding: 0 0 70px; }
 	.toolbar {
 		display: flex;
 		align-items: flex-end;

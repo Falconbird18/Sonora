@@ -19,11 +19,13 @@
 		TextNote
 	} from './types';
 	import { MUSIC_SYMBOLS, MUSIC_SYMBOL_CATEGORIES } from './musicSymbols';
-	import { openPdfSource, closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';
+	import { closePdf, MAX_CANVAS_PIXELS } from './pdfUtils';
+	import { openScoreSource as openPdfSource } from './scoreRenderer';
 	import { acquireScreenWakeLock, releaseScreenWakeLock } from './wakeLock';
 	import { settings } from './settingsStore';
 	import SettingsPanel from './ui/SettingsPanel.svelte';
 	import OmrPanel from './ui/OmrPanel.svelte';
+	import { convertedMusicXml, keepMusicXml } from './musicXmlImport';
 	import PracticeTools from './ui/PracticeTools.svelte';
 	import AnnotationLayersPanel from './ui/AnnotationLayersPanel.svelte';
 	import { db } from './db';
@@ -76,12 +78,14 @@
 	let {
 		score,
 		onClose,
+		onOpenScore,
 		sequenceLabel = '',
 		onPreviousScore,
 		onNextScore
 	}: {
 		score: ScoreItem;
 		onClose: () => void;
+		onOpenScore?: (score: ScoreItem) => void;
 		sequenceLabel?: string;
 		onPreviousScore?: () => Promise<void>;
 		onNextScore?: () => Promise<void>;
@@ -683,6 +687,7 @@
 				);
 			}
 			const opening = openPdfSource({
+				format: score.format,
 				url: score.pdfUrl,
 				blob: score.pdfBlob,
 				nativePath: score.nativePath
@@ -726,7 +731,7 @@
 			error =
 				reason instanceof Error && reason.message.includes('missing')
 					? reason.message
-					: 'This PDF could not be opened by the renderer. Try refreshing the library.';
+					: `This ${score.format === 'musicxml' ? 'MusicXML score' : 'PDF'} could not be opened. ${reason instanceof Error ? reason.message : 'Try refreshing the library.'}`;
 		} finally {
 			if (!closed) loading = false;
 		}
@@ -814,11 +819,11 @@
 			if (
 				!(
 					reason instanceof Error &&
-					reason.name === 'RenderingCancelledException'
+					['RenderingCancelledException', 'AbortError'].includes(reason.name)
 				) &&
 				current === generation
 			) {
-				console.error('PDF render failed', reason);
+				console.error('Score render failed', reason);
 				error =
 					'This page could not be rendered at the current size. Try Fit Page or reduce zoom.';
 			}
@@ -2290,7 +2295,7 @@
 		if (!href) return;
 		const link = document.createElement('a');
 		link.href = href;
-		link.download = `${score.title}.pdf`;
+		link.download = `${score.title}.${score.fileExtension || (score.format === 'musicxml' ? 'musicxml' : 'pdf')}`;
 		link.target = '_blank';
 		link.rel = 'noopener';
 		link.click();
@@ -2366,9 +2371,9 @@
 					><ChevronRight size={19} /></button>
 			</div>
 			<div class="topbar-right" role="toolbar" aria-label="Score tools">
-				<button class="icon-button" class:active={omrOpen}
+				{#if score.format !== 'musicxml'}<button class="icon-button" class:active={omrOpen}
 					title="Digitize score to MusicXML" aria-label="Digitize score to MusicXML" aria-expanded={omrOpen}
-					onclick={() => { omrOpen = !omrOpen; layersOpen = false; practicePanel = null; searchOpen = false; }}><Music2 size={18} /></button>
+					onclick={() => { omrOpen = !omrOpen; layersOpen = false; practicePanel = null; searchOpen = false; }}><Music2 size={18} /></button>{/if}
 				<button
 					class="icon-button"
 					class:active={controls}
@@ -2536,7 +2541,9 @@
 			onAdd={addLayer}
 			onClose={() => (layersOpen = false)} />{/if}
 	{#if !reading && omrOpen}
-		{#key score.id}<OmrPanel {score} onClose={() => (omrOpen = false)} />{/key}
+		{#key score.id}<OmrPanel {score} onClose={() => (omrOpen = false)}
+			onOpenResult={onOpenScore ? async (job, index) => { await flushPendingAnnotations(); onOpenScore?.(await convertedMusicXml(job, index, score)); } : undefined}
+			onKeepResult={async (job, index) => { await keepMusicXml(await convertedMusicXml(job, index, score)); }} />{/key}
 	{/if}
 	<div hidden={reading}>
 		<PracticeTools

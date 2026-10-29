@@ -71,3 +71,16 @@ export const pickOmrEngine = () => invoke<string | null>('pick_omr_engine');
 export const pickOmrTessdata = () => invoke<string | null>('pick_omr_tessdata');
 export const saveOmrArtifact = (id: string, index: number) =>
 	invoke<boolean>('save_omr_artifact', { id, index });
+export const pickOmrInput = () => invoke<string | null>('pick_omr_input');
+export const listOmr = () => invoke<OmrJob[]>('list_omr');
+export const readOmrArtifact = (id: string, index: number) =>
+	invoke<string>('read_omr_artifact', { id, index });
+export const installOmrLanguages = (languages: string) =>
+	invoke<string>('install_omr_languages', { languages });
+export const cacheOmrPdf = async (blob: Blob) =>
+	invoke<string>('cache_omr_pdf', await blob.arrayBuffer());
+export const convertAutomatically = (
+	scoreId: string,
+	inputPath: string | null,
+	context: string
+) => invoke<OmrJob>('start_automatic_omr', { scoreId, inputPath, context });

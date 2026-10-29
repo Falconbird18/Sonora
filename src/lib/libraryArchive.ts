@@ -161,7 +161,8 @@ export function portableScore(score: ScoreItem, index: number): ArchiveScore {
 		sourceFolderId,
 		...metadata
 	} = plainScore(score);
-	return { ...metadata, pdf: `scores/${String(index).padStart(6, '0')}.pdf` };
+	const extension = score.fileExtension || (score.format === 'musicxml' ? 'musicxml' : 'pdf');
+	return { ...metadata, pdf: `scores/${String(index).padStart(6, '0')}.${extension}` };
 }
 async function encodeBlob(blob: Blob) {
 	const bytes = new Uint8Array(await blob.arrayBuffer());

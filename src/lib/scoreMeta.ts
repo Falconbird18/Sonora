@@ -16,6 +16,8 @@ export function plainScore(input: ScoreItem): ScoreItem {
 		totalPages: Number(input.totalPages) || 1,
 		addedAt: Number(input.addedAt) || Date.now()
 	};
+	if (input.format) out.format = input.format;
+	if (input.fileExtension) out.fileExtension = input.fileExtension;
 	for (const key of [
 		'contentHash',
 		'folderId',
@@ -140,7 +142,7 @@ export async function maybeOrganizeScoreFile(
 	force = false
 ): Promise<ScoreItem> {
 	const organize = get(settings).organizeByComposer;
-	if ((!organize && !force) || !isTauri() || !existing.nativePath) return next;
+	if (existing.format === 'musicxml' || (!organize && !force) || !isTauri() || !existing.nativePath) return next;
 
 	const folder = await db.folders.get(ROOT_FOLDER_ID);
 	const libraryRoot = folder?.nativePath;

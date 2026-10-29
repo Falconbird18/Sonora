@@ -108,8 +108,8 @@ pub fn move_score_entry(
     if destination.exists() {
         return Err("A file or folder with that name already exists.".into());
     }
-    let sidecar = source.with_extension("sonora.json");
-    let destination_sidecar = destination.with_extension("sonora.json");
+    let sidecar = crate::score_sidecar_path(&source);
+    let destination_sidecar = crate::score_sidecar_path(&destination);
     let move_sidecar = source.is_file() && sidecar.exists();
     if move_sidecar && destination_sidecar.exists() {
         return Err("Score metadata already exists at the destination.".into());

@@ -19,6 +19,14 @@ struct NativeScoreFile {
     metadata: Option<serde_json::Value>,
 }
 
+pub(crate) fn score_sidecar_path(path: &Path) -> PathBuf {
+    if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("pdf")) {
+        path.with_extension("sonora.json")
+    } else {
+        path.with_file_name(format!("{}.sonora.json", path.file_name().unwrap_or_default().to_string_lossy()))
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct MovedScore {
     native_path: String,
@@ -72,7 +80,7 @@ fn collect_score_tree(root: &Path, current: &Path, files: &mut Vec<NativeScoreFi
         if metadata.is_dir() {
             directories.push(path.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/"));
             collect_score_tree(root, &path, files, directories)?;
-        } else if metadata.is_file() && name.to_lowercase().ends_with(".pdf") {
+        } else if metadata.is_file() && ["pdf", "musicxml", "xml", "mxl"].contains(&path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str()) {
             let relative = path.strip_prefix(root).map_err(|error| error.to_string())?;
             let modified_at = metadata
                 .modified()
@@ -86,7 +94,7 @@ fn collect_score_tree(root: &Path, current: &Path, files: &mut Vec<NativeScoreFi
                 name,
                 size: metadata.len(),
                 modified_at,
-                metadata: fs::read(path.with_extension("sonora.json"))
+                metadata: fs::read(score_sidecar_path(&path))
                     .ok()
                     .and_then(|bytes| serde_json::from_slice(&bytes).ok()),
             });
@@ -1745,13 +1753,13 @@ fn save_score_sidecar(
         || source
             .extension()
             .and_then(|v| v.to_str())
-            .map(|v| !v.eq_ignore_ascii_case("pdf"))
+            .map(|v| !["pdf", "musicxml", "xml", "mxl"].iter().any(|extension| v.eq_ignore_ascii_case(extension)))
             .unwrap_or(true)
     {
         return Err("Score is outside the library".into());
     }
-    let destination = source.with_extension("sonora.json");
-    let temporary = source.with_extension("sonora.json.tmp");
+    let destination = score_sidecar_path(&source);
+    let temporary = destination.with_extension("json.tmp");
     fs::write(
         &temporary,
         serde_json::to_vec_pretty(&metadata).map_err(|e| e.to_string())?,
@@ -2141,11 +2149,17 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             omr::start_omr,
+            omr::start_automatic_omr,
             omr::omr_status,
             omr::latest_omr,
             omr::cancel_omr,
             omr::pick_omr_engine,
             omr::pick_omr_tessdata,
+            omr::pick_omr_input,
+            omr::cache_omr_pdf,
+            omr::install_omr_languages,
+            omr::list_omr,
+            omr::read_omr_artifact,
             omr::save_omr_artifact,
             library_archive::export_library_archive,
             library_archive::import_library_archive,
@@ -2178,6 +2192,30 @@ pub fn run() {
                 app.state::<omr::OmrState>().shutdown();
             }
         });
+}
+
+#[cfg(test)]
+mod document_format_tests {
+    use super::*;
+    #[test]
+    fn pdf_and_musicxml_sidecars_remain_independent_when_moved() {
+        let root = std::env::temp_dir().join(format!("sonora-formats-{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(root.join("Moved")).unwrap();
+        let pdf = root.join("song.pdf");
+        let xml = root.join("song.musicxml");
+        fs::write(&pdf, b"%PDF-1.7\n").unwrap();
+        fs::write(&xml, include_bytes!("../../tests/fixtures/engraving.musicxml")).unwrap();
+        save_score_sidecar(pdf.display().to_string(), root.display().to_string(), serde_json::json!({"title":"Original PDF"})).unwrap();
+        save_score_sidecar(xml.display().to_string(), root.display().to_string(), serde_json::json!({"title":"Digital score"})).unwrap();
+        assert_ne!(score_sidecar_path(&pdf), score_sidecar_path(&xml));
+        score_folders::move_score_entry(root.display().to_string(), "song.musicxml".into(), "Moved/song.musicxml".into()).unwrap();
+        let mut scores = Vec::new();
+        collect_pdfs(&root, &root, &mut scores).unwrap();
+        assert_eq!(scores.len(), 2);
+        assert_eq!(scores.iter().find(|s| s.name == "song.pdf").unwrap().metadata.as_ref().unwrap()["title"], "Original PDF");
+        assert_eq!(scores.iter().find(|s| s.name == "song.musicxml").unwrap().metadata.as_ref().unwrap()["title"], "Digital score");
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(test)]

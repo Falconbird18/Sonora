@@ -60,7 +60,13 @@ fn checked_manifest(manifest: &Value) -> Result<&Vec<Value>, String> {
         if !ids.insert(id)
             || !paths.insert(pdf)
             || !pdf.starts_with("scores/")
-            || !pdf.ends_with(".pdf")
+            || !(if score["format"] == "musicxml" {
+                [".musicxml", ".xml", ".mxl"]
+                    .iter()
+                    .any(|ext| pdf.ends_with(ext))
+            } else {
+                pdf.ends_with(".pdf")
+            })
             || pdf.contains('\\')
             || Path::new(pdf)
                 .components()
@@ -82,6 +88,45 @@ fn pdf_header<R: Read + Seek>(reader: &mut R) -> Result<(), String> {
         return Err("A library file is not a valid PDF".into());
     }
     Ok(())
+}
+
+fn score_header<R: Read + Seek>(reader: &mut R, score: &Value) -> Result<(), String> {
+    if score["format"] != "musicxml" {
+        return pdf_header(reader);
+    }
+    let mut prefix = Vec::new();
+    reader
+        .by_ref()
+        .take(512 * 1024)
+        .read_to_end(&mut prefix)
+        .map_err(|e| e.to_string())?;
+    reader.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    if score["pdf"].as_str().unwrap_or("").ends_with(".mxl") {
+        return if prefix.starts_with(b"PK\x03\x04") {
+            Ok(())
+        } else {
+            Err("Invalid compressed MusicXML file".into())
+        };
+    }
+    let mut xml = quick_xml::Reader::from_reader(prefix.as_slice());
+    loop {
+        match xml
+            .read_event()
+            .map_err(|e| format!("Invalid MusicXML: {e}"))?
+        {
+            quick_xml::events::Event::Start(e) => {
+                return if [b"score-partwise".as_slice(), b"score-timewise".as_slice()]
+                    .contains(&e.local_name().as_ref())
+                {
+                    Ok(())
+                } else {
+                    Err("Archive file is not MusicXML".into())
+                }
+            }
+            quick_xml::events::Event::Eof => return Err("MusicXML root was not found".into()),
+            _ => {}
+        }
+    }
 }
 struct Cleanup(PathBuf);
 impl Drop for Cleanup {
@@ -138,15 +183,13 @@ pub fn write_archive(
                 return Err("A score is outside the selected library folder".into());
             }
             let mut file = File::open(path).map_err(|e| e.to_string())?;
-            pdf_header(&mut file)?;
+            score_header(&mut file, score)?;
             std::io::copy(&mut file, &mut zip).map_err(|e| e.to_string())?;
         } else if let Some(encoded) = source.bytes_base64 {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(encoded)
                 .map_err(|e| e.to_string())?;
-            if !bytes.starts_with(b"%PDF-") {
-                return Err("A score has invalid PDF data".into());
-            }
+            score_header(&mut std::io::Cursor::new(&bytes), score)?;
             zip.write_all(&bytes).map_err(|e| e.to_string())?;
         } else {
             return Err(format!("The PDF for {} is unavailable", score["title"]));
@@ -215,9 +258,13 @@ pub fn read_archive(archive: &Path, root: &Path) -> Result<ImportResult, String>
             return Err("Archive exceeds the import size limit".into());
         }
         let filename = format!(
-            "{:05} - {}.pdf",
+            "{:05} - {}.{}",
             index + 1,
-            crate::sanitize_path_segment(score["title"].as_str().unwrap())
+            crate::sanitize_path_segment(score["title"].as_str().unwrap()),
+            Path::new(entry_name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("pdf")
         );
         let path = staging.join(&filename);
         let mut target = File::create(&path).map_err(|e| e.to_string())?;
@@ -227,9 +274,9 @@ pub fn read_archive(archive: &Path, root: &Path) -> Result<ImportResult, String>
             return Err("Truncated or oversized PDF in archive".into());
         }
         drop(target);
-        pdf_header(&mut File::open(&path).map_err(|e| e.to_string())?)?;
+        score_header(&mut File::open(&path).map_err(|e| e.to_string())?, score)?;
         fs::write(
-            path.with_extension("sonora.json"),
+            crate::score_sidecar_path(&path),
             serde_json::to_vec_pretty(score).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
@@ -307,6 +354,53 @@ pub async fn import_library_archive(library_root: String) -> Result<Option<Impor
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn musicxml_and_mxl_survive_portable_library_round_trip() {
+        let root = std::env::temp_dir().join(format!("sonora-xml-archive-{}", stamp()));
+        fs::create_dir_all(&root).unwrap();
+        let _cleanup = Cleanup(root.clone());
+        let xml = include_bytes!("../../tests/fixtures/engraving.musicxml");
+        let mut zipped = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        zipped
+            .start_file("META-INF/container.xml", options)
+            .unwrap();
+        zipped.write_all(br#"<container><rootfiles><rootfile full-path="score.musicxml"/></rootfiles></container>"#).unwrap();
+        zipped.start_file("score.musicxml", options).unwrap();
+        zipped.write_all(xml).unwrap();
+        let mxl = zipped.finish().unwrap().into_inner();
+        let manifest = serde_json::json!({"format":"sonora-library","version":1,"scores":[
+            {"id":"xml","title":"Song","composer":"Test","format":"musicxml","fileExtension":"musicxml","pdf":"scores/song.musicxml"},
+            {"id":"mxl","title":"Compressed song","composer":"Test","format":"musicxml","fileExtension":"mxl","pdf":"scores/song.mxl"}
+        ],"annotations":[],"lists":[]});
+        let archive = root.join("library.zip");
+        write_archive(
+            &archive,
+            &manifest,
+            vec![
+                ExportSource {
+                    score_id: "xml".into(),
+                    path: None,
+                    bytes_base64: Some(base64::engine::general_purpose::STANDARD.encode(xml)),
+                },
+                ExportSource {
+                    score_id: "mxl".into(),
+                    path: None,
+                    bytes_base64: Some(base64::engine::general_purpose::STANDARD.encode(&mxl)),
+                },
+            ],
+            None,
+        )
+        .unwrap();
+        let imported = read_archive(&archive, &root).unwrap();
+        assert_eq!(fs::read(&imported.files[0].native_path).unwrap(), xml);
+        assert_eq!(fs::read(&imported.files[1].native_path).unwrap(), mxl);
+        assert!(imported.files[0].native_path.ends_with(".musicxml"));
+        assert!(imported.files[1].native_path.ends_with(".mxl"));
+        assert_eq!(imported.manifest["scores"][0]["format"], "musicxml");
+        let mut wrong = std::io::Cursor::new(b"<html><script>no</script></html>");
+        assert!(score_header(&mut wrong, &manifest["scores"][0]).is_err());
+    }
     #[test]
     fn complete_archive_round_trip_and_path_validation() {
         let root = std::env::temp_dir().join(format!("sonora-archive-{}", stamp()));

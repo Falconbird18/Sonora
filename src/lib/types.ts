@@ -8,6 +8,9 @@ export interface LibraryFolder {
 }
 
 export interface ScoreItem {
+	/** Omitted on legacy PDF records. pdfBlob/pdfUrl are shared source fields. */
+	format?: 'pdf' | 'musicxml';
+	fileExtension?: 'pdf' | 'musicxml' | 'xml' | 'mxl';
 	folderId?: string;
 	id: string;
 	contentHash?: string;

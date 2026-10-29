@@ -10,6 +10,7 @@
 	import { imslpAvailable } from '../imslp';
 	import { db } from '../db';
 	import { plainScore } from '../scoreMeta';
+	import { prepareMusicXml } from '../musicXmlImport';
 	let {
 		onClose,
 		onImported,
@@ -44,8 +45,10 @@
 			);
 			for (const row of rows)
 				if (row.score.contentHash) hashes.add(row.score.contentHash);
-			const selected = Array.from(files).filter((f) => /\.pdf$/i.test(f.name));
-			if (!selected.length) error = 'Choose PDF files to import.';
+			const selected = Array.from(files).filter((f) =>
+				/\.(pdf|musicxml|xml|mxl)$/i.test(f.name)
+			);
+			if (!selected.length) error = 'Choose PDF or MusicXML files to import.';
 			for (const [index, file] of selected.entries()) {
 				if (cancelled || stopRequested) break;
 				progress = `Analyzing ${index + 1} of ${selected.length}: ${file.name}`;
@@ -64,9 +67,16 @@
 								},
 								selected: false,
 								duplicate: true,
-								status: 'Duplicate PDF · already in library or this batch'
+								status: 'Duplicate score · already in library or this batch'
 							}
-						: await analyzeImport(file, online, ocr);
+						: /\.(musicxml|xml|mxl)$/i.test(file.name)
+							? {
+									file,
+									score: await prepareMusicXml(file, file.name),
+									selected: true,
+									status: 'MusicXML · ready to read'
+								}
+							: await analyzeImport(file, online, ocr);
 					row.score.contentHash = hash;
 					hashes.add(hash);
 					if (!cancelled) rows.push(row);
@@ -170,17 +180,17 @@
 			<div>
 				<h2 id="import-title">Import scores</h2>
 				<p>
-					Drop PDFs here or choose files and folders. Review titles and tags
-					before saving.
+					Drop PDFs or MusicXML here, or choose files and folders. Review titles
+					and tags before saving.
 				</p>
 			</div>
 			<button disabled={busy} onclick={onClose}>Close</button>
 		</header>
 		<div class="sources">
 			<label class="file-button"
-				>Choose PDFs<input
+				>Choose scores<input
 					type="file"
-					accept=".pdf,application/pdf"
+					accept=".pdf,.musicxml,.xml,.mxl,application/pdf"
 					multiple
 					disabled={busy}
 					onchange={(e) => void selectFiles(e.currentTarget.files)} /></label
