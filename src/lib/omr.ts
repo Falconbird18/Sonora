@@ -24,7 +24,15 @@ export interface OmrReview {
 	ties: number;
 	warnings: string[];
 }
+export interface OmrProgress {
+	phase: string;
+	current_page: number | null;
+	total_pages: number | null;
+	completed_pages: number;
+	step: string;
+}
 export interface OmrJob {
+	progress?: OmrProgress | null;
 	id: string;
 	score_id: string;
 	status: 'running' | 'complete' | 'failed' | 'cancelled' | 'interrupted';

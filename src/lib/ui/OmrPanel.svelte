@@ -39,6 +39,35 @@
 	let resultBusy = $state(false);
 	let cachedPath = '';
 	const desktop = isTauri();
+	const stageLabels: Record<string, string> = {
+		LOAD: 'Loading page',
+		BINARY: 'Preparing image',
+		SCALE: 'Measuring staff spacing',
+		GRID: 'Finding staves and systems',
+		HEADERS: 'Reading clefs and key signatures',
+		STEM_SEEDS: 'Finding stems',
+		BEAMS: 'Reading beams',
+		LEDGERS: 'Reading ledger lines',
+		HEADS: 'Recognizing notes',
+		STEMS: 'Connecting notes and stems',
+		REDUCTION: 'Resolving symbols',
+		CUE_BEAMS: 'Reading cue notes',
+		TEXTS: 'Reading text and expression marks',
+		MEASURES: 'Building measures',
+		CHORDS: 'Building chords',
+		CURVES: 'Reading ties and slurs',
+		SYMBOLS: 'Reading musical symbols',
+		LINKS: 'Connecting musical details',
+		RHYTHMS: 'Resolving rhythms and voices',
+		PAGE: 'Assembling page'
+	};
+	let progress = $derived(job?.progress);
+	let exporting = $derived(progress?.phase === 'exporting');
+	let total = $derived(progress?.total_pages || 0);
+	let completed = $derived(Math.min(progress?.completed_pages || 0, total));
+	let incomplete = $derived(
+		job?.warnings.some((w) => w.startsWith('Source page ')) || false
+	);
 
 	onMount(() => {
 		job = initialJob || null;
@@ -144,27 +173,62 @@
 			</p>
 		{:else}
 			{#if job?.status === 'running'}
-				<div class="progress" role="status">
-					<span class="spinner"></span>
-					<div>
-						<strong>Converting your score</strong>
-						<p>
-							Recognizing the music and its details. You can leave this page
-							while it works.
-						</p>
+				<div class="progress-card" role="status" aria-live="polite">
+					<div class="progress-heading">
+						<span class="eyebrow">LOCAL CONVERSION</span><span
+							class="activity-dot"></span>
 					</div>
+					<h2>
+						{exporting
+							? 'Creating your MusicXML score'
+							: progress?.phase === 'recovering'
+								? 'Finishing saved recognition'
+								: 'Reading your music'}
+					</h2>
+					<p class="stage">
+						{exporting
+							? 'Preserving the notation and preparing your score to view.'
+							: stageLabels[progress?.step || ''] ||
+								'Preparing the score for recognition'}{#if !exporting && progress?.current_page}
+							· Page {progress.current_page}{/if}
+					</p>
+					{#if total && !exporting}
+						<div class="page-count">
+							<span>Source pages processed</span><strong
+								>{completed} / {total}</strong>
+						</div>
+						<progress
+							max={total}
+							value={completed}
+							aria-label="Source pages processed"></progress>
+					{:else}<progress
+							aria-label={exporting
+								? 'Creating MusicXML'
+								: 'Preparing recognition'}></progress
+						>{/if}
+					<ol class="conversion-steps" aria-label="Conversion stages">
+						<li class="done"><span>✓</span> Prepare</li>
+						<li class:done={exporting} class:active={!exporting}>
+							<span>{exporting ? '✓' : '2'}</span> Recognize
+						</li>
+						<li class:active={exporting}><span>3</span> MusicXML</li>
+					</ol>
+					<p class="hint">
+						{progress?.phase === 'recovering'
+							? 'Reusing saved pages and retrying the interrupted recognition. '
+							: ''}You can leave this page while conversion continues.
+					</p>
 				</div>
 				<button onclick={cancel}>Cancel</button>
 			{:else if busy}
-				<div class="progress" role="status">
-					<span class="spinner"></span>
-					<div>
-						<strong>Preparing local recognition</strong>
-						<p>
-							The first conversion downloads the tools it needs. Your score
-							stays on your computer.
-						</p>
-					</div>
+				<div class="progress-card" role="status">
+					<span class="eyebrow">LOCAL CONVERSION</span>
+					<h2>Preparing local recognition</h2>
+					<progress aria-label="Preparing local recognition"></progress>
+					<p>
+						The first conversion downloads the tools it needs. Your score stays
+						on your computer.
+					</p>
 				</div>
 			{:else}
 				{#if !job}<h2>Ready when you are</h2>
@@ -188,12 +252,18 @@
 				<section aria-label="Conversion result">
 					{#if job.status !== 'running'}<h2>
 							{job.status === 'complete'
-								? 'Your score is ready'
+								? incomplete
+									? 'Your score needs review'
+									: 'Your score is ready'
 								: job.status === 'cancelled'
 									? 'Conversion cancelled'
 									: 'Conversion needs attention'}
 						</h2>{/if}
 					{#if job.error}<p class="error">{job.error}</p>{/if}
+					{#if incomplete && job.status === 'complete'}<p class="warning">
+							Some source pages may be missing. Review the conversion notes
+							before using this score.
+						</p>{/if}
 					{#if job.warnings.length}<details>
 							<summary>Conversion notes ({job.warnings.length})</summary
 							>{#each job.warnings as warning}<p class="warning">
@@ -340,35 +410,122 @@
 		max-height: 260px;
 		overflow: auto;
 	}
-	.progress {
+	.progress-card {
+		padding: 22px;
+		margin-bottom: 16px;
+		border: 1px solid var(--sonora-border-strong);
+		border-radius: 14px;
+		background: var(--sonora-bg-hover);
+	}
+	.progress-heading,
+	.page-count {
 		display: flex;
-		gap: 14px;
-		align-items: flex-start;
+		justify-content: space-between;
+		align-items: center;
+		gap: 12px;
 	}
-	.progress strong {
-		font-size: 16px;
+	.eyebrow {
+		font-size: 10px;
+		letter-spacing: 0.12em;
+		color: var(--sonora-text-muted);
 	}
-	.progress p {
-		font-size: 13px;
+	.progress-card h2 {
+		margin-top: 14px;
 	}
-	.spinner {
-		width: 22px;
-		height: 22px;
-		flex: 0 0 auto;
-		margin-top: 4px;
-		border: 2px solid var(--sonora-border-strong);
-		border-top-color: var(--sonora-accent);
+	.stage {
+		min-height: 42px;
+	}
+	.page-count {
+		font-size: 12px;
+		margin: 20px 0 8px;
+		color: var(--sonora-text-secondary);
+	}
+	.page-count strong {
+		font-variant-numeric: tabular-nums;
+		color: var(--sonora-text);
+	}
+	progress {
+		display: block;
+		width: 100%;
+		height: 7px;
+		accent-color: var(--sonora-accent);
+		border: 0;
+		border-radius: 8px;
+		overflow: hidden;
+		background: var(--sonora-border-strong);
+	}
+	progress::-webkit-progress-bar {
+		background: var(--sonora-border-strong);
+		border-radius: 8px;
+	}
+	progress::-webkit-progress-value {
+		background: var(--sonora-accent);
+		border-radius: 8px;
+		transition: width 0.4s ease;
+	}
+	progress::-moz-progress-bar {
+		background: var(--sonora-accent);
+		border-radius: 8px;
+	}
+	progress:indeterminate {
+		background: linear-gradient(
+			90deg,
+			var(--sonora-border-strong) 20%,
+			var(--sonora-accent) 50%,
+			var(--sonora-border-strong) 80%
+		);
+		background-size: 200% 100%;
+		animation: travel 2s ease-in-out infinite;
+	}
+	.conversion-steps {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 8px;
+		list-style: none;
+		padding: 0;
+		margin: 22px 0;
+		font-size: 11px;
+		color: var(--sonora-text-muted);
+	}
+	.conversion-steps li {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 6px;
+	}
+	.conversion-steps span {
+		display: grid;
+		place-items: center;
+		width: 21px;
+		height: 21px;
+		border: 1px solid var(--sonora-border-strong);
 		border-radius: 50%;
-		animation: spin 0.8s linear infinite;
 	}
-	@keyframes spin {
+	.conversion-steps .active {
+		color: var(--sonora-text);
+	}
+	.conversion-steps .active span,
+	.conversion-steps .done span {
+		border-color: var(--sonora-accent);
+		color: var(--sonora-accent);
+	}
+	.activity-dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: var(--sonora-accent);
+	}
+	@keyframes travel {
 		to {
-			transform: rotate(360deg);
+			background-position: -200% 0;
 		}
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.spinner {
+		progress:indeterminate {
 			animation: none;
+		}
+		progress::-webkit-progress-value {
+			transition: none;
 		}
 	}
 </style>

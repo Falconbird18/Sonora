@@ -59,7 +59,14 @@ mockIPC((command, payload) => {
 				artifacts: [],
 				warnings: [],
 				error: null,
-				log_tail: 'HEADS'
+				log_tail: 'HEADS',
+				progress: {
+					phase: 'recognizing',
+					total_pages: 17,
+					current_page: 4,
+					completed_pages: 3,
+					step: 'TEXTS'
+				}
 			};
 			return current;
 		case 'cancel_omr':
@@ -86,6 +93,30 @@ try {
 	assert(
 		!target.querySelector('input, select'),
 		'Conversion exposes no recognition settings'
+	);
+	assert(
+		target.textContent!.includes('Reading text and expression marks'),
+		'Current recognition stage is readable'
+	);
+	assert(
+		target.textContent!.includes('Page 4'),
+		'Current source page is visible'
+	);
+	const progressBar = target.querySelector('progress')!;
+	assert(
+		progressBar.value === 3 && progressBar.max === 17,
+		'Page progress uses real source counts'
+	);
+	current = {
+		...current!,
+		progress: { ...current!.progress!, phase: 'exporting' }
+	};
+	await until(() =>
+		target.textContent!.includes('Creating your MusicXML score')
+	);
+	assert(
+		!target.querySelector('progress')!.hasAttribute('value'),
+		'Export must not imply a measured percentage'
 	);
 	await unmount(panel);
 	panel = mount(OmrPanel, { target, props: { score, onClose: () => {} } });
@@ -154,6 +185,20 @@ try {
 			}
 		]
 	};
+	if (new URLSearchParams(location.search).has('progress')) {
+		current = {
+			...current!,
+			status: 'running',
+			artifacts: [],
+			progress: {
+				phase: 'recognizing',
+				total_pages: 17,
+				completed_pages: 3,
+				current_page: 4,
+				step: 'TEXTS'
+			}
+		};
+	}
 	await unmount(panel);
 	panel = mount(OmrPanel, { target, props: { score, onClose: () => {} } });
 } catch (error) {

@@ -73,6 +73,23 @@ perspective-correction engine for photographs. Flat, upright, evenly lit images
 remain preferable; see the upstream
 [scanning guide](https://audiveris.github.io/audiveris/_pages/guides/advanced/scanning/).
 
+## Progress and recovery
+
+Conversion shows preparation, recognition and MusicXML stages. During recognition,
+source-page counts and the current task come from the engine log. Page counts
+measure pages processed, including pages requiring review; they are not an accuracy
+score or a time estimate. MusicXML export has a separate indeterminate indicator.
+
+Recognition saves the book before export. Sonora repairs Audiveris 5.11's empty
+run-table serialization in a private project copy so its exporter can reopen it.
+No pixels are added and the original failed job is retained. If recognition hits
+the known metronome classifier index error, Sonora automatically retries the saved
+book with a bounded metronome candidate search. Completed recognition is reused.
+Clicking **Convert again** also reuses a failed book with this error, provided its
+source bytes and recognition options match. Changed inputs are processed afresh.
+Other errors remain visible in the log; recovery does not guarantee recognition
+accuracy. Missing or unfinished pages are called out in the result.
+
 ## Lifecycle and storage
 
 Recognition runs on a native background thread, one score at a time. Cancelling
@@ -83,7 +100,7 @@ limit, while `-swap` releases processed sheets to reduce memory use.
 
 Files live under `<Sonora app-data>/omr/`: a versioned runtime, cached OCR data,
 imported PDF snapshots, and job directories containing the original input,
-`arguments.json`, `engine.log`, `job.json` and `output/`. Historical attempts are
+per-stage `arguments-*.json` files, `engine.log`, `job.json` and `output/`. Historical attempts are
 retained, including failed attempts, and consume disk space. Saved library scores
 contain independent source blobs, so they remain readable without the job folder.
 Audiveris remains a separately downloaded program with its own license; its sources

@@ -5,9 +5,9 @@ mod project;
 mod runtime;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
-    fs::{self, File},
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    collections::{BTreeSet, HashMap},
+    fs::{self, File, OpenOptions},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -21,7 +21,7 @@ use tauri::Manager;
 const XML_LIMIT: u64 = 64 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Options {
     dpi: u16,
@@ -84,6 +84,14 @@ pub struct Artifact {
     kind: String,
     review: Option<musicxml::Review>,
 }
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Progress {
+    phase: String,
+    current_page: Option<u32>,
+    total_pages: Option<u32>,
+    completed_pages: u32,
+    step: String,
+}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Job {
     id: String,
@@ -98,6 +106,8 @@ pub struct Job {
     error: Option<String>,
     #[serde(default)]
     log_tail: String,
+    #[serde(default)]
+    progress: Option<Progress>,
 }
 struct Active {
     job: Mutex<Job>,
@@ -173,7 +183,9 @@ fn automatic_options(context: &str) -> Options {
     languages.dedup();
     Options {
         languages: languages.join("+"),
-        small_notes: ["cue notes", "small notes", "cadenza", "grace notes"].iter().any(|hint| text.contains(hint)),
+        small_notes: ["cue notes", "small notes", "cadenza", "grace notes"]
+            .iter()
+            .any(|hint| text.contains(hint)),
         fingerings: ["piano", "étude", "etude", "study", "studies"]
             .iter()
             .any(|hint| text.contains(hint)),
@@ -530,6 +542,36 @@ fn collect(
     Ok(())
 }
 
+fn observe_progress(progress: &mut Progress, line: &str, completed: &mut BTreeSet<u32>) {
+    if line.contains("PartwiseBuilder") && line.contains("Exporting sheet(s)") {
+        progress.phase = "exporting".into();
+        progress.current_page = None;
+    }
+    if let Some((_, rest)) = line.split_once("| ") {
+        if let Some((prefix, _)) = rest.split_once(" sheets in ") {
+            if let Some(total) = prefix
+                .split_whitespace()
+                .last()
+                .and_then(|n| n.parse::<u32>().ok())
+            {
+                progress.total_pages = Some(total);
+            }
+        }
+        if let Some((_, rest)) = rest.split_once("End of Stub#") {
+            if let Ok(page) = rest.trim().parse::<u32>() {
+                completed.insert(page);
+                progress.completed_pages = progress.completed_pages.max(completed.len() as u32);
+            }
+        }
+        if line.contains("StepMonitoring") {
+            if let Some((_, page)) = line.split_once('#') {
+                progress.current_page = page.split(']').next().and_then(|n| n.parse().ok());
+            }
+            progress.step = rest.trim().to_string();
+        }
+    }
+}
+
 fn run(
     dir: &Path,
     active: &Active,
@@ -537,15 +579,115 @@ fn run(
     input: &Path,
     options: &Options,
 ) -> Result<bool, String> {
-    let log = File::create(dir.join("engine.log")).map_err(|e| e.to_string())?;
+    let start = Instant::now();
     let output = dir.join("output");
     fs::create_dir_all(&output).map_err(|e| e.to_string())?;
-    let args = arguments(input, &output, options);
+    let mut source = input.to_path_buf();
+    let mut recovering = input.extension().is_some_and(|e| e == "omr");
+    if !recovering {
+        let mut args = arguments(input, &output, options);
+        args.retain(|a| a != "-transcribe" && a != "-export");
+        args.splice(1..1, ["-step".into(), "PAGE".into()]);
+        set_phase(active, "recognizing");
+        let success = run_command(dir, active, engine, options, args, start, "recognition")?;
+        source = find_project(&output)
+            .ok_or("Recognition did not save a score project. Review the conversion log.")?;
+        if !success {
+            let log = fs::read_to_string(dir.join("engine.log")).unwrap_or_default();
+            if !metronome_failure(&log) {
+                return Ok(false);
+            }
+            recovering = true;
+        }
+    }
+    // Never reopen the original failed job: only normalize this job's private
+    // project copy. MusicXML and image data pass through without alteration.
+    set_phase(
+        active,
+        if recovering {
+            "recovering"
+        } else {
+            "exporting"
+        },
+    );
+    if let Ok((total, completed)) = project::pages(&source) {
+        let mut job = active.job.lock().unwrap();
+        let progress = job.progress.get_or_insert_with(Progress::default);
+        progress.total_pages = Some(total);
+        progress.completed_pages = completed.len() as u32;
+    }
+    project::make_compatible(&source)?;
+    let mut args = arguments(&source, &output, options);
+    if recovering {
+        set_phase(active, "recovering");
+        args.retain(|a| a != "-transcribe" && a != "-export");
+        args.splice(1..1, ["-step".into(), "PAGE".into()]);
+        // Audiveris 5.11 can return fewer classifier candidates than its
+        // metronome loop expects. Limit only the recovery attempt to top one.
+        args.splice(
+            1..1,
+            [
+                "-constant".into(),
+                "org.audiveris.omr.sig.inter.MetronomeInter.maxEvaluationRank=1".into(),
+            ],
+        );
+        if !run_command(dir, active, engine, options, args, start, "recovery")? {
+            return Ok(false);
+        }
+        // Retried pages can contain more empty glyphs. Normalize after saving
+        // them too, before the separate exporter reloads the book.
+        project::make_compatible(&source)?;
+    }
+    set_phase(active, "exporting");
+    let mut args = arguments(&source, &output, options);
+    args.retain(|a| a != "-transcribe");
+    run_command(dir, active, engine, options, args, start, "export")
+}
+
+fn metronome_failure(log: &str) -> bool {
+    log.contains("MetronomeInter.recognizeNote") && log.contains("IndexOutOfBoundsException")
+}
+
+fn find_project(dir: &Path) -> Option<PathBuf> {
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "omr"))
+}
+
+fn set_phase(active: &Active, phase: &str) {
+    let mut job = active.job.lock().unwrap();
+    let progress = job.progress.get_or_insert_with(Progress::default);
+    progress.phase = phase.into();
+    progress.current_page = None;
+    progress.step.clear();
+}
+
+fn run_command(
+    dir: &Path,
+    active: &Active,
+    engine: &str,
+    options: &Options,
+    args: Vec<String>,
+    start: Instant,
+    phase: &str,
+) -> Result<bool, String> {
+    if active.cancel.load(Ordering::Relaxed) {
+        return Err("Conversion cancelled. Partial output is retained.".into());
+    }
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("engine.log"))
+        .map_err(|e| e.to_string())?;
+    writeln!(log, "\nSonora: {phase}").map_err(|e| e.to_string())?;
     fs::write(
-        dir.join("arguments.json"),
+        dir.join(format!("arguments-{phase}.json")),
         serde_json::to_vec_pretty(&args).unwrap(),
     )
     .map_err(|e| e.to_string())?;
+    let initial_offset = log.metadata().map_err(|e| e.to_string())?.len();
     let mut command = if engine.ends_with(".jar") {
         let mut command = Command::new("java");
         command.args(["-jar", engine]);
@@ -570,8 +712,29 @@ fn run(
                 "Could not start Audiveris: {e}. Install Audiveris 5.11 or choose its launcher."
             )
         })?;
-    let start = Instant::now();
+    let mut observed = BTreeSet::new();
+    let mut offset = initial_offset;
     loop {
+        // Read only newly appended complete lines: large orchestral logs must
+        // not be reread on every UI update.
+        if let Ok(file) = File::open(dir.join("engine.log")) {
+            let mut reader = BufReader::new(file);
+            if reader.seek(SeekFrom::Start(offset)).is_ok() {
+                loop {
+                    let mut line = String::new();
+                    let Ok(n) = reader.read_line(&mut line) else {
+                        break;
+                    };
+                    if n == 0 || !line.ends_with('\n') {
+                        break;
+                    }
+                    offset += n as u64;
+                    let mut job = active.job.lock().unwrap();
+                    let progress = job.progress.get_or_insert_with(Progress::default);
+                    observe_progress(progress, &line, &mut observed);
+                }
+            }
+        }
         if active.cancel.load(Ordering::Relaxed) || start.elapsed() > TIMEOUT {
             stop_child(&mut child);
             return Err(if active.cancel.load(Ordering::Relaxed) {
@@ -793,6 +956,76 @@ pub async fn read_omr_artifact(
     .map_err(|e| e.to_string())?
 }
 
+// Reuse only byte-identical input and identical recognition settings. The
+// source file can have changed since an earlier conversion failed.
+fn same_file(a: &Path, b: &Path) -> bool {
+    let Ok(mut a) = File::open(a) else {
+        return false;
+    };
+    let Ok(mut b) = File::open(b) else {
+        return false;
+    };
+    if a.metadata().ok().map(|m| m.len()) != b.metadata().ok().map(|m| m.len()) {
+        return false;
+    }
+    let mut aa = [0; 65536];
+    let mut bb = [0; 65536];
+    loop {
+        let (Ok(na), Ok(nb)) = (a.read(&mut aa), b.read(&mut bb)) else {
+            return false;
+        };
+        if na != nb || aa[..na] != bb[..nb] {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+    }
+}
+
+fn resumable_project(
+    root: &Path,
+    current: &Path,
+    score: &str,
+    snapshot: &Path,
+    options: &Options,
+) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    for entry in fs::read_dir(root).ok()?.flatten() {
+        if entry.path() == current {
+            continue;
+        }
+        let Ok(job) = load(&entry.path()) else {
+            continue;
+        };
+        if job.score_id != score
+            || job.options != *options
+            || !["failed", "interrupted"].contains(&job.status.as_str())
+        {
+            continue;
+        }
+        // Only the known engine crash is recoverable with this workaround.
+        if !metronome_failure(
+            &fs::read_to_string(entry.path().join("engine.log")).unwrap_or_default(),
+        ) {
+            continue;
+        }
+        let Some(name) = Path::new(&job.source).file_name() else {
+            continue;
+        };
+        if !same_file(snapshot, &entry.path().join("input").join(name)) {
+            continue;
+        }
+        if let Some(project) = find_project(&entry.path().join("output")) {
+            candidates.push((job.created_at, project));
+        }
+    }
+    candidates
+        .into_iter()
+        .max_by_key(|(stamp, _)| *stamp)
+        .map(|(_, path)| path)
+}
+
 #[tauri::command]
 pub async fn start_omr(
     app: tauri::AppHandle,
@@ -870,6 +1103,7 @@ pub async fn start_omr(
         warnings: Vec::new(),
         error: None,
         log_tail: String::new(),
+        progress: None,
     };
     persist(&dir, &job)?;
     let active = Arc::new(Active {
@@ -877,13 +1111,24 @@ pub async fn start_omr(
         cancel: AtomicBool::new(false),
     });
     let worker = active.clone();
+    let history_root = root(&app)?;
     let handle = std::thread::Builder::new().name("sonora-omr".into()).spawn(move || {
         // A private snapshot prevents original-file edits from changing a running job.
         let source_dir = dir.join("input");
         let snapshot = source_dir.join(input.file_name().unwrap_or_else(|| std::ffi::OsStr::new("score")));
         let outcome = fs::create_dir_all(source_dir).map_err(|e| e.to_string())
             .and_then(|_| fs::copy(&input, &snapshot).map_err(|e| e.to_string()))
-            .and_then(|_| run(&dir, &worker, &engine, &snapshot, &options));
+            .and_then(|_| {
+                let saved = resumable_project(&history_root, &dir, &worker.job.lock().unwrap().score_id, &snapshot, &options);
+                let source = if let Some(saved) = saved {
+                    set_phase(&worker, "recovering");
+                    fs::create_dir_all(dir.join("output")).map_err(|e| e.to_string())?;
+                    let destination = dir.join("output").join(saved.file_name().ok_or("Missing project filename")?);
+                    fs::copy(&saved, &destination).map_err(|e| e.to_string())?;
+                    destination
+                } else { snapshot.clone() };
+                run(&dir, &worker, &engine, &source, &options)
+            });
         let mut job = worker.job.lock().unwrap().clone();
         let mut artifacts = Vec::new();
         let mut warnings = Vec::new();
@@ -904,6 +1149,9 @@ pub async fn start_omr(
                 job.status = if worker.cancel.load(Ordering::Relaxed) { "cancelled" } else { "failed" }.into();
                 job.error = Some(error);
             }
+        }
+        if let Some(progress) = job.progress.as_mut() {
+            progress.phase = job.status.clone();
         }
         job.artifacts = artifacts;
         job.warnings = warnings;
@@ -1135,6 +1383,83 @@ mod tests {
     }
 
     #[test]
+    fn progress_tracks_pages_and_export_without_counting_duplicate_lines() {
+        let mut progress = Progress::default();
+        let mut done = BTreeSet::new();
+        observe_progress(
+            &mut progress,
+            "INFO [book] Book 560 | 17 sheets in score.pdf",
+            &mut done,
+        );
+        observe_progress(
+            &mut progress,
+            "INFO [book#4] StepMonitoring 98 | TEXTS",
+            &mut done,
+        );
+        assert_eq!(progress.total_pages, Some(17));
+        assert_eq!(progress.current_page, Some(4));
+        assert_eq!(progress.step, "TEXTS");
+        for _ in 0..2 {
+            observe_progress(
+                &mut progress,
+                "INFO [book#4] Book 2050 | End of Stub#4",
+                &mut done,
+            );
+        }
+        assert_eq!(progress.completed_pages, 1);
+        observe_progress(
+            &mut progress,
+            "INFO [book] PartwiseBuilder 2707 | Exporting sheet(s): [#1#2]",
+            &mut done,
+        );
+        assert_eq!(progress.phase, "exporting");
+        assert_eq!(progress.current_page, None);
+    }
+
+    #[test]
+    fn changed_source_or_settings_cannot_reuse_failed_recognition() {
+        let root = temporary_dir();
+        let old = root.join("old");
+        fs::create_dir_all(old.join("input")).unwrap();
+        fs::create_dir_all(old.join("output")).unwrap();
+        fs::write(old.join("input/score.pdf"), b"original").unwrap();
+        fs::write(old.join("output/score.omr"), b"fixture").unwrap();
+        fs::write(
+            old.join("engine.log"),
+            b"ArrayIndexOutOfBoundsException MetronomeInter.recognizeNote",
+        )
+        .unwrap();
+        let options = Options::default();
+        let job = Job {
+            id: "old".into(),
+            score_id: "score".into(),
+            status: "failed".into(),
+            created_at: 1,
+            options: options.clone(),
+            source: "/source/score.pdf".into(),
+            engine: "Audiveris".into(),
+            artifacts: vec![],
+            warnings: vec![],
+            error: None,
+            log_tail: String::new(),
+            progress: None,
+        };
+        persist(&old, &job).unwrap();
+        let source = root.join("score.pdf");
+        fs::write(&source, b"original").unwrap();
+        assert!(resumable_project(&root, &root.join("new"), "score", &source, &options).is_some());
+        fs::write(&source, b"changed!").unwrap();
+        assert!(resumable_project(&root, &root.join("new"), "score", &source, &options).is_none());
+        fs::write(&source, b"original").unwrap();
+        let changed = Options {
+            dpi: 300,
+            ..options
+        };
+        assert!(resumable_project(&root, &root.join("new"), "score", &source, &changed).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn review_keeps_musicxml_bytes_and_all_movements() {
         let dir = temporary_dir();
         let xml = br#"<?xml version="1.0"?><score-partwise><part-list/><part id="P1"><measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><notations><ornaments><trill-mark/></ornaments></notations></note></measure></part></score-partwise>"#;
@@ -1188,6 +1513,7 @@ mod tests {
             warnings: vec![],
             error: None,
             log_tail: String::new(),
+            progress: None,
         };
         let active = Arc::new(Active {
             job: Mutex::new(job),
@@ -1239,6 +1565,9 @@ mod tests {
             options = automatic_options(&context);
             options.last_page = Some(1);
         }
+        if input.extension().is_some_and(|e| e == "omr") {
+            options.last_page = None;
+        }
         let job = Job {
             id: "1".into(),
             score_id: "test".into(),
@@ -1251,10 +1580,19 @@ mod tests {
             warnings: vec![],
             error: None,
             log_tail: String::new(),
+            progress: None,
         };
         let active = Active {
             job: Mutex::new(job),
             cancel: AtomicBool::new(false),
+        };
+        let input = if input.extension().is_some_and(|e| e == "omr") {
+            fs::create_dir_all(dir.join("output")).unwrap();
+            let destination = dir.join("output/recovered.omr");
+            fs::copy(&input, &destination).unwrap();
+            destination
+        } else {
+            input
         };
         let success = run(&dir, &active, &engine, &input, &options).unwrap();
         let mut artifacts = Vec::new();
