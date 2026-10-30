@@ -43,7 +43,10 @@ Sonora passes a private copy of the original document to Audiveris, rather than 
 viewer thumbnail. PDFs are rendered in grayscale at 400 DPI. Image inputs retain
 their original resolution. The entire document is processed; Audiveris identifies
 valid music sheets and the result reports rejected or unfinished source pages.
-Lyrics, articulations, dynamics and tremolos are enabled. Small-note searches are
+Articulations, dynamics and tremolos are enabled. Lyrics remain enabled for vocal
+and unknown scores; clearly instrumental metadata disables lyric searches so
+expression text is not treated as sung syllables. Vocal metadata takes precedence
+when singers and instruments appear together. Small-note searches are
 chosen for cue/cadenza/grace-note metadata instead of being enabled indiscriminately.
 Fingering recognition is chosen for piano/study metadata. Language packs are chosen
 from composer, country, title and instrument metadata, with common European
@@ -57,6 +60,14 @@ survive to the extent Audiveris exports them. The `.omr` project retains graysca
 images for correction and re-export in Audiveris. MusicXML imported into Sonora is
 also stored without altering its contents. Visual engraving support is determined
 by OpenSheetMusicDisplay; some notation may need review against the source.
+
+Staff grouping accepts a brace even when internal barlines do not connect the
+staves, preserving piano and other grand-staff parts through cadenzas. Header
+recognition searches six interlines after a clef/key and considers up to eight
+classifier candidates for time/key items, keeping the engine's existing confidence
+and geometric checks. This helps prevent an incompletely recognized key from
+hiding a time signature and allowing its digits to become false notes. It does not
+force a key, meter, pitch or duration based on a composer's name or work title.
 
 A successful engine exit alone is insufficient: Sonora requires readable partwise
 MusicXML containing notes. It surfaces OCR failures and checks source-page coverage.
@@ -86,7 +97,8 @@ No pixels are added and the original failed job is retained. If recognition hits
 the known metronome classifier index error, Sonora automatically retries the saved
 book with a bounded metronome candidate search. Completed recognition is reused.
 Clicking **Convert again** also reuses a failed book with this error, provided its
-source bytes and recognition options match. Changed inputs are processed afresh.
+source bytes, recognition options and recognition-pipeline revision match. Changed
+inputs and failed projects from older pipeline revisions are processed afresh.
 Other errors remain visible in the log; recovery does not guarantee recognition
 accuracy. Missing or unfinished pages are called out in the result.
 
@@ -145,4 +157,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 The vocal conversion fixture is Audiveris's public
 [Schumann Dichterliebe example](https://github.com/Audiveris/audiveris/blob/5.11.0/data/examples/Dichterliebe01.pdf).
-These are functional tests, not an accuracy benchmark.
+The integration test also accepts `SONORA_OMR_TEST_EXPECT_PARTS` and
+`SONORA_OMR_TEST_EXPECT_METER` (for example, `1` and `2/4`) to check known source
+structure. These are functional tests, not an accuracy benchmark.

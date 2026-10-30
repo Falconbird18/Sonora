@@ -18,6 +18,7 @@ use std::{
 };
 use tauri::Manager;
 
+const RECOGNITION_REVISION: u32 = 2;
 const XML_LIMIT: u64 = 64 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -94,6 +95,8 @@ pub struct Progress {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Job {
+    #[serde(default)]
+    recognition_revision: u32,
     id: String,
     score_id: String,
     status: String,
@@ -181,7 +184,45 @@ fn automatic_options(context: &str) -> Options {
     }
     languages.sort_unstable();
     languages.dedup();
+    // Unknown scores retain lyrics. Explicit instrumental metadata disables
+    // lyric searches unless a vocal part is named in the same context.
+    let words: Vec<_> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let contains = |hints: &[&str]| hints.iter().any(|hint| words.contains(hint));
+    let vocal = contains(&[
+        "voice", "voices", "vocal", "choir", "choral", "chorus", "song", "songs", "lied", "lieder",
+        "opera", "oratorio", "cantata", "requiem", "missa", "mass", "motet", "aria", "lyrics",
+        "soprano", "tenor", "baritone",
+    ]);
+    let instrumental = contains(&[
+        "piano",
+        "violin",
+        "viola",
+        "cello",
+        "violoncello",
+        "flute",
+        "oboe",
+        "clarinet",
+        "bassoon",
+        "horn",
+        "trumpet",
+        "trombone",
+        "orchestra",
+        "orchestral",
+        "symphony",
+        "quartet",
+        "quintet",
+        "sonata",
+        "concerto",
+        "étude",
+        "etude",
+        "study",
+        "studies",
+    ]);
     Options {
+        lyrics: vocal || !instrumental,
         languages: languages.join("+"),
         small_notes: ["cue notes", "small notes", "cadenza", "grace notes"]
             .iter()
@@ -422,6 +463,27 @@ fn arguments(input: &Path, output: &Path, options: &Options) -> Vec<String> {
         (
             "org.audiveris.omr.sheet.BookManager.useCompression",
             "false".into(),
+        ),
+        // A partially read key can leave the time signature beyond the stock
+        // four-interline search window. Recognize it before HEADS mistakes its
+        // digits for notes; retain the engine's geometric and grade checks.
+        (
+            "org.audiveris.omr.sheet.time.TimeBuilder.roiWidth",
+            "6.0".into(),
+        ),
+        (
+            "org.audiveris.omr.sheet.time.TimeBuilder.maxEvalRank",
+            "8".into(),
+        ),
+        (
+            "org.audiveris.omr.sheet.key.KeyExtractor.maxEvalRank",
+            "8".into(),
+        ),
+        // Classical grand staves can have braces without connected internal
+        // barlines (notably cadenzas). Keep the hands in a single logical part.
+        (
+            "org.audiveris.omr.sheet.ProcessingSwitches.disconnectedBracedParts",
+            "true".into(),
         ),
         (
             "org.audiveris.omr.sheet.ProcessingSwitches.keepGrayImages",
@@ -998,7 +1060,8 @@ fn resumable_project(
         let Ok(job) = load(&entry.path()) else {
             continue;
         };
-        if job.score_id != score
+        if job.recognition_revision != RECOGNITION_REVISION
+            || job.score_id != score
             || job.options != *options
             || !["failed", "interrupted"].contains(&job.status.as_str())
         {
@@ -1092,6 +1155,7 @@ pub async fn start_omr(
     let dir = job_dir(&root(&app)?, &id)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let job = Job {
+        recognition_revision: RECOGNITION_REVISION,
         id,
         score_id,
         status: "running".into(),
@@ -1301,6 +1365,10 @@ mod tests {
             "org.audiveris.omr.image.ImageLoading.pdfResolution=400",
             "org.audiveris.omr.sheet.ProcessingSwitches.smallHeads=true",
             "org.audiveris.omr.sheet.ProcessingSwitches.tremolos=true",
+            "org.audiveris.omr.sheet.ProcessingSwitches.disconnectedBracedParts=true",
+            "org.audiveris.omr.sheet.time.TimeBuilder.roiWidth=6.0",
+            "org.audiveris.omr.sheet.time.TimeBuilder.maxEvalRank=8",
+            "org.audiveris.omr.sheet.key.KeyExtractor.maxEvalRank=8",
         ] {
             assert!(args.iter().any(|s| s == value), "{value}");
         }
@@ -1322,6 +1390,13 @@ mod tests {
             .languages
             .contains("rus"));
         assert!(automatic_options("").languages.contains("fra"));
+        assert!(!automatic_options("Beethoven piano sonata").lyrics);
+        assert!(!automatic_options("String quartet").lyrics);
+        assert!(automatic_options("Songs for voice and piano").lyrics);
+        assert!(automatic_options("Choral symphony and orchestra").lyrics);
+        assert!(automatic_options("").lyrics);
+        // Substring matching would incorrectly classify Mussorgsky as a song.
+        assert!(!automatic_options("Mussorgsky piano suite").lyrics);
     }
     #[test]
     fn rejects_bad_ranges_and_job_traversal() {
@@ -1431,6 +1506,7 @@ mod tests {
         .unwrap();
         let options = Options::default();
         let job = Job {
+            recognition_revision: RECOGNITION_REVISION,
             id: "old".into(),
             score_id: "score".into(),
             status: "failed".into(),
@@ -1448,6 +1524,14 @@ mod tests {
         let source = root.join("score.pdf");
         fs::write(&source, b"original").unwrap();
         assert!(resumable_project(&root, &root.join("new"), "score", &source, &options).is_some());
+        let mut legacy = serde_json::to_value(&job).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("recognition_revision");
+        fs::write(old.join("job.json"), serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(resumable_project(&root, &root.join("new"), "score", &source, &options).is_none());
+        persist(&old, &job).unwrap();
         fs::write(&source, b"changed!").unwrap();
         assert!(resumable_project(&root, &root.join("new"), "score", &source, &options).is_none());
         fs::write(&source, b"original").unwrap();
@@ -1502,6 +1586,7 @@ mod tests {
             ..Options::default()
         };
         let job = Job {
+            recognition_revision: RECOGNITION_REVISION,
             id: "1".into(),
             score_id: "test".into(),
             status: "running".into(),
@@ -1569,6 +1654,7 @@ mod tests {
             options.last_page = None;
         }
         let job = Job {
+            recognition_revision: RECOGNITION_REVISION,
             id: "1".into(),
             score_id: "test".into(),
             status: "running".into(),
@@ -1616,6 +1702,34 @@ mod tests {
                 .any(|w| w.contains("Missing support") || w.contains("No installed OCR")),
             "{warnings:?}"
         );
+        if let Ok(expected) = std::env::var("SONORA_OMR_TEST_EXPECT_PARTS") {
+            let expected = expected.parse::<usize>().unwrap();
+            for artifact in artifacts.iter().filter(|a| a.kind == "musicxml") {
+                assert_eq!(artifact.review.as_ref().unwrap().parts, expected);
+            }
+        }
+        if let Ok(expected) = std::env::var("SONORA_OMR_TEST_EXPECT_METER") {
+            let (beats, unit) = expected.split_once('/').unwrap();
+            let artifact = artifacts.iter().find(|a| a.kind == "musicxml").unwrap();
+            let xml = fs::read_to_string(dir.join(&artifact.name)).unwrap();
+            let first_measure = xml
+                .split("<measure ")
+                .nth(1)
+                .unwrap()
+                .split("</measure>")
+                .next()
+                .unwrap();
+            let compact: String = first_measure
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            assert!(
+                compact.contains(&format!(
+                    "<beats>{beats}</beats><beat-type>{unit}</beat-type>"
+                )),
+                "Initial meter was not preserved: {expected}"
+            );
+        }
         if std::env::var("SONORA_OMR_TEST_EXPECT_LYRICS").is_ok() {
             assert!(
                 artifacts
