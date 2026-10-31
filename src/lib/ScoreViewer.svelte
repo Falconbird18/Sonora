@@ -255,7 +255,11 @@
 		lastT: number;
 	};
 
-	let panDrag = $state<PanDrag | null>(null);
+	let panDrag = $state.raw<PanDrag | null>(null);
+	let panCapture: HTMLElement | null = null;
+	let panRaf = 0;
+	let pendingPanX = 0;
+	let pendingPanY = 0;
 	let panVx = 0;
 	let panVy = 0;
 	let panMomentumRaf = 0;
@@ -636,11 +640,22 @@
 			void flushPendingAnnotations();
 		};
 		window.addEventListener('pagehide', onPageHide);
+		window.addEventListener('pointerup', onWorkspacePointerUp, true);
+		window.addEventListener('pointercancel', onWorkspacePointerUp, true);
+		window.addEventListener('blur', cancelPanGesture);
+		window.addEventListener('mouseup', onWindowMouseUp, true);
+		document.addEventListener('visibilitychange', cancelPanGesture);
 		return () => {
 			window.removeEventListener('keydown', key);
 			document.removeEventListener('fullscreenchange', onFullscreen);
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.removeEventListener('pagehide', onPageHide);
+			window.removeEventListener('pointerup', onWorkspacePointerUp, true);
+			window.removeEventListener('pointercancel', onWorkspacePointerUp, true);
+			window.removeEventListener('blur', cancelPanGesture);
+			window.removeEventListener('mouseup', onWindowMouseUp, true);
+			document.removeEventListener('visibilitychange', cancelPanGesture);
+			cancelPanGesture();
 			if (host) {
 				host.removeEventListener('touchstart', onPinchTouchStart);
 				host.removeEventListener('touchmove', onPinchTouchMove);
@@ -1948,6 +1963,7 @@
 		value: number,
 		opts: { immediate?: boolean; focusX?: number; focusY?: number } = {}
 	) {
+		flushPan();
 		stopPanMomentum();
 		const next = Math.max(0.35, Math.min(3, Number(value.toFixed(3))));
 		const prev = zoom;
@@ -2083,7 +2099,7 @@
 	}
 
 	function resetPan() {
-		stopPanMomentum();
+		cancelPanGesture();
 		panX = 0;
 		panY = 0;
 		needsCenter = true;
@@ -2138,9 +2154,8 @@
 				active.canvas.releasePointerCapture(active.pointerId);
 			} catch {}
 		}
-		panDrag = null;
+		cancelPanGesture();
 		panMoved = true;
-		stopPanMomentum();
 	}
 	function onPinchTouchStart(event: TouchEvent) {
 		if (event.touches.length !== 2 || !host) return;
@@ -2181,10 +2196,43 @@
 		if (event.touches.length < 2) pinch = null;
 	}
 
+	function flushPan() {
+		if (panRaf) cancelAnimationFrame(panRaf);
+		panRaf = 0;
+		panX += pendingPanX;
+		panY += pendingPanY;
+		pendingPanX = 0;
+		pendingPanY = 0;
+	}
+	function cancelPanGesture() {
+		flushPan();
+		const pointerId = panDrag?.pointerId;
+		panDrag = null;
+		const capture = panCapture;
+		panCapture = null;
+		if (pointerId !== undefined) {
+			panMoved = true;
+			try {
+				capture?.releasePointerCapture(pointerId);
+			} catch {}
+		}
+		stopPanMomentum();
+	}
+	function onWindowMouseUp(event: MouseEvent) {
+		if (event.button === 0 && panDrag) cancelPanGesture();
+	}
+	function onWorkspaceDragStart(event: DragEvent) {
+		event.preventDefault();
+		cancelPanGesture();
+	}
+
 	function onWorkspacePointerDown(event: PointerEvent) {
 		if (event.pointerType === 'touch') return;
-		if (annotating || textEditor || pinch || panDrag) return;
+		if (annotating || textEditor || pinch) return;
+		// A fresh press must recover even if the previous release was lost.
+		if (panDrag) cancelPanGesture();
 		if (event.button !== 0 && event.pointerType === 'mouse') return;
+		event.preventDefault();
 		stopPanMomentum();
 		panMoved = false;
 		panStartX = event.clientX;
@@ -2197,24 +2245,31 @@
 		};
 		panVx = 0;
 		panVy = 0;
+		panCapture =
+			(event.target as HTMLElement).closest<HTMLElement>('.page-hit') ??
+			workspace;
 		try {
-			(
-				(event.target as HTMLElement).closest<HTMLElement>('.page-hit') ??
-				(event.currentTarget as HTMLElement)
-			).setPointerCapture(event.pointerId);
+			panCapture?.setPointerCapture(event.pointerId);
 		} catch {}
 	}
 
 	function onWorkspacePointerMove(event: PointerEvent) {
 		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
+		// Recover from a release outside the window or an interrupted native drag.
+		if (event.pointerType === 'mouse' && !(event.buttons & 1)) {
+			cancelPanGesture();
+			return;
+		}
+		event.preventDefault();
 		const now = performance.now();
 		if (Math.hypot(event.clientX - panStartX, event.clientY - panStartY) > 5)
 			panMoved = true;
 		const dt = Math.max(8, now - panDrag.lastT);
 		const dx = event.clientX - panDrag.lastX;
 		const dy = event.clientY - panDrag.lastY;
-		panX += dx;
-		panY += dy;
+		pendingPanX += dx;
+		pendingPanY += dy;
+		if (!panRaf) panRaf = requestAnimationFrame(flushPan);
 		// velocity in px per frame (~16ms)
 		const scale = 16 / dt;
 		panVx = dx * scale;
@@ -2227,12 +2282,12 @@
 	function onWorkspacePointerUp(event: PointerEvent) {
 		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
 		const stale = performance.now() - panDrag.lastT > 80;
+		flushPan();
 		panDrag = null;
+		const capture = panCapture;
+		panCapture = null;
 		try {
-			(
-				(event.target as HTMLElement).closest<HTMLElement>('.page-hit') ??
-				(event.currentTarget as HTMLElement)
-			).releasePointerCapture(event.pointerId);
+			capture?.releasePointerCapture(event.pointerId);
 		} catch {}
 		if (
 			event.type === 'pointerup' &&
@@ -2249,6 +2304,7 @@
 	}
 
 	function onWheel(event: WheelEvent) {
+		flushPan();
 		event.preventDefault();
 		stopPanMomentum();
 		if (event.ctrlKey || event.metaKey) {
@@ -2577,6 +2633,7 @@
 		class:is-panning={!!panDrag}
 		class:is-annotating={annotating}
 		onwheel={onWheel}
+		ondragstart={onWorkspaceDragStart}
 		onpointerdown={onWorkspacePointerDown}
 		onpointermove={onWorkspacePointerMove}
 		onpointerup={onWorkspacePointerUp}
@@ -2622,6 +2679,7 @@
 		{#if !hasPainted && page === 1 && score.thumbnailUrl && !error}
 			<img
 				class="opening-preview"
+				draggable="false"
 				src={score.thumbnailUrl}
 				alt=""
 				aria-hidden="true" />

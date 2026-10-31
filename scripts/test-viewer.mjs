@@ -17,6 +17,10 @@ const source = ts.createSourceFile(
 	ts.ScriptKind.TS
 );
 const names = new Set([
+	'flushPan',
+	'cancelPanGesture',
+	'onWorkspaceDragStart',
+	'onWindowMouseUp',
 	'setZoom',
 	'onWheel',
 	'stopPanMomentum',
@@ -65,6 +69,10 @@ const context = vm.createContext({
 	panVy: 0,
 	panMomentumRaf: 0,
 	panDrag: null,
+	panCapture: null,
+	panRaf: 0,
+	pendingPanX: 0,
+	pendingPanY: 0,
 	panMoved: false,
 	panStartX: 0,
 	panStartY: 0,
@@ -108,6 +116,8 @@ const target = { closest: () => null };
 const pointer = {
 	pointerId: 1,
 	pointerType: 'mouse',
+	buttons: 1,
+	preventDefault() {},
 	button: 0,
 	clientX: 100,
 	clientY: 100,
@@ -118,6 +128,7 @@ context.onWorkspacePointerDown(pointer);
 assert.ok(context.panDrag, 'reading mode permits pan');
 now += 16;
 context.onWorkspacePointerMove({ ...pointer, clientX: 140, clientY: 120 });
+frame();
 const beforeRelease = context.panX;
 context.onWorkspacePointerUp({ ...pointer, type: 'pointerup' });
 frame();
@@ -129,25 +140,123 @@ now += 16;
 context.onWorkspacePointerMove({ ...pointer, clientX: 140 });
 context.onWorkspacePointerUp({ ...pointer, type: 'pointercancel' });
 assert.equal(context.panMomentumRaf, 0, 'cancelled gestures do not fling');
+
+// A missed mouse-up must not leave the viewer dragging on hover.
+context.onWorkspacePointerDown(pointer);
+now += 16;
+context.onWorkspacePointerMove({ ...pointer, clientX: 160 });
+const beforeHover = context.panX;
+context.onWorkspacePointerMove({ ...pointer, buttons: 0, clientX: 500 });
+assert.equal(context.panDrag, null, 'released button cancels stale pan');
+frame();
+assert.equal(
+	context.panX,
+	beforeHover + 60,
+	'hover adds no motion after missed release'
+);
+assert.equal(
+	context.panMomentumRaf,
+	0,
+	'missed release does not start momentum'
+);
+context.onWorkspacePointerDown(pointer);
+context.onWorkspacePointerDown({ ...pointer, clientX: 200 });
+assert.equal(
+	context.panStartX,
+	200,
+	'fresh press recovers an interrupted drag'
+);
+context.cancelPanGesture();
+assert.equal(context.panCapture, null, 'blur/cancellation releases capture');
+assert.equal(context.panDrag, null, 'blur/cancellation clears dragging cursor');
+let preventedDrag = false;
+context.onWorkspacePointerDown(pointer);
+context.onWorkspaceDragStart({
+	preventDefault() {
+		preventedDrag = true;
+	}
+});
+assert.ok(preventedDrag, 'native drag ghost is prevented');
+assert.equal(context.panDrag, null, 'native drag interruption clears pan');
+context.onWorkspacePointerDown(pointer);
+const beforeBatch = context.panX;
+context.onWorkspacePointerMove({ ...pointer, clientX: 120 });
+context.onWorkspacePointerMove({ ...pointer, clientX: 150 });
+assert.equal(context.panX, beforeBatch, 'pointer moves wait for display frame');
+assert.equal(frames.size, 1, 'rapid moves share a single frame');
+frame();
+assert.equal(
+	context.panX,
+	beforeBatch + 50,
+	'frame retains every movement delta'
+);
+context.onWorkspacePointerUp({ ...pointer, type: 'lostpointercapture' });
+assert.equal(context.panDrag, null, 'lost capture clears pan');
+assert.equal(context.panMomentumRaf, 0, 'lost capture does not fling');
+context.onWorkspacePointerDown(pointer);
+context.onWindowMouseUp({button: 0});
+assert.equal(context.panDrag, null, 'mouse-up recovers when pointer-up is missing');
+assert.equal(context.panCapture, null, 'fallback mouse-up releases captured element');
 console.log('Viewer gesture regressions passed');
 
 // The new preference must coexist with main's handwriting settings and old saves.
 const stores = await import('svelte/store');
-const settingsSource = fs.readFileSync(new URL('../src/lib/settingsStore.ts', import.meta.url), 'utf8');
+const settingsSource = fs.readFileSync(
+	new URL('../src/lib/settingsStore.ts', import.meta.url),
+	'utf8'
+);
 function loadSettings(saved) {
-  let raw = JSON.stringify(saved);
-  const exports = {};
-  vm.runInNewContext(ts.transpile(settingsSource, {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}), {
-    exports, require: name => { assert.equal(name, 'svelte/store'); return stores; },
-    localStorage: {getItem: () => raw, setItem: (_key, value) => { raw = value; }}
-  });
-  return {store: exports.settings, saved: () => JSON.parse(raw)};
+	let raw = JSON.stringify(saved);
+	const exports = {};
+	vm.runInNewContext(
+		ts.transpile(settingsSource, {
+			module: ts.ModuleKind.CommonJS,
+			target: ts.ScriptTarget.ES2022
+		}),
+		{
+			exports,
+			require: (name) => {
+				assert.equal(name, 'svelte/store');
+				return stores;
+			},
+			localStorage: {
+				getItem: () => raw,
+				setItem: (_key, value) => {
+					raw = value;
+				}
+			}
+		}
+	);
+	return { store: exports.settings, saved: () => JSON.parse(raw) };
 }
-const preferences = loadSettings({handwritingPauseMs: 2750, handwritingMode: 'music'});
-assert.equal(stores.get(preferences.store).pageShadows, true, 'old saves retain shadows by default');
-preferences.store.patch({pageShadows: false});
-assert.equal(preferences.saved().pageShadows, false, 'shadow preference persists');
-assert.equal(preferences.saved().handwritingPauseMs, 2750, 'handwriting pause is preserved');
-assert.equal(preferences.saved().handwritingMode, 'music', 'handwriting mode is preserved');
-assert.equal(stores.get(loadSettings(preferences.saved()).store).pageShadows, false, 'disabled shadows survive reload');
+const preferences = loadSettings({
+	handwritingPauseMs: 2750,
+	handwritingMode: 'music'
+});
+assert.equal(
+	stores.get(preferences.store).pageShadows,
+	true,
+	'old saves retain shadows by default'
+);
+preferences.store.patch({ pageShadows: false });
+assert.equal(
+	preferences.saved().pageShadows,
+	false,
+	'shadow preference persists'
+);
+assert.equal(
+	preferences.saved().handwritingPauseMs,
+	2750,
+	'handwriting pause is preserved'
+);
+assert.equal(
+	preferences.saved().handwritingMode,
+	'music',
+	'handwriting mode is preserved'
+);
+assert.equal(
+	stores.get(loadSettings(preferences.saved()).store).pageShadows,
+	false,
+	'disabled shadows survive reload'
+);
 console.log('Viewer settings persistence regressions passed');
