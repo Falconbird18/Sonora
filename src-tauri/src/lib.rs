@@ -2181,6 +2181,30 @@ fn read_text_file(path: String) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            #[cfg(target_os = "linux")]
+            {
+                use gtk::prelude::WidgetExt;
+                use tauri::Manager;
+
+                let window = app.get_webview_window("main")
+                    .ok_or("Main webview window is missing")?;
+                window.with_webview(|webview| {
+                    // WebKitGTK handles native touchpad pinches independently of DOM
+                    // wheel events. Stop only that gesture before its default handler.
+                    webview.inner().connect_event(|_, event| {
+                        if event.event_type() == gtk::gdk::EventType::TouchpadPinch {
+                            gtk::glib::Propagation::Stop
+                        } else {
+                            gtk::glib::Propagation::Proceed
+                        }
+                    });
+                })?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = app;
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![

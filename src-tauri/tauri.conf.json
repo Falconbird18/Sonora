@@ -20,6 +20,7 @@
         "minHeight": 560,
         "resizable": true,
         "dragDropEnabled": false,
+        "zoomHotkeysEnabled": false,
         "fullscreen": false,
         "center": true,
         "focus": true
