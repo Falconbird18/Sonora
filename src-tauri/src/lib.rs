@@ -1431,7 +1431,8 @@ async fn imslp_download_score(
     // 1) Disclaimer / wait page
     let accept_result = fetch_bytes(&client, &accept_url).await;
     let accept_error = accept_result.as_ref().err().cloned().unwrap_or_default();
-    let accept_bytes = accept_result.unwrap_or_default();
+    let (accept_bytes, accept_base) =
+        accept_result.unwrap_or_else(|_| (Vec::new(), accept_url.clone()));
     if accept_bytes.starts_with(b"%PDF") {
         return finish_download(
             filename,
@@ -1444,10 +1445,13 @@ async fn imslp_download_score(
         );
     }
     let accept_html = String::from_utf8_lossy(&accept_bytes).into_owned();
-    push_unique(&mut candidates, extract_all_mirror_urls(&accept_html));
+    push_unique(
+        &mut candidates,
+        extract_download_links(&accept_html, &accept_base),
+    );
 
     // 2) Image handler page
-    if let Ok(handler_bytes) = fetch_bytes(&client, &handler_url).await {
+    if let Ok((handler_bytes, handler_base)) = fetch_bytes(&client, &handler_url).await {
         if handler_bytes.starts_with(b"%PDF") {
             return finish_download(
                 filename,
@@ -1460,7 +1464,10 @@ async fn imslp_download_score(
             );
         }
         let handler_html = String::from_utf8_lossy(&handler_bytes).into_owned();
-        push_unique(&mut candidates, extract_all_mirror_urls(&handler_html));
+        push_unique(
+            &mut candidates,
+            extract_download_links(&handler_html, &handler_base),
+        );
     }
 
     // 3) MediaWiki imageinfo (direct file URL on imslp.org)
@@ -1488,9 +1495,13 @@ async fn imslp_download_score(
     }
 
     let mut last_err = String::new();
-    for url in candidates {
+    let mut next = 0;
+    // Bound traversal and deduplicate links so disclaimer loops cannot run forever.
+    while next < candidates.len() && next < 32 {
+        let url = candidates[next].clone();
+        next += 1;
         match fetch_bytes(&client, &url).await {
-            Ok(bytes) if bytes.starts_with(b"%PDF") => {
+            Ok((bytes, _)) if bytes.starts_with(b"%PDF") => {
                 return finish_download(
                     filename,
                     library_root,
@@ -1501,7 +1512,11 @@ async fn imslp_download_score(
                     bytes,
                 );
             }
-            Ok(_) => {
+            Ok((bytes, base)) => {
+                let html = String::from_utf8_lossy(&bytes);
+                for link in extract_download_links(&html, &base) {
+                    push_unique(&mut candidates, mirror_alternates(&link));
+                }
                 last_err = format!("Mirror returned non-PDF content ({url})");
             }
             Err(e) => {
@@ -1515,7 +1530,7 @@ async fn imslp_download_score(
     ))
 }
 
-async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<(Vec<u8>, String), String> {
     let resp = client
         .get(url)
         .header(
@@ -1523,7 +1538,10 @@ async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, Str
             "application/pdf,text/html,application/xhtml+xml,*/*;q=0.8",
         )
         .header("Referer", "https://imslp.org/")
-        .header("Cookie", "redirectPassed=1; imslpdisclaimeraccepted=yes")
+        .header(
+            "Cookie",
+            "redirectPassed=1; imslpdisclaimeraccepted=yes; disclaimer_bypass=OK",
+        )
         .timeout(std::time::Duration::from_secs(45))
         .send()
         .await
@@ -1532,11 +1550,12 @@ async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, Str
     if !resp.status().is_success() {
         return Err(format!("HTTP {} from {url}", resp.status()));
     }
+    let final_url = resp.url().to_string();
     let b = resp
         .bytes()
         .await
         .map_err(|e| format!("Failed reading body from {url}: {e}"))?;
-    Ok(b.to_vec())
+    Ok((b.to_vec(), final_url))
 }
 
 fn finish_download(
@@ -1882,6 +1901,33 @@ fn push_unique(out: &mut Vec<String>, items: Vec<String>) {
     }
 }
 
+/// Resolve regional disclaimer links against the final response URL, not imslp.org.
+fn extract_download_links(html: &str, base: &str) -> Vec<String> {
+    let mut links = extract_all_mirror_urls(html);
+    let Ok(base) = reqwest::Url::parse(base) else {
+        return links;
+    };
+    for prefix in ["href=\"", "href='"] {
+        let quote = prefix.chars().last().unwrap();
+        for rest in html.split(prefix).skip(1) {
+            let Some(raw) = rest.split(quote).next() else {
+                continue;
+            };
+            let decoded = decode_basic_html_entities(raw);
+            let Ok(url) = base.join(&decoded) else {
+                continue;
+            };
+            // Only follow file links on the server that supplied the disclaimer.
+            if url.origin() == base.origin() && url.path().starts_with("/files/") {
+                if let Some(link) = normalize_mirror_candidate(url.as_str()) {
+                    push_unique(&mut links, vec![link]);
+                }
+            }
+        }
+    }
+    links
+}
+
 /// Collect every plausible mirror URL from a wait / handler HTML page.
 fn extract_all_mirror_urls(html: &str) -> Vec<String> {
     let mut found = Vec::new();
@@ -2167,6 +2213,19 @@ pub fn run() {
 
 #[cfg(test)]
 mod imslp_tests {
+    #[test]
+    fn regional_disclaimer_preserves_final_host_and_full_filename() {
+        let html = include_str!("../tests/fixtures/imslp-eu-disclaimer.html");
+        let links = super::extract_download_links(
+            html,
+            "https://imslp.eu/linkhandler.php?path=/imglnks/euimg/f/f4/score.pdf",
+        );
+        assert_eq!(links, vec!["https://imslp.eu/files/imglnks/euimg/f/f4/IMSLP468317-PMLP3433-Mozart,_Wofgang_Amadeus-NMA_08_23_2_02_KV_376_scan.pdf"]);
+        let unrelated =
+            "<a href='/help'>Help</a><a href='https://example.com/files/test.pdf'>Other</a>";
+        assert!(super::extract_download_links(unrelated, "https://imslp.eu/").is_empty());
+    }
+
     use super::*;
 
     #[test]

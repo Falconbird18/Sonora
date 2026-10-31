@@ -259,6 +259,9 @@
 	let panVx = 0;
 	let panVy = 0;
 	let panMomentumRaf = 0;
+	let panMoved = false;
+	let panStartX = 0;
+	let panStartY = 0;
 	/** Active two-finger pinch-to-zoom (tablet). */
 	type PinchState = {
 		lastDist: number;
@@ -1034,8 +1037,7 @@
 		const rightW = showRight
 			? Number.parseFloat(rightPdf!.style.width) || rightPdf!.clientWidth
 			: 0;
-		const gap = showRight && rightW ? 20 : 0;
-		const contentW = leftW + gap + rightW;
+		const contentW = leftW + rightW;
 		const contentH = leftH;
 		panX = ((workspace?.clientWidth ?? host.clientWidth) - contentW * zoom) / 2;
 		panY = Math.max(
@@ -1946,6 +1948,7 @@
 		value: number,
 		opts: { immediate?: boolean; focusX?: number; focusY?: number } = {}
 	) {
+		stopPanMomentum();
 		const next = Math.max(0.35, Math.min(3, Number(value.toFixed(3))));
 		const prev = zoom;
 		if (Math.abs(next - prev) < 0.0005 && !opts.immediate) return;
@@ -1967,13 +1970,13 @@
 		}
 		zoom = next;
 		visualScale = 1; // zoom is applied directly via CSS transform
-		persistPrefs();
 		clearTimeout(zoomTimer);
 		const delay = opts.immediate ? 0 : 180;
 		zoomTimer = setTimeout(() => void commitZoomRender(), delay);
 	}
 	async function commitZoomRender() {
 		if (closed) return;
+		persistPrefs();
 		// Re-rasterize at the new zoom for sharpness. Layout CSS size is unchanged,
 		// so the view position does not jump.
 		await render({ quiet: hasPainted });
@@ -2087,20 +2090,23 @@
 	}
 
 	function startPanMomentum() {
-		stopPanMomentum();
+		if (panMomentumRaf) cancelAnimationFrame(panMomentumRaf);
+		let lastTime = performance.now();
 		const friction = 0.94;
 		const minV = 0.12;
-		const tick = () => {
-			panVx *= friction;
-			panVy *= friction;
+		const tick = (now: number) => {
+			const elapsed = Math.min(32, now - lastTime) / 16;
+			lastTime = now;
+			panVx *= friction ** elapsed;
+			panVy *= friction ** elapsed;
 			if (Math.hypot(panVx, panVy) < minV) {
 				panMomentumRaf = 0;
 				panVx = 0;
 				panVy = 0;
 				return;
 			}
-			panX += panVx;
-			panY += panVy;
+			panX += panVx * elapsed;
+			panY += panVy * elapsed;
 			panMomentumRaf = requestAnimationFrame(tick);
 		};
 		panMomentumRaf = requestAnimationFrame(tick);
@@ -2133,6 +2139,7 @@
 			} catch {}
 		}
 		panDrag = null;
+		panMoved = true;
 		stopPanMomentum();
 	}
 	function onPinchTouchStart(event: TouchEvent) {
@@ -2176,9 +2183,12 @@
 
 	function onWorkspacePointerDown(event: PointerEvent) {
 		if (event.pointerType === 'touch') return;
-		if (annotating || reading || textEditor) return;
+		if (annotating || textEditor || pinch || panDrag) return;
 		if (event.button !== 0 && event.pointerType === 'mouse') return;
 		stopPanMomentum();
+		panMoved = false;
+		panStartX = event.clientX;
+		panStartY = event.clientY;
 		panDrag = {
 			pointerId: event.pointerId,
 			lastX: event.clientX,
@@ -2188,13 +2198,18 @@
 		panVx = 0;
 		panVy = 0;
 		try {
-			(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+			(
+				(event.target as HTMLElement).closest<HTMLElement>('.page-hit') ??
+				(event.currentTarget as HTMLElement)
+			).setPointerCapture(event.pointerId);
 		} catch {}
 	}
 
 	function onWorkspacePointerMove(event: PointerEvent) {
 		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
 		const now = performance.now();
+		if (Math.hypot(event.clientX - panStartX, event.clientY - panStartY) > 5)
+			panMoved = true;
 		const dt = Math.max(8, now - panDrag.lastT);
 		const dx = event.clientX - panDrag.lastX;
 		const dy = event.clientY - panDrag.lastY;
@@ -2211,13 +2226,22 @@
 
 	function onWorkspacePointerUp(event: PointerEvent) {
 		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
+		const stale = performance.now() - panDrag.lastT > 80;
 		panDrag = null;
 		try {
-			(event.currentTarget as HTMLElement).releasePointerCapture(
-				event.pointerId
-			);
+			(
+				(event.target as HTMLElement).closest<HTMLElement>('.page-hit') ??
+				(event.currentTarget as HTMLElement)
+			).releasePointerCapture(event.pointerId);
 		} catch {}
-		if (Math.hypot(panVx, panVy) > 0.8) startPanMomentum();
+		if (
+			event.type === 'pointerup' &&
+			!stale &&
+			panMoved &&
+			!$settings.reduceMotion &&
+			Math.hypot(panVx, panVy) > 0.8
+		)
+			startPanMomentum();
 		else {
 			panVx = 0;
 			panVy = 0;
@@ -2226,6 +2250,7 @@
 
 	function onWheel(event: WheelEvent) {
 		event.preventDefault();
+		stopPanMomentum();
 		if (event.ctrlKey || event.metaKey) {
 			const pixelDelta =
 				event.deltaMode === 1
@@ -2234,7 +2259,7 @@
 						? event.deltaY * 40
 						: event.deltaY;
 			const factor = Math.exp(-pixelDelta * 0.0016);
-			zoomPending = Math.max(0.35, Math.min(3, zoom * factor));
+			zoomPending = Math.max(0.35, Math.min(3, (zoomPending ?? zoom) * factor));
 			if (host) {
 				const rect = (workspace ?? host).getBoundingClientRect();
 				zoomFocusX = event.clientX - rect.left;
@@ -2555,10 +2580,12 @@
 		onpointerdown={onWorkspacePointerDown}
 		onpointermove={onWorkspacePointerMove}
 		onpointerup={onWorkspacePointerUp}
-		onpointercancel={onWorkspacePointerUp}>
+		onpointercancel={onWorkspacePointerUp}
+		onlostpointercapture={onWorkspacePointerUp}>
 		<div
 			class="pages"
 			class:dual
+			class:no-page-shadows={!$settings.pageShadows}
 			class:transitioning={pageTransition}
 			style={`transform: translate3d(${panX}px, ${panY}px, 0) scale(${zoom}); transform-origin: 0 0`}>
 			<div class="page-shell">
@@ -2611,21 +2638,24 @@
 				<button onclick={() => void load()}>Retry</button>
 			</div>
 		{/if}
+		<button
+			class="page-hit left-hit"
+			aria-label="Previous page"
+			onclick={(event) => {
+				if (!panMoved || event.detail === 0) previous();
+			}}
+			disabled={page <= 1 || !!textEditor || annotating}></button>
+		<button
+			class="page-hit right-hit"
+			aria-label="Next page"
+			onclick={(event) => {
+				if (!panMoved || event.detail === 0) next();
+			}}
+			disabled={!pdf ||
+				page >= (pdf?.numPages ?? 1) ||
+				!!textEditor ||
+				annotating}></button>
 	</main>
-
-	<button
-		class="page-hit left-hit"
-		aria-label="Previous page"
-		onclick={previous}
-		disabled={page <= 1 || !!textEditor || annotating}></button>
-	<button
-		class="page-hit right-hit"
-		aria-label="Next page"
-		onclick={next}
-		disabled={!pdf ||
-			page >= (pdf?.numPages ?? 1) ||
-			!!textEditor ||
-			annotating}></button>
 
 	{#if textEditor}
 		<div
@@ -3379,6 +3409,12 @@
 		will-change: opacity, transform;
 		transition: opacity 140ms ease;
 	}
+	.pages.no-page-shadows .page-shell {
+		box-shadow: none;
+	}
+	.pages.no-page-shadows .page-shell::after {
+		display: none;
+	}
 	.pdf-canvas,
 	.ink-canvas {
 		display: block;
@@ -3458,15 +3494,15 @@
 	.page-hit {
 		position: absolute;
 		z-index: 15;
-		top: 56px;
-		bottom: 8px;
+		top: 0;
+		bottom: 0;
 		width: 25vw;
 		border: 0;
 		background: transparent;
 		opacity: 0;
 		cursor: pointer;
 		-webkit-tap-highlight-color: transparent;
-		touch-action: manipulation;
+		touch-action: none;
 	}
 	.page-hit:disabled {
 		pointer-events: none;
@@ -4110,9 +4146,6 @@
 	.reading .page-hit {
 		top: 0;
 		bottom: 0;
-	}
-	.reading .pages {
-		padding: 12px;
 	}
 	@keyframes settings-in {
 		from {

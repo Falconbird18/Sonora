@@ -342,6 +342,16 @@
 								</label>
 								<label class="row">
 									<div class="row-copy">
+										<strong>Page shadows</strong>
+										<span>Shadows around pages and along the center fold</span>
+									</div>
+									<Toggle
+										checked={$settings.pageShadows}
+										ariaLabel="Page shadows"
+										onchange={(v) => settings.patch({ pageShadows: v })} />
+								</label>
+								<label class="row">
+									<div class="row-copy">
 										<strong>Show annotations</strong>
 										<span>Pens, highlights, symbols, and text</span>
 									</div>

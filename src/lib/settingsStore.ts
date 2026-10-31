@@ -24,6 +24,7 @@ export type AppSettings = {
 	defaultFit: ViewerFit;
 	viewerMode: 'practice' | 'reading';
 	annotationsVisible: boolean;
+	pageShadows: boolean;
 	textSize: number;
 	handwritingPauseMs: number;
 	handwritingMode: 'auto' | 'music' | 'text';
@@ -47,6 +48,7 @@ const defaults: AppSettings = {
 	defaultFit: 'page',
 	viewerMode: 'practice',
 	annotationsVisible: true,
+	pageShadows: true,
 	handwritingPauseMs: 2000,
 	handwritingMode: 'auto',
 	textSize: 18
@@ -113,6 +115,7 @@ function load(): AppSettings {
 			defaultFit: parsed.defaultFit === 'width' ? 'width' : 'page',
 			viewerMode: parsed.viewerMode === 'reading' ? 'reading' : 'practice',
 			annotationsVisible: parsed.annotationsVisible !== false,
+			pageShadows: parsed.pageShadows !== false,
 			textSize:
 				typeof parsed.textSize === 'number'
 					? Math.max(10, Math.min(36, parsed.textSize))

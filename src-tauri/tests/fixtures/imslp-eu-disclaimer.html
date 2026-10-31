@@ -1,0 +1,45 @@
+
+<!doctype html>
+<html>
+<head>
+<script type="text/javascript">
+function setC(cname, cvalue, exdays) {
+const d = new Date();
+d.setTime(d.getTime() + (exdays*24*60*60*1000));
+let expires = "expires="+ d.toUTCString();
+document.cookie = cname + "=" + cvalue + ";" + expires + ";path=/";
+}
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+html{margin-left:auto;margin-right:auto;max-width:800pt;display:block;}
+body{font-family: "Lucida Grande", "Trebuchet MS", "Verdana", "Helvetica", "Arial", sans-serif;}
+h1,h2,.dbx{text-align: center;}
+.dbx,.nbx{border:1pt solid black; padding: 10pt; margin: 15pt;}
+a.bigbutton{text-align: center; display: block; width:50%; margin: auto; color: buttontext; background-color: buttonface; border: 1pt outset buttonborder; border-radius: 3pt; padding: 12pt; text-decoration: none;}
+</style>
+<title>IMSLP-EU</title>
+</head>
+<body>
+<h1>IMSLP-EU</h1>
+<div class="nbx"><p>IMSLP-EU is a free music library. Each item hosted by IMSLP-EU is either in the public domain or has been released under license by its copyright holder(s).</p>
+
+<ul><li>IMSLP-EU is based in Germany and follows German copyright law. Copyright laws differ between countries. To determine the copyright status of an item in another country, check that country's copyright laws or contact a qualified professional.</li>
+<li>Despite our best efforts, some copyright status determinations may be incorrect.</li></ul></div>
+</ul>
+</p>
+<a onclick="setC('disclaimer_bypass','OK',365)" href="/files/imglnks/euimg/f/f4/IMSLP468317-PMLP3433-Mozart,_Wofgang_Amadeus-NMA_08_23_2_02_KV_376_scan.pdf" class="bigbutton">I understand, continue</a><div class="dbx"><h2>Donations</h2>
+Because IMSLP-EU is not affiliated with IMSLP.ORG, donations must be
+made separately to IMSLP-EU. If IMSLP-EU has helped you in any way,
+please feel free to donate by clicking on the button below. <br>
+<form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_top">
+<input type="hidden" name="cmd" value="_s-xclick">
+<input type="hidden" name="hosted_button_id" value="529DBDBZM7D38">
+<input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
+<img alt="" border="0" src="https://www.paypalobjects.com/en_US/i/scr/pixel.gif" width="1" height="1">
+</form></div>
+<div class="dbx">
+If you are a copyright holder and you believe that a file hosted on this server has a valid copyright and is made available without consent, please follow the appropriate notification procedure according to the <a href="https://leonardolibrary.org/copyright.html">copyright policy</a> of IMSLP-EU's Internet Service Provider, Project Leonardo Limited. Please note that IMSLP-EU is based in Germany and follows German copyright law. IMSLP-EU is separate from IMSLP.org and not operated by Project Petrucci LLC.
+</div>
+</body>
+</html>
