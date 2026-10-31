@@ -51,7 +51,10 @@ const workspace = {
 	clientHeight: 800,
 	getBoundingClientRect: () => ({ left: 0, top: 0 }),
 	setPointerCapture() {},
-	releasePointerCapture() {}
+	releasePointerCapture() {},
+	matches() {
+		return false;
+	}
 };
 const context = vm.createContext({
 	performance: { now: () => now },
@@ -345,6 +348,53 @@ frame();
 context.onWorkspacePointerDown(pointer);
 assert.equal(context.zoomPending, null, 'starting pan stops zoom easing');
 context.cancelViewGesture();
+
+let turns = 0;
+context.next = () => turns++;
+context.previous = () => turns--;
+const pageHit = {
+	matches: () => true,
+	classList: { contains: (name) => name === 'right-hit' },
+	getBoundingClientRect: () => ({ left: 0, right: 250, top: 0, bottom: 800 }),
+	setPointerCapture() {},
+	releasePointerCapture() {}
+};
+const tapPointer = {
+	...pointer,
+	pointerType: 'touch',
+	target: { closest: () => pageHit }
+};
+context.onWorkspacePointerDown(tapPointer);
+context.onWorkspacePointerUp({ ...tapPointer, type: 'pointerup' });
+assert.equal(turns, 1, 'touch tap turns page without relying on browser click');
+context.onWorkspacePointerDown(tapPointer);
+context.onWorkspacePointerMove({ ...tapPointer, clientX: 106, clientY: 104 });
+context.onWorkspacePointerUp({
+	...tapPointer,
+	type: 'pointerup',
+	clientX: 106,
+	clientY: 104
+});
+assert.equal(turns, 2, 'minor finger jitter still counts as tap');
+context.onWorkspacePointerDown(tapPointer);
+context.onWorkspacePointerMove({ ...tapPointer, clientX: 150 });
+context.onWorkspacePointerUp({
+	...tapPointer,
+	type: 'pointerup',
+	clientX: 150
+});
+assert.equal(turns, 2, 'dragging from page edge never turns page');
+context.cancelViewGesture();
+context.onWorkspacePointerDown(tapPointer);
+context.onWorkspacePointerUp({ ...tapPointer, type: 'pointercancel' });
+assert.equal(turns, 2, 'cancelled touch does not turn page');
+context.onWorkspacePointerDown(tapPointer);
+context.onWorkspacePointerUp({
+	...tapPointer,
+	type: 'pointerup',
+	clientX: 300
+});
+assert.equal(turns, 2, 'release outside edge does not turn page');
 console.log('Viewer gesture regressions passed');
 
 // The new preference must coexist with main's handwriting settings and old saves.

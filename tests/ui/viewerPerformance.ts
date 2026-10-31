@@ -77,6 +77,45 @@ try {
 			?.value !== '9'
 	)
 		throw Error('Rapid navigation lost page state');
+	phase = 'tap navigation';
+	const tap = async (label: string, pointerType: string) => {
+		const button = app.querySelector<HTMLButtonElement>(
+			`button.page-hit[aria-label="${label}"]`
+		)!;
+		const rect = button.getBoundingClientRect();
+		const options = {
+			bubbles: true,
+			cancelable: true,
+			pointerId: 101,
+			pointerType,
+			button: 0,
+			clientX: rect.left + rect.width / 2,
+			clientY: rect.top + rect.height / 2
+		};
+		button.dispatchEvent(
+			new PointerEvent('pointerdown', { ...options, buttons: 1 })
+		);
+		button.dispatchEvent(
+			new PointerEvent('pointerup', { ...options, buttons: 0 })
+		);
+		// Some platforms also synthesize click after pointerup: it must not double-turn.
+		button.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+		await tick();
+		await waitFor(() => !app.querySelector('.pages.transitioning'));
+	};
+	await tap('Next page', 'touch');
+	if (
+		app.querySelector<HTMLInputElement>('input[aria-label="Page number"]')
+			?.value !== '10'
+	)
+		throw Error('Touch tap must advance exactly one page');
+	await tap('Previous page', 'mouse');
+	if (
+		app.querySelector<HTMLInputElement>('input[aria-label="Page number"]')
+			?.value !== '9'
+	)
+		throw Error('Mouse edge click must go back exactly one page');
+
 	phase = 'zoom';
 	const beforeZoom = app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width;
 	app.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!.click();
@@ -169,6 +208,7 @@ try {
 			previousMs,
 			checks: [
 				'cached turns',
+				'touch and mouse page taps without duplicate turns',
 				'rapid navigation',
 				'zoom resolution',
 				'dual spread',

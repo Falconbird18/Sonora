@@ -2378,7 +2378,10 @@
 		}
 		event.preventDefault();
 		const now = performance.now();
-		if (Math.hypot(event.clientX - panStartX, event.clientY - panStartY) > 5)
+		if (
+			Math.hypot(event.clientX - panStartX, event.clientY - panStartY) >
+			(event.pointerType === 'touch' ? 12 : 5)
+		)
 			panMoved = true;
 		const dt = Math.max(8, now - panDrag.lastT);
 		const dx = event.clientX - panDrag.lastX;
@@ -2398,6 +2401,15 @@
 	function onWorkspacePointerUp(event: PointerEvent) {
 		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
 		const stale = performance.now() - panDrag.lastT > 80;
+		const distance = Math.hypot(
+			event.clientX - panStartX,
+			event.clientY - panStartY
+		);
+		const tap =
+			event.type === 'pointerup' &&
+			!panMoved &&
+			!pinch &&
+			distance <= (event.pointerType === 'touch' ? 12 : 5);
 		flushPan();
 		panDrag = null;
 		const capture = panCapture;
@@ -2405,6 +2417,22 @@
 		try {
 			capture?.releasePointerCapture(event.pointerId);
 		} catch {}
+		// Pointer-down prevents native dragging, which can suppress touch clicks.
+		// Recognize taps here; reserve click handlers for keyboard/assistive activation.
+		if (tap && capture?.matches('.page-hit:not(:disabled)')) {
+			const rect = capture.getBoundingClientRect();
+			if (
+				event.clientX >= rect.left &&
+				event.clientX <= rect.right &&
+				event.clientY >= rect.top &&
+				event.clientY <= rect.bottom
+			) {
+				if (capture.classList.contains('left-hit')) previous();
+				else next();
+				return;
+			}
+		}
+
 		if (
 			event.type === 'pointerup' &&
 			!stale &&
@@ -2813,14 +2841,14 @@
 			class="page-hit left-hit"
 			aria-label="Previous page"
 			onclick={(event) => {
-				if (!panMoved || event.detail === 0) previous();
+				if (event.detail === 0) previous();
 			}}
 			disabled={page <= 1 || !!textEditor || annotating}></button>
 		<button
 			class="page-hit right-hit"
 			aria-label="Next page"
 			onclick={(event) => {
-				if (!panMoved || event.detail === 0) next();
+				if (event.detail === 0) next();
 			}}
 			disabled={!pdf ||
 				page >= (pdf?.numPages ?? 1) ||
