@@ -28,6 +28,7 @@
 	});
 
 	import { detectFrequency, describePitch } from '../pitch';
+	import { microphoneErrorMessage } from '../microphone';
 	let tunerRequest = 0;
 	let taps: number[] = [];
 	function tapTempo() {
@@ -145,6 +146,12 @@
 		const request = ++tunerRequest;
 		status = 'Requesting microphone…';
 		try {
+			if (!navigator.mediaDevices?.getUserMedia) {
+				throw new DOMException(
+					'Microphone capture is unavailable.',
+					'SecurityError'
+				);
+			}
 			const captured = await navigator.mediaDevices.getUserMedia({
 				audio: {
 					echoCancellation: false,
@@ -201,8 +208,7 @@
 		} catch (error) {
 			if (request !== tunerRequest) return;
 			stopTuner();
-			status = tunerError =
-				error instanceof Error ? error.message : 'Microphone unavailable';
+			status = tunerError = microphoneErrorMessage(error);
 		}
 	}
 	onDestroy(() => {

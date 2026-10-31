@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod microphone_permission;
 mod handwriting;
 mod library_archive;
 mod score_folders;
@@ -2190,6 +2192,7 @@ pub fn run() {
                 let window = app.get_webview_window("main")
                     .ok_or("Main webview window is missing")?;
                 window.with_webview(|webview| {
+                    microphone_permission::configure(&webview.inner());
                     // WebKitGTK handles native touchpad pinches independently of DOM
                     // wheel events. Stop only that gesture before its default handler.
                     webview.inner().connect_event(|_, event| {

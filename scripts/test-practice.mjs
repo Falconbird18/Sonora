@@ -106,6 +106,31 @@ try {
 	assert.deepEqual(describePitch(440), { note: 'A4', cents: 0 });
 	assert.deepEqual(describePitch(442, 442), { note: 'A4', cents: 0 });
 	assert.equal(describePitch(440 * 2 ** (20 / 1200)).cents, 20);
+	const { microphoneErrorMessage } = await server.ssrLoadModule(
+		'/src/lib/microphone.ts'
+	);
+	assert.match(
+		microphoneErrorMessage({ name: 'NotAllowedError' }),
+		/permission prompt/
+	);
+	assert.match(
+		microphoneErrorMessage({ name: 'NotFoundError' }),
+		/No microphone/
+	);
+	assert.match(
+		microphoneErrorMessage({ name: 'NotReadableError' }),
+		/audio input/
+	);
+	assert.match(
+		microphoneErrorMessage({ name: 'SecurityError' }),
+		/HTTPS or localhost/
+	);
+	assert.match(
+		microphoneErrorMessage(new Error('Audio backend failed')),
+		/Audio backend failed/
+	);
+	assert.match(microphoneErrorMessage(null), /Microphone unavailable/);
+
 	console.log(
 		'Practice regression checks passed: filename cleanup, composer tagging, layer migration, isolated undo, archive metadata, and tuner pitch accuracy.'
 	);
