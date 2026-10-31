@@ -21,7 +21,17 @@ const names = new Set([
 	'cancelPanGesture',
 	'onWorkspaceDragStart',
 	'onWindowMouseUp',
+	'cancelViewGesture',
+	'cancelActiveStroke',
+	'touchDistance',
+	'touchMidpoint',
+	'onPinchTouchStart',
+	'onPinchTouchMove',
+	'onPinchTouchEnd',
+	'applyTouchPinch',
 	'setZoom',
+	'cancelZoomAnimation',
+	'animateZoom',
 	'onWheel',
 	'stopPanMomentum',
 	'startPanMomentum',
@@ -59,6 +69,8 @@ const context = vm.createContext({
 	zoom: 1,
 	zoomPending: null,
 	zoomRaf: 0,
+	zoomFrameTime: 0,
+	prefetchTimer: undefined,
 	zoomFocusX: 0,
 	zoomFocusY: 0,
 	zoomTimer: undefined,
@@ -79,6 +91,15 @@ const context = vm.createContext({
 	annotating: false,
 	textEditor: null,
 	pinch: null,
+	pinchRaf: 0,
+	resumeTouchPan: false,
+	drawing: null,
+	draggingAnnot: null,
+	isDrawing: false,
+	strokes: {},
+	cancelHandwriting() {},
+	restoreTransform() {},
+	redraw() {},
 	reading: true,
 	$settings: { reduceMotion: false }
 });
@@ -104,6 +125,11 @@ context.onWheel(wheel);
 context.onWheel(wheel);
 context.onWheel(wheel);
 frame();
+assert.ok(
+	context.zoom > 1 && context.zoom < Math.exp(120 * 0.0016),
+	'coarse wheel steps interpolate over frames'
+);
+for (let i = 0; i < 30 && context.zoomPending !== null; i++) frame();
 assert.ok(
 	Math.abs(context.zoom - Math.exp(120 * 0.0016)) < 0.001,
 	'wheel input accumulates between frames'
@@ -194,9 +220,131 @@ context.onWorkspacePointerUp({ ...pointer, type: 'lostpointercapture' });
 assert.equal(context.panDrag, null, 'lost capture clears pan');
 assert.equal(context.panMomentumRaf, 0, 'lost capture does not fling');
 context.onWorkspacePointerDown(pointer);
-context.onWindowMouseUp({button: 0});
-assert.equal(context.panDrag, null, 'mouse-up recovers when pointer-up is missing');
-assert.equal(context.panCapture, null, 'fallback mouse-up releases captured element');
+context.onWindowMouseUp({ button: 0 });
+assert.equal(
+	context.panDrag,
+	null,
+	'mouse-up recovers when pointer-up is missing'
+);
+assert.equal(
+	context.panCapture,
+	null,
+	'fallback mouse-up releases captured element'
+);
+
+context.strokes = { 1: [{ id: 'saved' }, { id: 'interrupted' }] };
+context.drawing = {
+	page: 1,
+	stroke: { id: 'interrupted' },
+	canvas: workspace,
+	pointerId: 1
+};
+context.isDrawing = true;
+context.cancelActiveStroke();
+assert.equal(
+	context.strokes[1].length,
+	1,
+	'pinch takeover removes interrupted stroke'
+);
+assert.equal(
+	context.strokes[1][0].id,
+	'saved',
+	'pinch takeover preserves previous ink'
+);
+assert.equal(context.isDrawing, false, 'pinch takeover exits drawing mode');
+context.zoom = 1;
+context.panX = 0;
+context.panY = 0;
+const touch = (identifier, clientX, clientY = 200) => ({
+	identifier,
+	clientX,
+	clientY
+});
+const touchEvent = (touches, type = 'touchmove') => ({
+	touches,
+	type,
+	preventDefault() {}
+});
+context.onWorkspacePointerDown({ ...pointer, pointerType: 'touch' });
+assert.ok(context.panDrag, 'single finger pans in reading mode');
+context.onPinchTouchStart(
+	touchEvent([touch(11, 100), touch(22, 300)], 'touchstart')
+);
+assert.equal(context.panDrag, null, 'second finger cancels one-finger drag');
+context.onPinchTouchMove(
+	touchEvent([touch(11, 100, 250), touch(22, 450, 250)])
+);
+context.onPinchTouchMove(
+	touchEvent([touch(22, 500, 250), touch(11, 100, 250)])
+);
+assert.equal(context.zoom, 1, 'touch updates wait for display frame');
+frame();
+assert.equal(
+	context.zoom,
+	2,
+	'pinch uses latest distance even if touch order changes'
+);
+assert.equal(
+	(300 - context.panX) / context.zoom,
+	200,
+	'pinch keeps horizontal anchor'
+);
+assert.equal(
+	(250 - context.panY) / context.zoom,
+	200,
+	'pinch keeps vertical anchor'
+);
+context.onPinchTouchMove(touchEvent([touch(11, 100), touch(22, 300)]));
+frame();
+assert.equal(context.zoom, 1, 'reversing pinch returns to original zoom');
+assert.equal(
+	context.panX,
+	0,
+	'repeated pinches do not accumulate horizontal drift'
+);
+assert.equal(
+	context.panY,
+	0,
+	'repeated pinches do not accumulate vertical drift'
+);
+context.onPinchTouchMove(touchEvent([touch(11, 100), touch(22, 500)]));
+context.onPinchTouchEnd(touchEvent([touch(11, 100)], 'touchend'));
+assert.equal(context.zoom, 2, 'lifting finger flushes final pinch frame');
+assert.equal(context.pinch, null, 'lifting finger clears pinch');
+assert.equal(context.pinchRaf, 0, 'no queued pinch remains after end');
+context.onWorkspacePointerMove({
+	...pointer,
+	pointerType: 'touch',
+	clientX: 150
+});
+assert.ok(context.panDrag, 'remaining finger can resume panning');
+assert.equal(
+	context.panMoved,
+	true,
+	'pinch continuation cannot trigger a page turn'
+);
+context.cancelViewGesture();
+context.onPinchTouchStart(
+	touchEvent([touch(11, 100), touch(22, 300)], 'touchstart')
+);
+context.onPinchTouchMove(touchEvent([touch(11, 100), touch(22, 400)]));
+context.cancelViewGesture();
+assert.equal(context.pinchRaf, 0, 'focus loss cancels queued pinch');
+assert.equal(context.pinch, null, 'focus loss clears pinch');
+context.$settings.reduceMotion = true;
+context.zoom = 1;
+context.onWheel(wheel);
+frame();
+assert.ok(
+	Math.abs(context.zoom - Math.exp(40 * 0.0016)) < 1e-8,
+	'reduced motion skips zoom easing'
+);
+context.$settings.reduceMotion = false;
+context.onWheel(wheel);
+frame();
+context.onWorkspacePointerDown(pointer);
+assert.equal(context.zoomPending, null, 'starting pan stops zoom easing');
+context.cancelViewGesture();
 console.log('Viewer gesture regressions passed');
 
 // The new preference must coexist with main's handwriting settings and old saves.

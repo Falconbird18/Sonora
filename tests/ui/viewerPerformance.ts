@@ -110,6 +110,51 @@ try {
 		() =>
 			app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.height < beforeResize
 	);
+	phase = 'touchscreen pinch';
+	const workspace = app.querySelector<HTMLElement>('.workspace')!;
+	const pages = app.querySelector<HTMLElement>('.pages')!;
+	const rect = workspace.getBoundingClientRect();
+	const initialWidth =
+		app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width;
+	const finger = (identifier: number, x: number) =>
+		new Touch({
+			identifier,
+			target: workspace,
+			clientX: rect.left + x,
+			clientY: rect.top + 180
+		});
+	const dispatchTouch = (type: string, touches: Touch[]) =>
+		workspace.dispatchEvent(
+			new TouchEvent(type, {
+				bubbles: true,
+				cancelable: true,
+				touches,
+				targetTouches: touches
+			})
+		);
+	dispatchTouch('touchstart', [finger(1, 200), finger(2, 400)]);
+	dispatchTouch('touchmove', [finger(2, 450), finger(1, 150)]);
+	await delay(50);
+	const pinched = new DOMMatrix(getComputedStyle(pages).transform);
+	if (pinched.a < 1.5) throw Error('Touchscreen pinch did not scale page');
+	// Holding a pinch must not swap out canvas backing storage under the fingers.
+	await delay(350);
+	if (
+		app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width !== initialWidth
+	)
+		throw Error('Bitmap changed during active pinch');
+	dispatchTouch('touchend', []);
+	await waitFor(
+		() =>
+			app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width > initialWidth
+	);
+	const settled = new DOMMatrix(getComputedStyle(pages).transform);
+	if (
+		Math.abs(settled.a - pinched.a) > 0.001 ||
+		Math.abs(settled.e - pinched.e) > 0.1
+	)
+		throw Error('Sharpening shifted touchscreen viewport');
+
 	const canvas = app.querySelector<HTMLCanvasElement>('.pdf-canvas')!;
 	const pixels = canvas
 		.getContext('2d')!
@@ -128,7 +173,8 @@ try {
 				'zoom resolution',
 				'dual spread',
 				'resized bitmap',
-				'nonblank page'
+				'nonblank page',
+				'touchscreen pinch and stable sharpening'
 			]
 		},
 		null,

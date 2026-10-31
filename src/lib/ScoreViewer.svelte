@@ -147,6 +147,7 @@
 	let renderedZoom = 1;
 	let zoomRaf = 0;
 	let zoomPending: number | null = null;
+	let zoomFrameTime = 0;
 	let zoomFocusX = 0;
 	let zoomFocusY = 0;
 	let needsCenter = true;
@@ -268,11 +269,18 @@
 	let panStartY = 0;
 	/** Active two-finger pinch-to-zoom (tablet). */
 	type PinchState = {
-		lastDist: number;
-		lastMidX: number;
-		lastMidY: number;
+		ids: [number, number];
+		startDist: number;
+		startZoom: number;
+		localX: number;
+		localY: number;
+		distance: number;
+		midX: number;
+		midY: number;
 	};
 	let pinch: PinchState | null = null;
+	let pinchRaf = 0;
+	let resumeTouchPan = false;
 	let textSize = $state(18);
 	let textEditor = $state<TextEditor | null>(null);
 	let textDraft = $state('');
@@ -630,11 +638,12 @@
 		if (workspace) observer.observe(workspace);
 		// Pinch-to-zoom for tablets (two-finger). passive:false so we can preventDefault.
 		const pinchOpts: AddEventListenerOptions = { passive: false };
-		if (host) {
-			host.addEventListener('touchstart', onPinchTouchStart, pinchOpts);
-			host.addEventListener('touchmove', onPinchTouchMove, pinchOpts);
-			host.addEventListener('touchend', onPinchTouchEnd);
-			host.addEventListener('touchcancel', onPinchTouchEnd);
+		const gestureHost = workspace;
+		if (gestureHost) {
+			gestureHost.addEventListener('touchstart', onPinchTouchStart, pinchOpts);
+			gestureHost.addEventListener('touchmove', onPinchTouchMove, pinchOpts);
+			gestureHost.addEventListener('touchend', onPinchTouchEnd, pinchOpts);
+			gestureHost.addEventListener('touchcancel', onPinchTouchEnd, pinchOpts);
 		}
 		const onPageHide = () => {
 			void flushPendingAnnotations();
@@ -642,9 +651,9 @@
 		window.addEventListener('pagehide', onPageHide);
 		window.addEventListener('pointerup', onWorkspacePointerUp, true);
 		window.addEventListener('pointercancel', onWorkspacePointerUp, true);
-		window.addEventListener('blur', cancelPanGesture);
+		window.addEventListener('blur', cancelViewGesture);
 		window.addEventListener('mouseup', onWindowMouseUp, true);
-		document.addEventListener('visibilitychange', cancelPanGesture);
+		document.addEventListener('visibilitychange', cancelViewGesture);
 		return () => {
 			window.removeEventListener('keydown', key);
 			document.removeEventListener('fullscreenchange', onFullscreen);
@@ -652,21 +661,23 @@
 			window.removeEventListener('pagehide', onPageHide);
 			window.removeEventListener('pointerup', onWorkspacePointerUp, true);
 			window.removeEventListener('pointercancel', onWorkspacePointerUp, true);
-			window.removeEventListener('blur', cancelPanGesture);
+			window.removeEventListener('blur', cancelViewGesture);
 			window.removeEventListener('mouseup', onWindowMouseUp, true);
-			document.removeEventListener('visibilitychange', cancelPanGesture);
+			document.removeEventListener('visibilitychange', cancelViewGesture);
 			cancelPanGesture();
-			if (host) {
-				host.removeEventListener('touchstart', onPinchTouchStart);
-				host.removeEventListener('touchmove', onPinchTouchMove);
-				host.removeEventListener('touchend', onPinchTouchEnd);
-				host.removeEventListener('touchcancel', onPinchTouchEnd);
+			if (gestureHost) {
+				gestureHost.removeEventListener('touchstart', onPinchTouchStart);
+				gestureHost.removeEventListener('touchmove', onPinchTouchMove);
+				gestureHost.removeEventListener('touchend', onPinchTouchEnd);
+				gestureHost.removeEventListener('touchcancel', onPinchTouchEnd);
 			}
 			observer.disconnect();
 			clearTimeout(resizeTimer);
 			clearTimeout(prefetchTimer);
 			clearTimeout(zoomTimer);
-			if (zoomRaf) cancelAnimationFrame(zoomRaf);
+			cancelZoomAnimation();
+			if (pinchRaf) cancelAnimationFrame(pinchRaf);
+			pinch = null;
 			stopPanMomentum();
 			cancelRender();
 			void releaseWakeLock();
@@ -797,6 +808,7 @@
 		if (!pdf || !host || closed) return;
 		cancelRender(visiblePages);
 		const current = ++generation;
+		const requestedZoom = zoom;
 		if (!opts?.quiet || !hasPainted) {
 			loading = true;
 			loadingText = dual ? 'Rendering pages…' : 'Rendering page…';
@@ -818,7 +830,12 @@
 			const results = await Promise.all(
 				visiblePages.map((num, index) => renderPage(num, index, current))
 			);
-			if (current !== generation) return;
+			if (
+				current !== generation ||
+				(hasPainted &&
+					(requestedZoom !== zoom || pinch || zoomPending !== null))
+			)
+				return;
 			const bitmaps = results.filter((b): b is PageBitmap => !!b);
 			if (bitmaps.length) {
 				hasPainted = true;
@@ -1094,7 +1111,14 @@
 			void (async () => {
 				const current = generation;
 				for (const number of unique) {
-					if (closed || current !== generation) return;
+					if (
+						closed ||
+						current !== generation ||
+						zoomPending !== null ||
+						pinch ||
+						panDrag
+					)
+						return;
 					try {
 						// renderPage already checks/uses cache and writes back into it
 						await renderPage(number, 0, current, 'prefetch');
@@ -1373,6 +1397,7 @@
 		number: number,
 		canvas: HTMLCanvasElement
 	) {
+		if (pinch || (event.pointerType === 'touch' && !annotating)) return;
 		if (reading || !layers.some((l) => l.id === activeLayer && l.visible))
 			return;
 		if (event.button !== 0 || drawing || draggingAnnot) return;
@@ -1959,15 +1984,46 @@
 			JSON.stringify({ bookmarked, zoom, fit, recentSymbols, page })
 		);
 	}
+	function cancelZoomAnimation() {
+		if (zoomRaf) cancelAnimationFrame(zoomRaf);
+		zoomRaf = 0;
+		zoomPending = null;
+	}
+	function animateZoom(now: number) {
+		zoomRaf = 0;
+		if (zoomPending === null) return;
+		const target = zoomPending;
+		const elapsed = Math.max(1, Math.min(64, now - zoomFrameTime));
+		zoomFrameTime = now;
+		const next = $settings.reduceMotion
+			? target
+			: zoom *
+				Math.exp(Math.log(target / zoom) * (1 - Math.exp(-elapsed / 45)));
+		const settled = Math.abs(Math.log(target / next)) < 0.0005;
+		setZoom(settled ? target : next, {
+			focusX: zoomFocusX,
+			focusY: zoomFocusY,
+			gesture: true
+		});
+		if (settled || $settings.reduceMotion) zoomPending = null;
+		else zoomRaf = requestAnimationFrame(animateZoom);
+	}
+
 	function setZoom(
 		value: number,
-		opts: { immediate?: boolean; focusX?: number; focusY?: number } = {}
+		opts: {
+			immediate?: boolean;
+			focusX?: number;
+			focusY?: number;
+			gesture?: boolean;
+		} = {}
 	) {
+		if (!opts.gesture) cancelZoomAnimation();
 		flushPan();
 		stopPanMomentum();
-		const next = Math.max(0.35, Math.min(3, Number(value.toFixed(3))));
+		const next = Math.max(0.35, Math.min(3, value));
 		const prev = zoom;
-		if (Math.abs(next - prev) < 0.0005 && !opts.immediate) return;
+		if (next === prev && !opts.immediate) return;
 
 		// Keep the focal point fixed in the workspace (cursor for wheel, center otherwise).
 		// transform: translate(pan) scale(zoom) with origin 0 0
@@ -1987,17 +2043,19 @@
 		zoom = next;
 		visualScale = 1; // zoom is applied directly via CSS transform
 		clearTimeout(zoomTimer);
-		const delay = opts.immediate ? 0 : 180;
+		const delay = opts.immediate ? 0 : 240;
 		zoomTimer = setTimeout(() => void commitZoomRender(), delay);
 	}
 	async function commitZoomRender() {
-		if (closed) return;
+		if (closed || pinch) return;
 		persistPrefs();
 		// Re-rasterize at the new zoom for sharpness. Layout CSS size is unchanged,
 		// so the view position does not jump.
 		await render({ quiet: hasPainted });
 	}
 	function setFit(value: Fit) {
+		cancelZoomAnimation();
+		clearTimeout(zoomTimer);
 		fit = value;
 		zoom = 1;
 		visualScale = 1;
@@ -2139,6 +2197,12 @@
 		if (drawing) {
 			const active = drawing;
 			if (active.raf) cancelAnimationFrame(active.raf);
+			if (active.stroke) {
+				strokes[active.page] = (strokes[active.page] || []).filter(
+					(s) => s.id !== active.stroke!.id
+				);
+				redraw(active.page, active.canvas);
+			}
 			drawing = null;
 			isDrawing = false;
 			try {
@@ -2158,44 +2222,85 @@
 		panMoved = true;
 	}
 	function onPinchTouchStart(event: TouchEvent) {
-		if (event.touches.length !== 2 || !host) return;
+		if (event.touches.length !== 2 || !workspace) return;
 		event.preventDefault();
+		resumeTouchPan = false;
+		cancelZoomAnimation();
 		cancelActiveStroke();
-		const a = event.touches[0];
-		const b = event.touches[1];
+		clearTimeout(prefetchTimer);
+		const a = event.touches[0],
+			b = event.touches[1];
 		const mid = touchMidpoint(a, b);
-		const rect = (workspace ?? host).getBoundingClientRect();
+		const rect = workspace.getBoundingClientRect();
+		const midX = mid.x - rect.left,
+			midY = mid.y - rect.top;
+		const distance = Math.max(1, touchDistance(a, b));
 		pinch = {
-			lastDist: Math.max(1, touchDistance(a, b)),
-			lastMidX: mid.x - rect.left,
-			lastMidY: mid.y - rect.top
+			ids: [a.identifier, b.identifier],
+			startDist: distance,
+			startZoom: zoom,
+			localX: (midX - panX) / zoom,
+			localY: (midY - panY) / zoom,
+			distance,
+			midX,
+			midY
 		};
 	}
+	function applyTouchPinch() {
+		if (pinchRaf) cancelAnimationFrame(pinchRaf);
+		pinchRaf = 0;
+		if (!pinch) return;
+		setZoom((pinch.startZoom * pinch.distance) / pinch.startDist, {
+			focusX: pinch.midX,
+			focusY: pinch.midY,
+			gesture: true
+		});
+		// Absolute start anchor avoids drift, including at zoom limits.
+		panX = pinch.midX - pinch.localX * zoom;
+		panY = pinch.midY - pinch.localY * zoom;
+	}
 	function onPinchTouchMove(event: TouchEvent) {
-		if (!pinch || event.touches.length < 2 || !host) return;
+		if (!pinch || !workspace) return;
 		event.preventDefault();
-		const a = event.touches[0];
-		const b = event.touches[1];
-		const dist = Math.max(1, touchDistance(a, b));
-		const rect = (workspace ?? host).getBoundingClientRect();
+		const touches = Array.from(event.touches);
+		const a = touches.find((t) => t.identifier === pinch!.ids[0]);
+		const b = touches.find((t) => t.identifier === pinch!.ids[1]);
+		if (!a || !b) return;
+		const rect = workspace.getBoundingClientRect();
 		const mid = touchMidpoint(a, b);
-		const midX = mid.x - rect.left;
-		const midY = mid.y - rect.top;
-		const factor = dist / pinch.lastDist;
-		// Keep the score under your fingers while pinching.
-		panX += midX - pinch.lastMidX;
-		panY += midY - pinch.lastMidY;
-		pinch.lastDist = dist;
-		pinch.lastMidX = midX;
-		pinch.lastMidY = midY;
-		if (Math.abs(factor - 1) > 0.001) {
-			setZoom(zoom * factor, { focusX: midX, focusY: midY });
-		}
+		pinch.distance = Math.max(1, touchDistance(a, b));
+		pinch.midX = mid.x - rect.left;
+		pinch.midY = mid.y - rect.top;
+		if (!pinchRaf) pinchRaf = requestAnimationFrame(applyTouchPinch);
 	}
 	function onPinchTouchEnd(event: TouchEvent) {
-		if (event.touches.length < 2) pinch = null;
+		if (!event.touches.length) resumeTouchPan = false;
+		if (!pinch) return;
+		event.preventDefault();
+		const ids = Array.from(event.touches, (t) => t.identifier);
+		if (
+			event.type !== 'touchcancel' &&
+			pinch.ids.every((id) => ids.includes(id))
+		)
+			return;
+		applyTouchPinch();
+		pinch = null;
+		resumeTouchPan = event.type !== 'touchcancel' && event.touches.length === 1;
+		panMoved = true;
+		clearTimeout(zoomTimer);
+		zoomTimer = setTimeout(() => void commitZoomRender(), 120);
+		if (event.type !== 'touchcancel' && event.touches.length === 2)
+			onPinchTouchStart(event);
 	}
 
+	function cancelViewGesture() {
+		cancelPanGesture();
+		cancelZoomAnimation();
+		if (pinchRaf) cancelAnimationFrame(pinchRaf);
+		pinchRaf = 0;
+		pinch = null;
+		resumeTouchPan = false;
+	}
 	function flushPan() {
 		if (panRaf) cancelAnimationFrame(panRaf);
 		panRaf = 0;
@@ -2227,12 +2332,12 @@
 	}
 
 	function onWorkspacePointerDown(event: PointerEvent) {
-		if (event.pointerType === 'touch') return;
 		if (annotating || textEditor || pinch) return;
 		// A fresh press must recover even if the previous release was lost.
 		if (panDrag) cancelPanGesture();
 		if (event.button !== 0 && event.pointerType === 'mouse') return;
 		event.preventDefault();
+		cancelZoomAnimation();
 		stopPanMomentum();
 		panMoved = false;
 		panStartX = event.clientX;
@@ -2254,6 +2359,17 @@
 	}
 
 	function onWorkspacePointerMove(event: PointerEvent) {
+		if (
+			resumeTouchPan &&
+			event.pointerType === 'touch' &&
+			!pinch &&
+			!annotating &&
+			!panDrag
+		) {
+			onWorkspacePointerDown(event);
+			resumeTouchPan = false;
+			panMoved = true;
+		}
 		if (!panDrag || event.pointerId !== panDrag.pointerId) return;
 		// Recover from a release outside the window or an interrupted native drag.
 		if (event.pointerType === 'mouse' && !(event.buttons & 1)) {
@@ -2321,17 +2437,14 @@
 				zoomFocusX = event.clientX - rect.left;
 				zoomFocusY = event.clientY - rect.top;
 			}
+			clearTimeout(prefetchTimer);
 			if (!zoomRaf) {
-				zoomRaf = requestAnimationFrame(() => {
-					zoomRaf = 0;
-					if (zoomPending != null) {
-						setZoom(zoomPending, { focusX: zoomFocusX, focusY: zoomFocusY });
-						zoomPending = null;
-					}
-				});
+				zoomFrameTime = performance.now();
+				zoomRaf = requestAnimationFrame(animateZoom);
 			}
 			return;
 		}
+		cancelZoomAnimation();
 		stopPanMomentum();
 		const factor = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 40 : 1;
 		panX -= event.deltaX * factor;
