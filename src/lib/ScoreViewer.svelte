@@ -420,6 +420,9 @@
 				: [page]
 			: [page]
 	);
+	const canGoNext = $derived(
+		!!pdf && visiblePages[visiblePages.length - 1] < pdf.numPages
+	);
 	const recentSymbolObjects = $derived(
 		recentSymbols
 			.map((id) => MUSIC_SYMBOLS.find((s) => s.id === id))
@@ -806,7 +809,6 @@
 
 	async function render(opts?: { quiet?: boolean }) {
 		if (!pdf || !host || closed) return;
-		cancelRender(visiblePages);
 		const current = ++generation;
 		const requestedZoom = zoom;
 		if (!opts?.quiet || !hasPainted) {
@@ -826,6 +828,14 @@
 			} else if ((workspace?.clientWidth ?? host.clientWidth) < 720) {
 				dual = false;
 			}
+			// Opening a saved even page or switching layouts must use the same
+			// spread boundaries as page jumps and forward/backward navigation.
+			if (dual && page % 2 === 0) {
+				page -= 1;
+				pageInput = String(page);
+				persistPrefs();
+			}
+			cancelRender(visiblePages);
 			// Parallelize left/right page rasterization — dual mode was sequential before.
 			const results = await Promise.all(
 				visiblePages.map((num, index) => renderPage(num, index, current))
@@ -2067,7 +2077,7 @@
 	}
 	function next() {
 		cancelHandwriting();
-		if (!pdf) return;
+		if (!pdf || !canGoNext) return;
 		pageTransition = true;
 		stopPanMomentum();
 		needsCenter = true;
@@ -2580,7 +2590,7 @@
 					title="Next page"
 					aria-label="Next page"
 					onclick={next}
-					disabled={!pdf || page >= pdf.numPages}
+					disabled={!canGoNext}
 					><ChevronRight size={19} /></button>
 			</div>
 			<div class="topbar-right" role="toolbar" aria-label="Score tools">
@@ -2851,7 +2861,7 @@
 				if (event.detail === 0) next();
 			}}
 			disabled={!pdf ||
-				page >= (pdf?.numPages ?? 1) ||
+				!canGoNext ||
 				!!textEditor ||
 				annotating}></button>
 	</main>
