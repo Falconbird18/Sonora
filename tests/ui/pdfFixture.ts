@@ -82,11 +82,16 @@ export async function makePdfFixture(
 	const stream = add(
 		`<< /Length ${encoder.encode(content).length} >>\nstream\n${content}endstream`
 	);
-	const pages = Array.from({ length: pageCount }, () =>
-		add(
-			`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >> ${imageId ? `/XObject << /Im1 ${imageId} 0 R >>` : ''} >> /Contents ${stream} 0 R >>`
-		)
-	);
+	const pages = Array.from({ length: pageCount }, (_, index) => {
+		// Distinct pixels and labels expose swapped, stale, or repeated page rasters.
+		const marker = `${(index + 1) / (pageCount + 1)} g 0 772 20 20 re f 0 g BT /F1 12 Tf 40 770 Td (Page ${index + 1}) Tj ET\n`;
+		const pageStream = add(
+			`<< /Length ${encoder.encode(marker).length} >>\nstream\n${marker}endstream`
+		);
+		return add(
+			`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >> ${imageId ? `/XObject << /Im1 ${imageId} 0 R >>` : ''} >> /Contents [${stream} 0 R ${pageStream} 0 R] >>`
+		);
+	});
 	objects[1] = encoder.encode(
 		`<< /Type /Pages /Count ${pageCount} /Kids [${pages.map((page) => `${page} 0 R`).join(' ')}] >>`
 	);

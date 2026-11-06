@@ -1,5 +1,6 @@
 //! Local, isolated Audiveris jobs. Keep the complete book and engine output for
 //! correction; a successful subprocess exit alone is not proof of a usable score.
+mod layout;
 mod musicxml;
 mod project;
 mod runtime;
@@ -18,13 +19,14 @@ use std::{
 };
 use tauri::Manager;
 
-const RECOGNITION_REVISION: u32 = 2;
+const RECOGNITION_REVISION: u32 = 4;
 const XML_LIMIT: u64 = 64 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Options {
+    recover_beam_borders: bool,
     dpi: u16,
     first_page: u32,
     last_page: Option<u32>,
@@ -39,6 +41,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            recover_beam_borders: false,
             dpi: 400,
             first_page: 1,
             last_page: None,
@@ -222,6 +225,7 @@ fn automatic_options(context: &str) -> Options {
         "studies",
     ]);
     Options {
+        recover_beam_borders: true,
         lyrics: vocal || !instrumental,
         languages: languages.join("+"),
         small_notes: ["cue notes", "small notes", "cadenza", "grace notes"]
@@ -450,7 +454,8 @@ fn arguments(input: &Path, output: &Path, options: &Options) -> Vec<String> {
         "-batch".into(),
         "-transcribe".into(),
         "-export".into(),
-        "-save".into(),
+        // -swap checkpoints each processed page. -save would rewrite the
+        // whole project after every internal recognition step.
         "-swap".into(),
         "-output".into(),
         output.to_string_lossy().into_owned(),
@@ -478,6 +483,12 @@ fn arguments(input: &Path, output: &Path, options: &Options) -> Vec<String> {
         (
             "org.audiveris.omr.sheet.key.KeyExtractor.maxEvalRank",
             "8".into(),
+        ),
+        // Recover partially fused beam/hook edges. Audiveris still checks ink
+        // density, beam thickness and stem links before accepting a candidate.
+        (
+            "org.audiveris.omr.sheet.beam.BeamStructure.allowBorderCreation",
+            options.recover_beam_borders.to_string(),
         ),
         // Classical grand staves can have braces without connected internal
         // barlines (notably cadenzas). Keep the hands in a single logical part.
@@ -645,8 +656,12 @@ fn run(
     let output = dir.join("output");
     fs::create_dir_all(&output).map_err(|e| e.to_string())?;
     let mut source = input.to_path_buf();
-    let mut recovering = input.extension().is_some_and(|e| e == "omr");
-    if !recovering {
+    let project_input = input.extension().is_some_and(|e| e == "omr");
+    let mut recovering = project_input
+        && project::pages(input)
+            .map(|(total, pages)| pages.len() < total as usize)
+            .unwrap_or(true);
+    if !project_input {
         let mut args = arguments(input, &output, options);
         args.retain(|a| a != "-transcribe" && a != "-export");
         args.splice(1..1, ["-step".into(), "PAGE".into()]);
@@ -669,7 +684,7 @@ fn run(
         if recovering {
             "recovering"
         } else {
-            "exporting"
+            "checking_layout"
         },
     );
     if let Ok((total, completed)) = project::pages(&source) {
@@ -699,6 +714,25 @@ fn run(
         // Retried pages can contain more empty glyphs. Normalize after saving
         // them too, before the separate exporter reloads the book.
         project::make_compatible(&source)?;
+    }
+    set_phase(active, "checking_layout");
+    if layout::needs_repair(&source) {
+        fs::copy(&source, dir.join("recognition-original.omr")).map_err(|e| e.to_string())?;
+        match layout::reconcile(&source) {
+            Ok(report) => {
+                fs::write(
+                    dir.join("layout-report.json"),
+                    serde_json::to_vec_pretty(&report).unwrap(),
+                )
+                .map_err(|e| e.to_string())?;
+                if report.systems_rejoined > 0 {
+                    active.job.lock().unwrap().warnings.push(format!("Layout consistency: rejoined {} isolated grand-staff split(s) on source pages {:?}. Both staves and their notation were retained.",report.systems_rejoined,report.source_pages));
+                }
+            }
+            Err(error) => active.job.lock().unwrap().warnings.push(format!(
+                "Score structure needs review: {error}. The original recognition project was kept."
+            )),
+        }
     }
     set_phase(active, "exporting");
     let mut args = arguments(&source, &output, options);
@@ -1060,17 +1094,23 @@ fn resumable_project(
         let Ok(job) = load(&entry.path()) else {
             continue;
         };
-        if job.recognition_revision != RECOGNITION_REVISION
+        let repair_completed = job.status == "complete"
+            && job.recognition_revision >= 2
+            && job.recognition_revision <= RECOGNITION_REVISION;
+        if (!repair_completed && job.recognition_revision != RECOGNITION_REVISION)
             || job.score_id != score
             || job.options != *options
-            || !["failed", "interrupted"].contains(&job.status.as_str())
+            || (!repair_completed && !["failed", "interrupted"].contains(&job.status.as_str()))
         {
             continue;
         }
-        // Only the known engine crash is recoverable with this workaround.
-        if !metronome_failure(
-            &fs::read_to_string(entry.path().join("engine.log")).unwrap_or_default(),
-        ) {
+        // Interrupted recognition resumes only for the known classifier crash.
+        // Completed books are reused only for a verified structural repair.
+        if !repair_completed
+            && !metronome_failure(
+                &fs::read_to_string(entry.path().join("engine.log")).unwrap_or_default(),
+            )
+        {
             continue;
         }
         let Some(name) = Path::new(&job.source).file_name() else {
@@ -1080,7 +1120,9 @@ fn resumable_project(
             continue;
         }
         if let Some(project) = find_project(&entry.path().join("output")) {
-            candidates.push((job.created_at, project));
+            if !repair_completed || layout::needs_repair(&project) {
+                candidates.push((job.created_at, project));
+            }
         }
     }
     candidates
@@ -1185,7 +1227,8 @@ pub async fn start_omr(
             .and_then(|_| {
                 let saved = resumable_project(&history_root, &dir, &worker.job.lock().unwrap().score_id, &snapshot, &options);
                 let source = if let Some(saved) = saved {
-                    set_phase(&worker, "recovering");
+                    let complete = project::pages(&saved).is_ok_and(|(total,pages)| total as usize == pages.len());
+                    set_phase(&worker, if complete { "checking_layout" } else { "recovering" });
                     fs::create_dir_all(dir.join("output")).map_err(|e| e.to_string())?;
                     let destination = dir.join("output").join(saved.file_name().ok_or("Missing project filename")?);
                     fs::copy(&saved, &destination).map_err(|e| e.to_string())?;
@@ -1195,7 +1238,7 @@ pub async fn start_omr(
             });
         let mut job = worker.job.lock().unwrap().clone();
         let mut artifacts = Vec::new();
-        let mut warnings = Vec::new();
+        let mut warnings = job.warnings.clone();
         if dir.join("output").is_dir() {
             if let Err(error) = collect(&dir.join("output"), &dir, 0, &mut artifacts, &mut warnings) { warnings.push(error); }
         }
@@ -1356,8 +1399,8 @@ mod tests {
         );
         assert_eq!(args.last().unwrap(), "/a score/@input.pdf");
         assert_eq!(args[args.len() - 2], "--");
+        assert!(!args.iter().any(|a| a == "-save"));
         for value in [
-            "-save",
             "-swap",
             "-transcribe",
             "-export",
@@ -1378,7 +1421,7 @@ mod tests {
     fn automatic_profile_needs_no_user_settings() {
         let vocal = automatic_options("Robert Schumann Germany voice and piano");
         assert_eq!(vocal.languages, "deu+eng+ita");
-        assert!(vocal.lyrics && vocal.tremolos && vocal.fingerings);
+        assert!(vocal.lyrics && vocal.tremolos && vocal.fingerings && vocal.recover_beam_borders);
         assert!(!vocal.small_notes);
         assert!(automatic_options("Chamber score with cue notes").small_notes);
         assert_eq!(
@@ -1532,6 +1575,25 @@ mod tests {
         fs::write(old.join("job.json"), serde_json::to_vec(&legacy).unwrap()).unwrap();
         assert!(resumable_project(&root, &root.join("new"), "score", &source, &options).is_none());
         persist(&old, &job).unwrap();
+        let grand="<system><part logical-id=\"3\"><staff-configuration line-count=\"5\"/><staff-configuration line-count=\"5\"/></part></system>";
+        let split="<system><part logical-id=\"1\"><staff-configuration line-count=\"5\"/></part><part logical-id=\"2\"><staff-configuration line-count=\"5\"/></part></system>";
+        let layout_book=format!("<book software-version=\"5.11.0\"><sheet number=\"1\"><page id=\"1\">{}{split}{}</page></sheet><score><logical-part id=\"1\" staff-count=\"1\"/><logical-part id=\"2\" staff-count=\"1\"/><logical-part id=\"3\" staff-count=\"2\"/><page sheet-number=\"1\" sheet-page-id=\"1\"/></score></book>",grand.repeat(3),grand.repeat(4));
+        let write_book = |bytes: &[u8]| {
+            let mut zip = zip::ZipWriter::new(File::create(old.join("output/score.omr")).unwrap());
+            zip.start_file("book.xml", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes).unwrap();
+            zip.finish().unwrap();
+        };
+        let mut completed = job.clone();
+        completed.recognition_revision = 2;
+        completed.status = "complete".into();
+        persist(&old, &completed).unwrap();
+        write_book(layout_book.as_bytes());
+        assert!(resumable_project(&root, &root.join("new"), "score", &source, &options).is_some());
+        write_book(layout_book.replace(split, grand).as_bytes());
+        assert!(resumable_project(&root, &root.join("new"), "score", &source, &options).is_none());
+        persist(&old, &job).unwrap();
         fs::write(&source, b"changed!").unwrap();
         assert!(resumable_project(&root, &root.join("new"), "score", &source, &options).is_none());
         fs::write(&source, b"original").unwrap();
@@ -1650,7 +1712,9 @@ mod tests {
             options = automatic_options(&context);
             options.last_page = Some(1);
         }
-        if input.extension().is_some_and(|e| e == "omr") {
+        if input.extension().is_some_and(|e| e == "omr")
+            || std::env::var("SONORA_OMR_TEST_FULL_BOOK").is_ok()
+        {
             options.last_page = None;
         }
         let job = Job {
@@ -1684,7 +1748,13 @@ mod tests {
         let mut artifacts = Vec::new();
         let mut warnings = Vec::new();
         collect(&dir.join("output"), &dir, 0, &mut artifacts, &mut warnings).unwrap();
+        artifacts.sort_by(|a, b| a.name.cmp(&b.name));
         warnings.extend(diagnostics(&dir, &artifacts, &options));
+        let mut snapshot = active.job.lock().unwrap().clone();
+        snapshot.status = if success { "complete" } else { "failed" }.into();
+        snapshot.artifacts = artifacts.clone();
+        snapshot.warnings.extend(warnings.clone());
+        persist(&dir, &snapshot).unwrap();
         println!(
             "Output: {}\nArtifacts: {artifacts:#?}\nWarnings: {warnings:#?}\n{}",
             dir.display(),
@@ -1702,6 +1772,15 @@ mod tests {
                 .any(|w| w.contains("Missing support") || w.contains("No installed OCR")),
             "{warnings:?}"
         );
+        if std::env::var("SONORA_OMR_TEST_EXPECT_LAYOUT_REPAIR").is_ok() {
+            let report: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join("layout-report.json")).unwrap()).unwrap();
+            assert!(report["systems_rejoined"].as_u64().unwrap() > 0);
+            assert!(dir.join("recognition-original.omr").is_file());
+            assert!(!layout::needs_repair(&dir.join("output/recovered.omr")));
+            let (total, pages) = project::pages(&dir.join("output/recovered.omr")).unwrap();
+            assert_eq!(total as usize, pages.len());
+        }
         if let Ok(expected) = std::env::var("SONORA_OMR_TEST_EXPECT_PARTS") {
             let expected = expected.parse::<usize>().unwrap();
             for artifact in artifacts.iter().filter(|a| a.kind == "musicxml") {

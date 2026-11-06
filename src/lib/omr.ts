@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 export interface OmrOptions {
+	recover_beam_borders?: boolean;
 	dpi: number;
 	first_page: number;
 	last_page: number | null;

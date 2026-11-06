@@ -18,6 +18,14 @@ Fixtures exercise work grouping, edition comparison, metadata editing, settings,
 
 `score-preview.png` is the public-domain IMSLP first-page preview for `PMLP1471-420.pdf`, retrieved October 20, 2026 from https://cdn.imslp.org/images/thumb/pdfs/72/097e974a8ae09ff66b2f11e5cef07d41aef02a56.png.
 
+## Viewer page order
+
+`/tests/ui/viewer-performance.html` uses PDFs with a distinct label and grayscale
+marker on each page. It checks actual canvas pixels after cached turns, rapid
+navigation, two-page rendering, and resizing. The final spread must disable Next,
+and reopening an even saved page in two-page mode must restore its containing
+spread and preserve backward navigation.
+
 ## Live native thumbnail decoding
 
 Run the ignored `live_diverse_works_and_decoded_images` Rust test with `SONORA_IMSLP_REVIEW_OUTPUT` set to an output JSON path. Copy that output to `tests/ui/live-imslp.local.json`, then visit `/tests/ui/live-thumbnails.html` on the review server. The page feeds the actual captured native data URLs through `ImslpThumbnail` and the persistent cache. Verify that each image's `naturalWidth` and `naturalHeight` are nonzero. The generated `.local.json` file is temporary and excluded from Git.

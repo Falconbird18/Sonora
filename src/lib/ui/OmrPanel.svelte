@@ -63,10 +63,20 @@
 	};
 	let progress = $derived(job?.progress);
 	let exporting = $derived(progress?.phase === 'exporting');
+	let checkingLayout = $derived(progress?.phase === 'checking_layout');
 	let total = $derived(progress?.total_pages || 0);
 	let completed = $derived(Math.min(progress?.completed_pages || 0, total));
 	let incomplete = $derived(
-		job?.warnings.some((w) => w.startsWith('Source page ')) || false
+		job?.warnings.some(
+			(w) =>
+				w.startsWith('Source page ') ||
+				w.startsWith('Score structure needs review:')
+		) || false
+	);
+
+	let reviewNeeded = $derived(
+		incomplete ||
+			job?.artifacts.some((a) => (a.review?.warnings.length || 0) > 0)
 	);
 
 	onMount(() => {
@@ -181,18 +191,22 @@
 					<h2>
 						{exporting
 							? 'Creating your MusicXML score'
-							: progress?.phase === 'recovering'
-								? 'Finishing saved recognition'
-								: 'Reading your music'}
+							: checkingLayout
+								? 'Checking score structure'
+								: progress?.phase === 'recovering'
+									? 'Finishing saved recognition'
+									: 'Reading your music'}
 					</h2>
 					<p class="stage">
 						{exporting
 							? 'Preserving the notation and preparing your score to view.'
-							: stageLabels[progress?.step || ''] ||
-								'Preparing the score for recognition'}{#if !exporting && progress?.current_page}
+							: checkingLayout
+								? 'Keeping instruments, staves, and voices consistent across the score.'
+								: stageLabels[progress?.step || ''] ||
+									'Preparing the score for recognition'}{#if !exporting && !checkingLayout && progress?.current_page}
 							· Page {progress.current_page}{/if}
 					</p>
-					{#if total && !exporting}
+					{#if total && !exporting && !checkingLayout}
 						<div class="page-count">
 							<span>Source pages processed</span><strong
 								>{completed} / {total}</strong>
@@ -204,7 +218,9 @@
 					{:else}<progress
 							aria-label={exporting
 								? 'Creating MusicXML'
-								: 'Preparing recognition'}></progress
+								: checkingLayout
+									? 'Checking score structure'
+									: 'Preparing recognition'}></progress
 						>{/if}
 					<ol class="conversion-steps" aria-label="Conversion stages">
 						<li class="done"><span>✓</span> Prepare</li>
@@ -252,7 +268,7 @@
 				<section aria-label="Conversion result">
 					{#if job.status !== 'running'}<h2>
 							{job.status === 'complete'
-								? incomplete
+								? reviewNeeded
 									? 'Your score needs review'
 									: 'Your score is ready'
 								: job.status === 'cancelled'
@@ -260,9 +276,9 @@
 									: 'Conversion needs attention'}
 						</h2>{/if}
 					{#if job.error}<p class="error">{job.error}</p>{/if}
-					{#if incomplete && job.status === 'complete'}<p class="warning">
-							Some source pages may be missing. Review the conversion notes
-							before using this score.
+					{#if reviewNeeded && job.status === 'complete'}<p class="warning">
+							Review the conversion notes and flagged measures against the
+							original before editing or transposing.
 						</p>{/if}
 					{#if job.warnings.length}<details>
 							<summary>Conversion notes ({job.warnings.length})</summary

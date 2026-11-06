@@ -109,6 +109,15 @@ try {
 	);
 	current = {
 		...current!,
+		progress: { ...current!.progress!, phase: 'checking_layout' }
+	};
+	await until(() => target.textContent!.includes('Checking score structure'));
+	assert(
+		!target.querySelector('progress')!.hasAttribute('value'),
+		'Whole-score layout checks have no invented percentage'
+	);
+	current = {
+		...current!,
 		progress: { ...current!.progress!, phase: 'exporting' }
 	};
 	await until(() =>
@@ -152,6 +161,10 @@ try {
 	assert(
 		target.textContent!.includes('measure 10'),
 		'Measure-level review must be available'
+	);
+	assert(
+		target.textContent!.includes('Your score needs review'),
+		'Flagged music must not be presented as an unchecked ready score'
 	);
 	button('Download MusicXML').click();
 	await until(() => saved);

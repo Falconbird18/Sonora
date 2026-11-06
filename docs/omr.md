@@ -84,9 +84,47 @@ perspective-correction engine for photographs. Flat, upright, evenly lit images
 remain preferable; see the upstream
 [scanning guide](https://audiveris.github.io/audiveris/_pages/guides/advanced/scanning/).
 
+Automatic conversion also enables recovery of partially fused beam borders. Older
+engravings can have a short beam hook joined to the beam beneath it; rejecting
+this structure can turn sixteenths and eighths into quarters. Missing opposite
+edges may be reconstructed by the engine, while its ink-density, thickness and
+stem-link checks still apply. This adds no external models or services and does
+not edit durations in the exported MusicXML.
+
+## Whole-score structure consistency
+
+After recognition and before export, Sonora checks physical staff groups across
+each complete movement. An isolated two-part split is rejoined only when the
+surrounding systems agree on a single two-staff part, at least 85% of the movement
+uses that same grand staff, every system has exactly two standard five-line
+staves, and measure IDs and source staff order agree. Named instruments,
+lyric-bearing parts, mixed ensembles and ambiguous instrumentation changes are
+excluded. This is source-layout reconciliation, not removal of MusicXML parts
+based on their names or apparent emptiness.
+
+The repair joins the two physical staff containers, their corresponding measures,
+barlines and notation references in a private Audiveris project. Voice IDs remain
+separate, and the symbol graph, source pixels and recognized noteheads are retained.
+Unused logical parts created by the split are then removed from that movement.
+Audiveris performs the final MusicXML export, including inherited key signatures.
+This can also correct accidental inheritance that was broken by the false part
+boundary. It does not identify every wrong pitch or rhythm.
+
+The original project is retained as `recognition-original.omr`, with a
+`layout-report.json` recording repaired systems and source pages. Changes are
+validated before an atomic file replacement. If a candidate contains unsupported
+or conflicting data, Sonora keeps the original and surfaces a review note.
+
+**Convert again** can reuse a completed conversion with matching source bytes and
+recognition options when this specific structure repair is needed. It re-exports
+all movements without repeating note recognition. A changed recognition profile,
+including enabling beam-border recovery for an older conversion, requires fresh
+processing so the new result does not silently retain old recognition errors.
+
 ## Progress and recovery
 
-Conversion shows preparation, recognition and MusicXML stages. During recognition,
+Conversion shows preparation, recognition, a whole-score structure check and
+MusicXML export. During recognition,
 source-page counts and the current task come from the engine log. Page counts
 measure pages processed, including pages requiring review; they are not an accuracy
 score or a time estimate. MusicXML export has a separate indeterminate indicator.
@@ -108,7 +146,10 @@ Recognition runs on a native background thread, one score at a time. Cancelling
 stops the engine; closing Sonora stops its worker. On Unix the engine gets its own
 process group, so shell-launched Java children are stopped as well. Unexpectedly
 interrupted jobs are identified when the app next opens. Recognition has a two-hour
-limit, while `-swap` releases processed sheets to reduce memory use.
+limit. `-swap` checkpoints each processed page and releases it to reduce memory
+use. Sonora avoids the per-step `-save` option, which rewrites the complete project
+after every internal step. A hard interruption can therefore lose the page currently
+being processed, while completed pages remain saved.
 
 Files live under `<Sonora app-data>/omr/`: a versioned runtime, cached OCR data,
 imported PDF snapshots, and job directories containing the original input,
@@ -159,4 +200,8 @@ The vocal conversion fixture is Audiveris's public
 [Schumann Dichterliebe example](https://github.com/Audiveris/audiveris/blob/5.11.0/data/examples/Dichterliebe01.pdf).
 The integration test also accepts `SONORA_OMR_TEST_EXPECT_PARTS` and
 `SONORA_OMR_TEST_EXPECT_METER` (for example, `1` and `2/4`) to check known source
-structure. These are functional tests, not an accuracy benchmark.
+structure. `SONORA_OMR_TEST_EXPECT_LAYOUT_REPAIR=1` with a saved `.omr` input
+additionally checks the structural repair, retained original and complete page
+coverage. Use a complete multi-movement book to guard against phantom parts that
+single-page fixtures cannot reveal. `SONORA_OMR_TEST_FULL_BOOK=1` runs recognition
+on every page of a PDF instead of the default one-page smoke check. These are functional tests, not an accuracy benchmark.
