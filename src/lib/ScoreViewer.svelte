@@ -411,18 +411,20 @@
 	const primaryColors = colors.slice(0, 3);
 	const extraColors = colors.slice(3);
 	let colorPickerOpen = $state(false);
+	// Keep the selected page when a layout change puts it on the right.
+	const firstVisiblePage = $derived(dual && page % 2 === 0 ? page - 1 : page);
+	const lastVisiblePage = $derived(
+		dual && pdf && firstVisiblePage < pdf.numPages
+			? firstVisiblePage + 1
+			: firstVisiblePage
+	);
 	const visiblePages = $derived(
-		pdf
-			? dual
-				? page < pdf.numPages
-					? [page, page + 1]
-					: [page]
-				: [page]
-			: [page]
+		firstVisiblePage === lastVisiblePage
+			? [firstVisiblePage]
+			: [firstVisiblePage, lastVisiblePage]
 	);
-	const canGoNext = $derived(
-		!!pdf && visiblePages[visiblePages.length - 1] < pdf.numPages
-	);
+	const canGoNext = $derived(!!pdf && lastVisiblePage < pdf.numPages);
+	const canGoPrevious = $derived(!!pdf && firstVisiblePage > 1);
 	const recentSymbolObjects = $derived(
 		recentSymbols
 			.map((id) => MUSIC_SYMBOLS.find((s) => s.id === id))
@@ -527,7 +529,7 @@
 			recentSymbols = Array.isArray(saved.recentSymbols)
 				? saved.recentSymbols
 				: [];
-			if (typeof saved.page === 'number' && saved.page > 0) {
+			if (Number.isInteger(saved.page) && saved.page > 0) {
 				page = saved.page;
 				pageInput = String(saved.page);
 			}
@@ -828,13 +830,6 @@
 			} else if ((workspace?.clientWidth ?? host.clientWidth) < 720) {
 				dual = false;
 			}
-			// Opening a saved even page or switching layouts must use the same
-			// spread boundaries as page jumps and forward/backward navigation.
-			if (dual && page % 2 === 0) {
-				page -= 1;
-				pageInput = String(page);
-				persistPrefs();
-			}
 			cancelRender(visiblePages);
 			// Parallelize left/right page rasterization — dual mode was sequential before.
 			const results = await Promise.all(
@@ -864,7 +859,13 @@
 					'This page could not be rendered at the current size. Try Fit Page or reduce zoom.';
 			}
 		} finally {
-			if (current === generation) loading = false;
+			if (current === generation) {
+				loading = false;
+				if (pageTransition)
+					requestAnimationFrame(() => {
+						if (current === generation) pageTransition = false;
+					});
+			}
 		}
 	}
 
@@ -1094,8 +1095,10 @@
 			if (!pdf || !host || closed) return;
 			const step = dual ? 2 : 1;
 			const upcoming = [step, -step, step * 2, -step * 2, step * 3].flatMap(
-				(offset) =>
-					dual ? [page + offset, page + offset + 1] : [page + offset]
+				(offset) => {
+					const start = firstVisiblePage + offset;
+					return dual ? [start, start + 1] : [start];
+				}
 			);
 			const largestPage = Math.max(
 				1,
@@ -2076,54 +2079,29 @@
 		void render({ quiet: hasPainted });
 	}
 	function next() {
-		cancelHandwriting();
-		if (!pdf || !canGoNext) return;
-		pageTransition = true;
-		stopPanMomentum();
-		needsCenter = true;
-		page = Math.min(
-			pdf.numPages,
-			dual ? Math.min(pdf.numPages, page + 2) : page + 1
-		);
-		pageInput = String(page);
-		ensureHistory(page);
-		persistPrefs();
-		void render({ quiet: hasPainted }).finally(() => {
-			requestAnimationFrame(() => {
-				pageTransition = false;
-			});
-		});
+		if (canGoNext) navigateToPage(lastVisiblePage + 1, true);
 	}
 	function previous() {
-		cancelHandwriting();
-		if (!pdf) return;
-		pageTransition = true;
-		stopPanMomentum();
-		needsCenter = true;
-		page = Math.max(1, dual ? page - 2 : page - 1);
-		pageInput = String(page);
-		ensureHistory(page);
-		persistPrefs();
-		void render({ quiet: hasPainted }).finally(() => {
-			requestAnimationFrame(() => {
-				pageTransition = false;
-			});
-		});
+		if (canGoPrevious) navigateToPage(firstVisiblePage - (dual ? 2 : 1), true);
 	}
 	function goToPage() {
-		cancelHandwriting();
-		const value = Math.max(
-			1,
-			Math.min(pdf?.numPages || 1, Number.parseInt(pageInput, 10) || 1)
+		if (!pdf) return;
+		navigateToPage(
+			Math.max(1, Math.min(pdf.numPages, Number.parseInt(pageInput, 10) || 1))
 		);
-		const nextPage = dual && value % 2 === 0 ? value - 1 : value;
-		if (nextPage === page) return;
+	}
+	function navigateToPage(number: number, animate = false) {
+		pageInput = String(number);
+		if (number === page) return;
+		cancelHandwriting();
+		cancelViewGesture();
+		clearTimeout(zoomTimer);
 		stopPanMomentum();
 		needsCenter = true;
-		page = nextPage;
-		pageInput = String(page);
+		page = number;
 		ensureHistory(page);
 		persistPrefs();
+		pageTransition = animate;
 		void render({ quiet: hasPainted });
 	}
 	function toggleBookmark() {
@@ -2501,11 +2479,8 @@
 					.join(' ')
 					.toLowerCase();
 				if (text.includes(needle)) {
-					page = number;
-					pageInput = String(number);
 					searchStatus = `Found on page ${number}`;
-					persistPrefs();
-					void render({ quiet: hasPainted });
+					navigateToPage(number);
 					return;
 				}
 			} catch {}
@@ -2578,7 +2553,7 @@
 					title="Previous page"
 					aria-label="Previous page"
 					onclick={previous}
-					disabled={page <= 1}><ChevronLeft size={19} /></button>
+					disabled={!canGoPrevious}><ChevronLeft size={19} /></button>
 				<input
 					aria-label="Page number"
 					bind:value={pageInput}
@@ -2853,17 +2828,14 @@
 			onclick={(event) => {
 				if (event.detail === 0) previous();
 			}}
-			disabled={page <= 1 || !!textEditor || annotating}></button>
+			disabled={!canGoPrevious || !!textEditor || annotating}></button>
 		<button
 			class="page-hit right-hit"
 			aria-label="Next page"
 			onclick={(event) => {
 				if (event.detail === 0) next();
 			}}
-			disabled={!pdf ||
-				!canGoNext ||
-				!!textEditor ||
-				annotating}></button>
+			disabled={!canGoNext || !!textEditor || annotating}></button>
 	</main>
 
 	{#if textEditor}

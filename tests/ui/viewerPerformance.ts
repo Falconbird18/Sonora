@@ -29,7 +29,8 @@ try {
 		keepAwake: false
 	}));
 	await warmPdfRenderer();
-	const bytes = await makePdfFixture('scan');
+	const pageCount = 24;
+	const bytes = await makePdfFixture('scan', pageCount);
 	const start = performance.now();
 	component = mount(ScoreViewer, {
 		target: app,
@@ -38,7 +39,7 @@ try {
 				id: `viewer-benchmark-${Date.now()}`,
 				title: 'Benchmark',
 				composer: 'Fixture',
-				totalPages: 24,
+				totalPages: pageCount,
 				addedAt: 1,
 				pdfBlob: new Blob([bytes])
 			},
@@ -123,19 +124,77 @@ try {
 		() =>
 			app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width > beforeZoom
 	);
+	const pageInput = app.querySelector<HTMLInputElement>(
+		'input[aria-label="Page number"]'
+	)!;
+	const jump = (number: number) => {
+		pageInput.value = String(number);
+		pageInput.dispatchEvent(new Event('input', { bubbles: true }));
+		pageInput.dispatchEvent(
+			new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+		);
+	};
+	const expectPages = async (...numbers: number[]) => {
+		await tick();
+		await waitFor(() => {
+			const canvases = app.querySelectorAll<HTMLCanvasElement>('.pdf-canvas');
+			return (
+				canvases.length === numbers.length &&
+				numbers.every((number, index) => {
+					const canvas = canvases[index];
+					const marker = canvas
+						.getContext('2d')!
+						.getImageData(
+							Math.floor(canvas.width / 100),
+							Math.floor(canvas.height / 100),
+							1,
+							1
+						)
+						.data[0];
+					return Math.abs(marker - (number * 255) / (pageCount + 1)) < 2;
+				})
+			);
+		});
+	};
+	const toggleLayout = (label: string) =>
+		app
+			.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!
+			.click();
+
+	phase = 'even page through layout changes';
+	jump(10);
+	await expectPages(10);
+	toggleLayout('Switch to two pages');
+	await expectPages(9, 10);
+	toggleLayout('Switch to single page');
+	await expectPages(10);
+	if (pageInput.value !== '10') throw Error('Layout change lost the selected page');
+
+	phase = 'spread turns from an even page';
+	toggleLayout('Switch to two pages');
+	await expectPages(9, 10);
+	await turn('Next page');
+	await expectPages(11, 12);
+	await turn('Previous page');
+	await expectPages(9, 10);
+	jump(pageCount);
+	await expectPages(pageCount - 1, pageCount);
+	if (Number(pageInput.value) !== pageCount)
+		throw Error('Jump lost the selected page');
+	window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+	await expectPages(pageCount - 1, pageCount);
+	if (Number(pageInput.value) !== pageCount)
+		throw Error('Turn advanced past the last spread');
+	jump(2);
+	await expectPages(1, 2);
+	window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+	await expectPages(1, 2);
+	if (Number(pageInput.value) !== 2)
+		throw Error('Turn advanced before the first spread');
+
 	phase = 'dual';
-	app
-		.querySelector<HTMLButtonElement>(
-			'button[aria-label="Switch to two pages"]'
-		)!
-		.click();
-	await waitFor(
-		() =>
-			app.querySelectorAll('.pdf-canvas').length === 2 &&
-			[...app.querySelectorAll<HTMLCanvasElement>('.pdf-canvas')].every(
-				(canvas) => canvas.width > 300
-			)
-	);
+	jump(10);
+	await expectPages(9, 10);
 	await delay(350);
 	const beforeResize =
 		app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.height;
@@ -211,7 +270,7 @@ try {
 				'touch and mouse page taps without duplicate turns',
 				'rapid navigation',
 				'zoom resolution',
-				'dual spread',
+				'ordered spread rasters, exact page jumps, and layout changes',
 				'resized bitmap',
 				'nonblank page',
 				'touchscreen pinch and stable sharpening'
