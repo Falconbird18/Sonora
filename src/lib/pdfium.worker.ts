@@ -86,6 +86,12 @@ async function execute(request: PdfWorkerRequest): Promise<PdfWorkerResult> {
 	const raw = await engine
 		.renderPageRaw(document, page, { scaleFactor: scale, dpr: 1 })
 		.toPromise();
+	if (request.method === 'pixels')
+		return {
+			pixels: new Uint8ClampedArray(raw.data),
+			width: raw.width,
+			height: raw.height
+		};
 	const image = new ImageData(raw.data, raw.width, raw.height);
 	if (request.method === 'blob' && typeof OffscreenCanvas !== 'undefined') {
 		const canvas = new OffscreenCanvas(raw.width, raw.height);

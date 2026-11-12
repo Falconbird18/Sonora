@@ -30,10 +30,10 @@ export type PdfDocumentProxy = {
 		pageIndex: number,
 		options?: PdfRenderOptions
 	): Promise<RenderedPdfPage>;
-	renderBitmap?(
+	renderPixels?(
 		pageIndex: number,
 		options?: PdfRenderOptions
-	): Promise<ImageBitmap>;
+	): Promise<ImageData>;
 	cleanup(): Promise<void>;
 };
 type RenderedPdfPage = { blob: Blob; width: number; height: number };
@@ -165,8 +165,8 @@ function wrapDocument(document: PdfDocumentRenderer): OpenedPdf {
 		renderPage(pageIndex, options) {
 			return document.renderPage(pageIndex, options);
 		},
-		renderBitmap: document.renderBitmap
-			? (pageIndex, options) => document.renderBitmap!(pageIndex, options)
+		renderPixels: document.renderPixels
+			? (pageIndex, options) => document.renderPixels!(pageIndex, options)
 			: undefined,
 		cleanup: document.close
 	};

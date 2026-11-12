@@ -1,7 +1,7 @@
 import { mount, unmount, tick } from 'svelte';
 import ScoreViewer from '../../src/lib/ScoreViewer.svelte';
 import { settings } from '../../src/lib/settingsStore';
-import { makePdfFixture } from './pdfFixture';
+import { makePdfFixture, readPdfFixturePage } from './pdfFixture';
 import { warmPdfRenderer } from '../../src/lib/pdfUtils';
 import '../../src/app.css';
 if (!import.meta.env.DEV) throw Error('Development-only fixture');
@@ -10,6 +10,8 @@ const result = document.querySelector('#result')!;
 const delay = (ms = 10) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
 let phase = 'first paint';
+let lastRenderedPages: number[] = [];
+const scoreId = `viewer-benchmark-${Date.now()}`;
 async function waitFor(test: () => boolean) {
 	const start = performance.now();
 	while (!test()) {
@@ -18,6 +20,15 @@ async function waitFor(test: () => boolean) {
 		if (performance.now() - start > 10000)
 			throw Error(`Viewer regression timed out: ${phase}`);
 		await delay();
+	}
+}
+function supportsSyntheticTouch(target: HTMLElement) {
+	try {
+		const touch = new Touch({ identifier: 1, target });
+		new TouchEvent('touchstart', { touches: [touch] });
+		return true;
+	} catch {
+		return false;
 	}
 }
 let component: ReturnType<typeof mount> | undefined;
@@ -29,14 +40,14 @@ try {
 		keepAwake: false
 	}));
 	await warmPdfRenderer();
-	const pageCount = 24;
+	const pageCount = 25;
 	const bytes = await makePdfFixture('scan', pageCount);
 	const start = performance.now();
 	component = mount(ScoreViewer, {
 		target: app,
 		props: {
 			score: {
-				id: `viewer-benchmark-${Date.now()}`,
+				id: scoreId,
 				title: 'Benchmark',
 				composer: 'Fixture',
 				totalPages: pageCount,
@@ -134,26 +145,21 @@ try {
 			new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
 		);
 	};
+	const renderedPages = () =>
+		[
+			...app.querySelectorAll<HTMLCanvasElement>(
+				'.page-shell:not([hidden]) .pdf-canvas'
+			)
+		]
+			.sort(
+				(a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left
+			)
+			.map(readPdfFixturePage);
 	const expectPages = async (...numbers: number[]) => {
 		await tick();
 		await waitFor(() => {
-			const canvases = app.querySelectorAll<HTMLCanvasElement>('.pdf-canvas');
-			return (
-				canvases.length === numbers.length &&
-				numbers.every((number, index) => {
-					const canvas = canvases[index];
-					const marker = canvas
-						.getContext('2d')!
-						.getImageData(
-							Math.floor(canvas.width / 100),
-							Math.floor(canvas.height / 100),
-							1,
-							1
-						)
-						.data[0];
-					return Math.abs(marker - (number * 255) / (pageCount + 1)) < 2;
-				})
-			);
+			lastRenderedPages = renderedPages();
+			return lastRenderedPages.join(',') === numbers.join(',');
 		});
 	};
 	const toggleLayout = (label: string) =>
@@ -177,20 +183,51 @@ try {
 	await expectPages(11, 12);
 	await turn('Previous page');
 	await expectPages(9, 10);
-	jump(pageCount);
-	await expectPages(pageCount - 1, pageCount);
-	if (Number(pageInput.value) !== pageCount)
+	jump(pageCount - 1);
+	await expectPages(pageCount - 2, pageCount - 1);
+	if (Number(pageInput.value) !== pageCount - 1)
 		throw Error('Jump lost the selected page');
+	await turn('Next page');
+	await expectPages(pageCount);
+	if (Number(pageInput.value) !== pageCount)
+		throw Error('Turn skipped the final unpaired page');
 	window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
-	await expectPages(pageCount - 1, pageCount);
+	await expectPages(pageCount);
 	if (Number(pageInput.value) !== pageCount)
 		throw Error('Turn advanced past the last spread');
+	await turn('Previous page');
+	await expectPages(pageCount - 2, pageCount - 1);
 	jump(2);
 	await expectPages(1, 2);
 	window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
 	await expectPages(1, 2);
 	if (Number(pageInput.value) !== 2)
 		throw Error('Turn advanced before the first spread');
+
+	phase = 'rapid two-page turns';
+	const nextSpread = app.querySelector<HTMLButtonElement>(
+		'.page-controls button[aria-label="Next page"]'
+	)!;
+	const observed = [renderedPages().join(',')];
+	nextSpread.click();
+	nextSpread.click();
+	nextSpread.click();
+	const turnDeadline = performance.now() + 5000;
+	while (observed.at(-1) !== '7,8' && performance.now() < turnDeadline) {
+		await new Promise(requestAnimationFrame);
+		const spread = renderedPages().join(',');
+		if (spread !== observed.at(-1)) observed.push(spread);
+	}
+	if (observed.join(' → ') !== '1,2 → 3,4 → 5,6 → 7,8')
+		throw Error(`Rapid turns displayed ${observed.join(' → ')}`);
+
+	phase = 'held page-turn key';
+	window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+	for (let i = 0; i < 3; i++)
+		window.dispatchEvent(
+			new KeyboardEvent('keydown', { key: 'ArrowLeft', repeat: true })
+		);
+	await expectPages(5, 6);
 
 	phase = 'dual';
 	jump(10);
@@ -208,50 +245,53 @@ try {
 		() =>
 			app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.height < beforeResize
 	);
-	phase = 'touchscreen pinch';
 	const workspace = app.querySelector<HTMLElement>('.workspace')!;
-	const pages = app.querySelector<HTMLElement>('.pages')!;
-	const rect = workspace.getBoundingClientRect();
-	const initialWidth =
-		app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width;
-	const finger = (identifier: number, x: number) =>
-		new Touch({
-			identifier,
-			target: workspace,
-			clientX: rect.left + x,
-			clientY: rect.top + 180
-		});
-	const dispatchTouch = (type: string, touches: Touch[]) =>
-		workspace.dispatchEvent(
-			new TouchEvent(type, {
-				bubbles: true,
-				cancelable: true,
-				touches,
-				targetTouches: touches
-			})
+	const syntheticTouch = supportsSyntheticTouch(workspace);
+	if (syntheticTouch) {
+		phase = 'touchscreen pinch';
+		const pages = app.querySelector<HTMLElement>('.pages')!;
+		const rect = workspace.getBoundingClientRect();
+		const initialWidth =
+			app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width;
+		const finger = (identifier: number, x: number) =>
+			new Touch({
+				identifier,
+				target: workspace,
+				clientX: rect.left + x,
+				clientY: rect.top + 180
+			});
+		const dispatchTouch = (type: string, touches: Touch[]) =>
+			workspace.dispatchEvent(
+				new TouchEvent(type, {
+					bubbles: true,
+					cancelable: true,
+					touches,
+					targetTouches: touches
+				})
+			);
+		dispatchTouch('touchstart', [finger(1, 200), finger(2, 400)]);
+		dispatchTouch('touchmove', [finger(2, 450), finger(1, 150)]);
+		await delay(50);
+		const pinched = new DOMMatrix(getComputedStyle(pages).transform);
+		if (pinched.a < 1.5) throw Error('Touchscreen pinch did not scale page');
+		// Holding a pinch must not swap out canvas backing storage under the fingers.
+		await delay(350);
+		if (
+			app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width !== initialWidth
+		)
+			throw Error('Bitmap changed during active pinch');
+		dispatchTouch('touchend', []);
+		await waitFor(
+			() =>
+				app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width > initialWidth
 		);
-	dispatchTouch('touchstart', [finger(1, 200), finger(2, 400)]);
-	dispatchTouch('touchmove', [finger(2, 450), finger(1, 150)]);
-	await delay(50);
-	const pinched = new DOMMatrix(getComputedStyle(pages).transform);
-	if (pinched.a < 1.5) throw Error('Touchscreen pinch did not scale page');
-	// Holding a pinch must not swap out canvas backing storage under the fingers.
-	await delay(350);
-	if (
-		app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width !== initialWidth
-	)
-		throw Error('Bitmap changed during active pinch');
-	dispatchTouch('touchend', []);
-	await waitFor(
-		() =>
-			app.querySelector<HTMLCanvasElement>('.pdf-canvas')!.width > initialWidth
-	);
-	const settled = new DOMMatrix(getComputedStyle(pages).transform);
-	if (
-		Math.abs(settled.a - pinched.a) > 0.001 ||
-		Math.abs(settled.e - pinched.e) > 0.1
-	)
-		throw Error('Sharpening shifted touchscreen viewport');
+		const settled = new DOMMatrix(getComputedStyle(pages).transform);
+		if (
+			Math.abs(settled.a - pinched.a) > 0.001 ||
+			Math.abs(settled.e - pinched.e) > 0.1
+		)
+			throw Error('Sharpening shifted touchscreen viewport');
+	}
 
 	const canvas = app.querySelector<HTMLCanvasElement>('.pdf-canvas')!;
 	const pixels = canvas
@@ -270,11 +310,12 @@ try {
 				'touch and mouse page taps without duplicate turns',
 				'rapid navigation',
 				'zoom resolution',
-				'ordered spread rasters, exact page jumps, and layout changes',
+				'ordered spread rasters, rapid turns, held keys, and layout changes',
 				'resized bitmap',
 				'nonblank page',
-				'touchscreen pinch and stable sharpening'
-			]
+				...(syntheticTouch ? ['touchscreen pinch and stable sharpening'] : [])
+			],
+			skipped: syntheticTouch ? [] : ['synthetic touchscreen pinch unsupported']
 		},
 		null,
 		2
@@ -285,6 +326,13 @@ try {
 			status: 'FAIL',
 			error: String(error),
 			diagnostics: {
+				pageNumber: app.querySelector<HTMLInputElement>(
+					'input[aria-label="Page number"]'
+				)?.value,
+				lastRenderedPages,
+				savedPage: JSON.parse(
+					localStorage.getItem(`sonora-viewer-${scoreId}`) ?? '{}'
+				).page,
 				workspaceWidth:
 					app.querySelector<HTMLElement>('.workspace')?.clientWidth,
 				canvases: [

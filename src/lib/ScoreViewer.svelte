@@ -123,13 +123,12 @@
 		screenY?: number;
 	};
 	type PageBitmap = {
-		index: number;
 		number: number;
 		widthPx: number;
 		heightPx: number;
 		canvasW: number;
 		canvasH: number;
-		offscreen: HTMLCanvasElement | ImageBitmap;
+		offscreen: HTMLCanvasElement | ImageData;
 	};
 
 	let pdf = $state<PdfDocumentProxy | null>(null);
@@ -153,6 +152,7 @@
 	let needsCenter = true;
 	let zoomTimer: ReturnType<typeof setTimeout> | undefined;
 	let pageTransition = $state(false);
+	const queuedTurns: (1 | -1)[] = [];
 	let loading = $state(false);
 	let loadingText = $state('Opening score…');
 	let error = $state('');
@@ -200,7 +200,7 @@
 			.catch((e) => {
 				layerError = `Could not save layers: ${String(e)}`;
 			});
-		redraw(visiblePages[0], leftInk);
+		if (visiblePages[0]) redraw(visiblePages[0], leftInk);
 		if (visiblePages[1]) redraw(visiblePages[1], rightInk);
 	}
 	function addLayer() {
@@ -318,9 +318,8 @@
 	const MAX_PAGE_CACHE = 20;
 	// RGBA canvases: bound backing storage as well as the number of pages.
 	const MAX_CACHE_PIXELS = 48_000_000;
-	function releaseBitmap(image: HTMLCanvasElement | ImageBitmap) {
-		if ('close' in image) image.close();
-		else {
+	function releaseBitmap(image: HTMLCanvasElement | ImageData) {
+		if (image instanceof HTMLCanvasElement) {
 			image.width = 0;
 			image.height = 0;
 		}
@@ -412,19 +411,14 @@
 	const extraColors = colors.slice(3);
 	let colorPickerOpen = $state(false);
 	// Keep the selected page when a layout change puts it on the right.
-	const firstVisiblePage = $derived(dual && page % 2 === 0 ? page - 1 : page);
-	const lastVisiblePage = $derived(
-		dual && pdf && firstVisiblePage < pdf.numPages
-			? firstVisiblePage + 1
-			: firstVisiblePage
+	const spreadStart = $derived(dual && page % 2 === 0 ? page - 1 : page);
+	const spreadEnd = $derived(
+		dual && pdf && spreadStart < pdf.numPages ? spreadStart + 1 : spreadStart
 	);
-	const visiblePages = $derived(
-		firstVisiblePage === lastVisiblePage
-			? [firstVisiblePage]
-			: [firstVisiblePage, lastVisiblePage]
-	);
-	const canGoNext = $derived(!!pdf && lastVisiblePage < pdf.numPages);
-	const canGoPrevious = $derived(!!pdf && firstVisiblePage > 1);
+	// Publish the pages that are on screen after painting the complete spread.
+	let visiblePages = $state.raw<number[]>([]);
+	const canGoNext = $derived(!!pdf && spreadEnd < pdf.numPages);
+	const canGoPrevious = $derived(!!pdf && spreadStart > 1);
 	const recentSymbolObjects = $derived(
 		recentSymbols
 			.map((id) => MUSIC_SYMBOLS.find((s) => s.id === id))
@@ -490,9 +484,9 @@
 			if (
 				settingsHydrated &&
 				(prevDual !== dual || prevAuto !== autoLayout) &&
-				hasPainted
+				pdf
 			) {
-				void render({ quiet: true });
+				void render({ quiet: hasPainted });
 			}
 			settingsHydrated = true;
 		});
@@ -500,7 +494,7 @@
 
 	onMount(() => {
 		void document.fonts.load('32px Leland').then(() => {
-			redraw(visiblePages[0], leftInk);
+			if (visiblePages[0]) redraw(visiblePages[0], leftInk);
 			if (visiblePages[1]) redraw(visiblePages[1], rightInk);
 		});
 		try {
@@ -570,10 +564,10 @@
 				event.key === ' '
 			) {
 				event.preventDefault();
-				next();
+				if (!dual || !event.repeat) next();
 			} else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
 				event.preventDefault();
-				previous();
+				if (!dual || !event.repeat) previous();
 			} else if (event.key === '+' || event.key === '=') setZoom(zoom + 0.08);
 			else if (event.key === '-') setZoom(zoom - 0.08);
 			else if (event.key.toLowerCase() === 'f') {
@@ -763,6 +757,10 @@
 	}
 
 	async function destroyDocument() {
+		generation++;
+		queuedTurns.length = 0;
+		pageTransition = false;
+		visiblePages = [];
 		cancelRender();
 		clearPageCache();
 		const opened = openedPdf;
@@ -813,6 +811,8 @@
 		if (!pdf || !host || closed) return;
 		const current = ++generation;
 		const requestedZoom = zoom;
+		let committed = false;
+		clearTimeout(prefetchTimer);
 		if (!opts?.quiet || !hasPainted) {
 			loading = true;
 			loadingText = dual ? 'Rendering pages…' : 'Rendering page…';
@@ -830,21 +830,25 @@
 			} else if ((workspace?.clientWidth ?? host.clientWidth) < 720) {
 				dual = false;
 			}
-			cancelRender(visiblePages);
-			// Parallelize left/right page rasterization — dual mode was sequential before.
+			if (!dual) queuedTurns.length = 0;
+			const requestedPages =
+				spreadStart === spreadEnd ? [spreadStart] : [spreadStart, spreadEnd];
+			cancelRender(requestedPages);
 			const results = await Promise.all(
-				visiblePages.map((num, index) => renderPage(num, index, current))
+				requestedPages.map((number) => renderPage(number, current))
 			);
 			if (
+				closed ||
 				current !== generation ||
 				(hasPainted &&
+					!pageTransition &&
 					(requestedZoom !== zoom || pinch || zoomPending !== null))
 			)
 				return;
-			const bitmaps = results.filter((b): b is PageBitmap => !!b);
-			if (bitmaps.length) {
+			if (results.every((bitmap) => bitmap !== null)) {
+				commitPageBitmaps(results);
 				hasPainted = true;
-				commitPageBitmaps(bitmaps);
+				committed = true;
 			}
 		} catch (reason) {
 			if (
@@ -861,17 +865,14 @@
 		} finally {
 			if (current === generation) {
 				loading = false;
-				if (pageTransition)
-					requestAnimationFrame(() => {
-						if (current === generation) pageTransition = false;
-					});
+				if (!committed) queuedTurns.length = 0;
+				if (pageTransition) finishPageTurn(current);
 			}
 		}
 	}
 
 	async function renderPage(
 		number: number,
-		index: number,
 		current: number,
 		priority: 'interactive' | 'prefetch' = 'interactive'
 	): Promise<PageBitmap | null> {
@@ -903,7 +904,6 @@
 		return paintPage(
 			pdfPage,
 			number,
-			index,
 			layoutScale,
 			renderScale,
 			dpr,
@@ -914,7 +914,6 @@
 	async function paintPage(
 		pdfPage: PdfPageProxy,
 		number: number,
-		index: number,
 		layoutScale: number,
 		renderScale: number,
 		dpr: number,
@@ -923,13 +922,10 @@
 		const key = scoreRasterKey(number, renderScale, dpr);
 		const cached = pageCache.get(key);
 		if (cached) {
-			// Reuse cached raster; only update the layout index for dual/single placement.
 			touchCache(key, cached);
 			const viewport = pdfPage.getViewport({ scale: layoutScale });
 			return {
 				...cached,
-				index,
-				number,
 				widthPx: Math.ceil(viewport.width),
 				heightPx: Math.ceil(viewport.height)
 			};
@@ -942,8 +938,6 @@
 			return bmp
 				? {
 						...bmp,
-						index,
-						number,
 						widthPx: Math.ceil(viewport.width),
 						heightPx: Math.ceil(viewport.height)
 					}
@@ -968,14 +962,15 @@
 		if (canvasW * canvasH > MAX_CANVAS_PIXELS)
 			throw new Error('Canvas exceeds safe pixel budget');
 
-		// Keep the transferred bitmap itself in the LRU: draw once to the live canvas.
-		let offscreen: HTMLCanvasElement | ImageBitmap | undefined;
+		// Worker-transferred ImageBitmaps can contain another page's pixels in
+		// WebKit. Cache a pixel buffer owned by each page.
+		let offscreen: HTMLCanvasElement | ImageData | undefined;
 		let task: PdfRenderTask;
-		if (pdf?.renderBitmap) {
+		if (pdf?.renderPixels) {
 			const controller = new AbortController();
 			task = {
 				promise: pdf
-					.renderBitmap(number - 1, {
+					.renderPixels(number - 1, {
 						scale: renderScale * dpr,
 						priority,
 						signal: controller.signal
@@ -1012,7 +1007,6 @@
 					return null;
 				}
 				const bmp: PageBitmap = {
-					index,
 					number,
 					widthPx,
 					heightPx,
@@ -1037,9 +1031,9 @@
 	function commitPageBitmaps(bitmaps: PageBitmap[]) {
 		// Single synchronous turn: swap every page. Layout CSS size is zoom-independent,
 		// so this never shifts the view — only sharpness updates.
-		for (const bmp of bitmaps) {
-			const pdfCanvas = bmp.index === 0 ? leftPdf : rightPdf;
-			const inkCanvas = bmp.index === 0 ? leftInk : rightInk;
+		for (const [index, bmp] of bitmaps.entries()) {
+			const pdfCanvas = index === 0 ? leftPdf : rightPdf;
+			const inkCanvas = index === 0 ? leftInk : rightInk;
 			if (!pdfCanvas || !inkCanvas) continue;
 
 			if (pdfCanvas.width !== bmp.canvasW) pdfCanvas.width = bmp.canvasW;
@@ -1049,7 +1043,9 @@
 			const displayCtx = pdfCanvas.getContext('2d', { alpha: false });
 			if (!displayCtx) continue;
 			displayCtx.setTransform(1, 0, 0, 1, 0, 0);
-			displayCtx.drawImage(bmp.offscreen, 0, 0);
+			if (bmp.offscreen instanceof ImageData)
+				displayCtx.putImageData(bmp.offscreen, 0, 0);
+			else displayCtx.drawImage(bmp.offscreen, 0, 0);
 
 			if (inkCanvas.width !== bmp.canvasW) inkCanvas.width = bmp.canvasW;
 			if (inkCanvas.height !== bmp.canvasH) inkCanvas.height = bmp.canvasH;
@@ -1057,6 +1053,18 @@
 			inkCanvas.style.height = `${bmp.heightPx}px`;
 			redraw(bmp.number, inkCanvas);
 		}
+		if (
+			bitmaps.length === 1 &&
+			visiblePages.length === 2 &&
+			rightPdf &&
+			rightInk
+		) {
+			rightPdf.width = 0;
+			rightPdf.height = 0;
+			rightInk.width = 0;
+			rightInk.height = 0;
+		}
+		visiblePages = bitmaps.map((bitmap) => bitmap.number);
 		renderedZoom = zoom;
 		visualScale = 1;
 		if (needsCenter) {
@@ -1075,8 +1083,7 @@
 		const leftH = leftPdf
 			? Number.parseFloat(leftPdf.style.height) || leftPdf.clientHeight
 			: 0;
-		// When dual is on but we're on the final odd page, only one page is shown.
-		const showRight = dual && visiblePages.length > 1 && rightPdf;
+		const showRight = visiblePages.length > 1 && rightPdf;
 		const rightW = showRight
 			? Number.parseFloat(rightPdf!.style.width) || rightPdf!.clientWidth
 			: 0;
@@ -1096,7 +1103,7 @@
 			const step = dual ? 2 : 1;
 			const upcoming = [step, -step, step * 2, -step * 2, step * 3].flatMap(
 				(offset) => {
-					const start = firstVisiblePage + offset;
+					const start = visiblePages[0] + offset;
 					return dual ? [start, start + 1] : [start];
 				}
 			);
@@ -1134,7 +1141,7 @@
 						return;
 					try {
 						// renderPage already checks/uses cache and writes back into it
-						await renderPage(number, 0, current, 'prefetch');
+						await renderPage(number, current, 'prefetch');
 					} catch {
 						/* ignore prefetch failures */
 					}
@@ -1401,8 +1408,10 @@
 	}
 
 	function placeSymbolOnPage() {
-		const canvas = leftInk ?? rightInk;
-		placeSymbolAt(page, { x: 0.5, y: 0.4 }, canvas);
+		const number = visiblePages.includes(page) ? page : visiblePages[0];
+		if (!number) return;
+		const canvas = number === visiblePages[0] ? leftInk : rightInk;
+		placeSymbolAt(number, { x: 0.5, y: 0.4 }, canvas);
 	}
 
 	function begin(
@@ -2079,10 +2088,33 @@
 		void render({ quiet: hasPainted });
 	}
 	function next() {
-		if (canGoNext) navigateToPage(lastVisiblePage + 1, true);
+		turnPage(1);
 	}
 	function previous() {
-		if (canGoPrevious) navigateToPage(firstVisiblePage - (dual ? 2 : 1), true);
+		turnPage(-1);
+	}
+	function turnPage(direction: 1 | -1) {
+		if (dual && pageTransition) {
+			queuedTurns.push(direction);
+		} else if (direction === 1 && canGoNext) {
+			navigateToPage(spreadEnd + 1, true);
+		} else if (direction === -1 && canGoPrevious) {
+			navigateToPage(spreadStart - (dual ? 2 : 1), true);
+		}
+	}
+	function finishPageTurn(current: number) {
+		const finish = () => {
+			if (closed || current !== generation) return;
+			pageTransition = false;
+			while (queuedTurns.length && !pageTransition)
+				turnPage(queuedTurns.shift()!);
+		};
+		requestAnimationFrame(() => {
+			if (closed || current !== generation) return;
+			// Leave one paint between spreads, even when the next pair is cached.
+			if (dual) requestAnimationFrame(finish);
+			else finish();
+		});
 	}
 	function goToPage() {
 		if (!pdf) return;
@@ -2093,6 +2125,7 @@
 	function navigateToPage(number: number, animate = false) {
 		pageInput = String(number);
 		if (number === page) return;
+		if (!animate) queuedTurns.length = 0;
 		cancelHandwriting();
 		cancelViewGesture();
 		clearTimeout(zoomTimer);
@@ -2767,11 +2800,11 @@
 		onlostpointercapture={onWorkspacePointerUp}>
 		<div
 			class="pages"
-			class:dual
+			class:dual={visiblePages.length > 1}
 			class:no-page-shadows={!$settings.pageShadows}
 			class:transitioning={pageTransition}
 			style={`transform: translate3d(${panX}px, ${panY}px, 0) scale(${zoom}); transform-origin: 0 0`}>
-			<div class="page-shell">
+			<div class="page-shell" hidden={!visiblePages.length}>
 				<canvas class="pdf-canvas" bind:this={leftPdf}></canvas>
 				<canvas
 					class="ink-canvas"
@@ -2785,22 +2818,20 @@
 					onpointercancel={end}
 					onpointerleave={onInkPointerLeave}></canvas>
 			</div>
-			{#if dual && visiblePages.length > 1}
-				<div class="page-shell">
-					<canvas class="pdf-canvas" bind:this={rightPdf}></canvas>
-					<canvas
-						class="ink-canvas"
-						class:interactive={!reading && controls}
-						class:eraser-mode={tool === 'eraser'}
-						class:symbol-mode={tool === 'symbol'}
-						bind:this={rightInk}
-						onpointerdown={(event) => begin(event, visiblePages[1], rightInk!)}
-						onpointermove={move}
-						onpointerup={end}
-						onpointercancel={end}
-						onpointerleave={onInkPointerLeave}></canvas>
-				</div>
-			{/if}
+			<div class="page-shell" hidden={visiblePages.length < 2}>
+				<canvas class="pdf-canvas" bind:this={rightPdf}></canvas>
+				<canvas
+					class="ink-canvas"
+					class:interactive={!reading && controls}
+					class:eraser-mode={tool === 'eraser'}
+					class:symbol-mode={tool === 'symbol'}
+					bind:this={rightInk}
+					onpointerdown={(event) => begin(event, visiblePages[1], rightInk!)}
+					onpointermove={move}
+					onpointerup={end}
+					onpointercancel={end}
+					onpointerleave={onInkPointerLeave}></canvas>
+			</div>
 		</div>
 		{#if !hasPainted && page === 1 && score.thumbnailUrl && !error}
 			<img
@@ -3589,6 +3620,12 @@
 		box-shadow: 0 18px 55px rgba(0, 0, 0, 0.42);
 		will-change: opacity, transform;
 		transition: opacity 140ms ease;
+	}
+	.page-shell[hidden] {
+		/* Keep canvas dimensions measurable while painting ink for the next spread. */
+		display: block;
+		position: absolute;
+		visibility: hidden;
 	}
 	.pages.no-page-shadows .page-shell {
 		box-shadow: none;

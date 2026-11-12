@@ -1,7 +1,7 @@
 import type { PdfPageInfo } from './pdfRenderer';
 export type PdfWorkerRequest = {
 	id: number;
-	method: 'warm' | 'open' | 'bitmap' | 'blob' | 'text' | 'close';
+	method: 'warm' | 'open' | 'bitmap' | 'pixels' | 'blob' | 'text' | 'close';
 	documentId?: string;
 	data?: ArrayBuffer;
 	blob?: Blob;

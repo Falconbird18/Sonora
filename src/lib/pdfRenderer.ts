@@ -36,6 +36,10 @@ export interface PdfDocumentRenderer {
 		pageIndex: number,
 		options?: PdfRenderOptions
 	): Promise<ImageBitmap>;
+	renderPixels?(
+		pageIndex: number,
+		options?: PdfRenderOptions
+	): Promise<ImageData>;
 	getPageText?(pageIndex: number): Promise<string>;
 	close(): Promise<void>;
 }

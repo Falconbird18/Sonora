@@ -63,7 +63,7 @@ async function openDocument(
 	const pages = result.pages!;
 	let closed = false;
 	function render(
-		method: 'bitmap' | 'blob',
+		method: 'bitmap' | 'pixels' | 'blob',
 		pageIndex: number,
 		options?: PdfRenderOptions
 	) {
@@ -95,6 +95,12 @@ async function openDocument(
 		},
 		async renderBitmap(pageIndex, options) {
 			return toBitmap(await render('bitmap', pageIndex, options));
+		},
+		async renderPixels(pageIndex, options) {
+			const { pixels, width, height } = await render('pixels', pageIndex, options);
+			if (!pixels || !width || !height)
+				throw Error('PDF worker returned no pixels');
+			return new ImageData(pixels, width, height);
 		},
 		async getPageText(pageIndex) {
 			if (closed || !pages[pageIndex])

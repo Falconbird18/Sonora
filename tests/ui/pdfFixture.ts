@@ -1,3 +1,24 @@
+const markerBits = 8;
+const markerCellWidth = 12;
+
+export function readPdfFixturePage(canvas: HTMLCanvasElement): number {
+	const scale = canvas.width / 612;
+	const row = canvas
+		.getContext('2d')!
+		.getImageData(
+			0,
+			Math.floor((canvas.height * 6) / 792),
+			Math.ceil(markerBits * markerCellWidth * scale),
+			1
+		).data;
+	let page = 0;
+	for (let bit = 0; bit < markerBits; bit++) {
+		const x = Math.floor((bit + 0.5) * markerCellWidth * scale);
+		if (row[x * 4] < 128) page |= 1 << bit;
+	}
+	return page;
+}
+
 /** Deterministic PDF fixtures: vector notation and JPEG-scanned notation, no network. */
 export async function makePdfFixture(
 	kind: 'vector' | 'scan',
@@ -83,8 +104,14 @@ export async function makePdfFixture(
 		`<< /Length ${encoder.encode(content).length} >>\nstream\n${content}endstream`
 	);
 	const pages = Array.from({ length: pageCount }, (_, index) => {
-		// Distinct pixels and labels expose swapped, stale, or repeated page rasters.
-		const marker = `${(index + 1) / (pageCount + 1)} g 0 772 20 20 re f 0 g BT /F1 12 Tf 40 770 Td (Page ${index + 1}) Tj ET\n`;
+		const number = index + 1;
+		// Use black and white so reading the marker is independent of color profiles.
+		let marker = '0 g\n';
+		for (let bit = 0; bit < markerBits; bit++) {
+			if (number & (1 << bit))
+				marker += `${bit * markerCellWidth} 780 ${markerCellWidth} 12 re f\n`;
+		}
+		marker += `BT /F1 12 Tf 40 770 Td (Page ${number}) Tj ET\n`;
 		const pageStream = add(
 			`<< /Length ${encoder.encode(marker).length} >>\nstream\n${marker}endstream`
 		);
